@@ -22,7 +22,10 @@ public sealed class RemoteWipeClient
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(registration);
-        using var probe = new HttpRequestMessage(new HttpMethod("PROPFIND"), registration.ProbeEndpoint);
+        if (!TryValidateRegistration(registration, out var probeEndpoint, out var serverBase))
+            return false;
+
+        using var probe = new HttpRequestMessage(new HttpMethod("PROPFIND"), probeEndpoint);
         probe.Headers.Add("Depth", "0");
         probe.Headers.UserAgent.ParseAdd("ResoDrive-remote-wipe/1.0");
         AddBasicAuthentication(probe, registration.Username, registration.AppToken);
@@ -48,9 +51,7 @@ public sealed class RemoteWipeClient
                 return false;
         }
 
-        var checkUri = new Uri(
-            new Uri(registration.ServerBaseUrl, UriKind.Absolute),
-            "index.php/core/wipe/check");
+        var checkUri = new Uri(serverBase, "index.php/core/wipe/check");
         using var check = new HttpRequestMessage(HttpMethod.Post, checkUri)
         {
             Content = new FormUrlEncodedContent([new KeyValuePair<string, string>("token", registration.AppToken)])
@@ -88,9 +89,9 @@ public sealed class RemoteWipeClient
         RemoteWipeRegistration registration,
         CancellationToken cancellationToken = default)
     {
-        var successUri = new Uri(
-            new Uri(registration.ServerBaseUrl, UriKind.Absolute),
-            "index.php/core/wipe/success");
+        if (!TryValidateRegistration(registration, out _, out var serverBase))
+            throw new InvalidOperationException("The remote-wipe registration is not a valid HTTPS endpoint.");
+        var successUri = new Uri(serverBase, "index.php/core/wipe/success");
         using var request = new HttpRequestMessage(HttpMethod.Post, successUri)
         {
             Content = new FormUrlEncodedContent([new KeyValuePair<string, string>("token", registration.AppToken)])
@@ -108,5 +109,27 @@ public sealed class RemoteWipeClient
         // Basic password while probing the account's WebDAV endpoint.
         request.Headers.Authorization = new AuthenticationHeaderValue(
             "Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{token}")));
+    }
+
+    private static bool TryValidateRegistration(
+        RemoteWipeRegistration registration,
+        out Uri probeEndpoint,
+        out Uri serverBase)
+    {
+        probeEndpoint = null!;
+        serverBase = null!;
+        if (!Uri.TryCreate(registration.ProbeEndpoint, UriKind.Absolute, out var parsedProbe) ||
+            !Uri.TryCreate(registration.ServerBaseUrl, UriKind.Absolute, out var parsedServer))
+            return false;
+        probeEndpoint = parsedProbe;
+        serverBase = parsedServer;
+        if (string.IsNullOrWhiteSpace(registration.Username) || string.IsNullOrWhiteSpace(registration.AppToken) ||
+            !string.Equals(probeEndpoint.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(serverBase.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(probeEndpoint.Host, serverBase.Host, StringComparison.OrdinalIgnoreCase) ||
+            !string.IsNullOrEmpty(serverBase.Query) || !string.IsNullOrEmpty(serverBase.Fragment) ||
+            !string.IsNullOrEmpty(probeEndpoint.UserInfo) || !string.IsNullOrEmpty(serverBase.UserInfo))
+            return false;
+        return true;
     }
 }

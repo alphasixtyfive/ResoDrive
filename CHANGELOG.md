@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.10] - 2026-09-19
+
+- Validate remote-wipe registrations as same-host HTTPS endpoints before any probe or acknowledgement request.
+
 ## [0.3.9] - 2026-09-19
 
 - Add guarded Nextcloud remote wipe support using a DPAPI-protected dedicated app password and the official wipe-check and wipe-success protocol.
@@ -83,6 +87,7 @@ First public preview of the cleaned ResoDrive codebase.
 [0.3.7]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.7
 [0.3.8]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.8
 [0.3.9]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.9
+[0.3.10]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.10
 [0.3.6]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.6
 [0.3.5]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.5
 [0.3.4]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.4

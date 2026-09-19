@@ -1,4 +1,8 @@
-ResoDrive 0.3.9 adds guarded Nextcloud remote wipe support and improves update preparation feedback.
+ResoDrive 0.3.10 adds a final endpoint-validation hardening pass to the guarded Nextcloud remote wipe support.
+
+- Remote-wipe probes and acknowledgements accept only same-host HTTPS endpoints recorded by setup.
+
+ResoDrive 0.3.9 added guarded Nextcloud remote wipe support and improved update preparation feedback.
 
 - Nextcloud accounts configured with a dedicated app password are checked only after a 401/403 response. Local account state is wiped only after Nextcloud explicitly returns `{"wipe":true}`.
 - The client stops mounts and syncs, removes settings, encrypted configuration, cache, scheduler state, ownership state and logs, then acknowledges `/index.php/core/wipe/success`.
