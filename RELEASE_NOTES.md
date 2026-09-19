@@ -25,3 +25,5 @@ ResoDrive 0.3.7 is the consolidated release containing the installer, update, sa
 Download `ResoDrive-Setup.exe` for normal installation. The MSI remains available for administrators and the in-app updater. Existing drive settings and credentials are preserved; no manual settings changes are needed for this release. Close documents opened from mounted drives before installing or removing ResoDrive.
 
 Upload statistics are snapshots of rclone's disk cache, not a guarantee that open documents have been saved. If statistics cannot be read (including recovered processes or cache-off mounts), ResoDrive displays an unavailable status. A responsive mount does not prove that its server is reachable. Windows shutdown, process crashes and older installed versions cannot provide the new upload guard.
+
+This replaces the withdrawn 0.3.7 packages. If an earlier 0.3.7 build is already installed, run the new setup manually: the update checker cannot treat the same version number as newer. Normal upgrades from 0.3.6 remain supported.
