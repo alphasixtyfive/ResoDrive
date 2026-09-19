@@ -50,6 +50,11 @@ starvation that was reproduced with `DOTNET_PROCESSOR_COUNT=1`; both workflows n
 repeat the application tests under that constraint. Do not mask it with longer
 timeouts or repeated release attempts.
 
+Process-ownership fixtures must wait for a child readiness signal before reading
+its executable identity. `Process.Start` returning does not guarantee that Windows
+has populated `MainModule`; immediate reads caused an intermittent null reference
+in the remote-wipe boundary test. Keep the actual ownership checks unchanged.
+
 Read the [September 2026 installer incident](INSTALLER-INCIDENT-2026-09.md)
 before changing installer shutdown, IPC security, or updater handoff code.
 

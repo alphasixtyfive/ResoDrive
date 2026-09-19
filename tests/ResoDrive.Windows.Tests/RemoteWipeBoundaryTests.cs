@@ -11,8 +11,8 @@ public sealed class RemoteWipeBoundaryTests : IDisposable
     [Fact]
     public async Task StopsVerifiedOwnedProcessAndLeavesUnrelatedProcessRunning()
     {
-        using var owned = StartSleeper();
-        using var unrelated = StartSleeper();
+        using var owned = await StartSleeperAsync();
+        using var unrelated = await StartSleeperAsync();
         try
         {
             using var ownership = new MountOwnershipStore(_paths);
@@ -64,12 +64,27 @@ public sealed class RemoteWipeBoundaryTests : IDisposable
         }
     }
 
-    private static Process StartSleeper()
+    private static async Task<Process> StartSleeperAsync()
     {
         var start = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"))
-        { UseShellExecute = false, CreateNoWindow = true };
-        foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 60" }) start.ArgumentList.Add(argument);
-        return Process.Start(start)!;
+        { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
+        foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-Command", "Write-Output 'ready'; Start-Sleep -Seconds 60" }) start.ArgumentList.Add(argument);
+        var process = Process.Start(start)!;
+        try
+        {
+            // Process.Start can return before Windows has loaded the main module.
+            // Require the child to execute before recording its executable identity.
+            Assert.Equal("ready", await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(15)));
+            process.Refresh();
+            Assert.NotNull(process.MainModule);
+            return process;
+        }
+        catch
+        {
+            if (!process.HasExited) { process.Kill(); await process.WaitForExitAsync(); }
+            process.Dispose();
+            throw;
+        }
     }
 
     public void Dispose() { if (Directory.Exists(_paths.Root)) Directory.Delete(_paths.Root, true); }
