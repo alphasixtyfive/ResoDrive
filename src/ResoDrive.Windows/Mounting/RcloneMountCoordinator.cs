@@ -61,7 +61,9 @@ public sealed class RcloneMountCoordinator : IAsyncDisposable
                     await operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
                     try
                     {
-                        await StopCoreAsync(old.Key, old.Value, cancellationToken).ConfigureAwait(false);
+                        var stopped = await StopCoreAsync(old.Key, old.Value, cancellationToken).ConfigureAwait(false);
+                        if (!stopped.Succeeded)
+                            return stopped;
                     }
                     finally
                     {
@@ -98,6 +100,71 @@ public sealed class RcloneMountCoordinator : IAsyncDisposable
     }
 
     public Task<OperationResult> StartAsync(MountId mountId, CancellationToken cancellationToken = default) => StartInternalAsync(mountId, false, cancellationToken);
+
+    public async Task<OperationResult> CheckPendingUploadsAsync(CancellationToken cancellationToken = default)
+    {
+        var statuses = await Task.WhenAll(_sessions.Values.Select(session =>
+            ReadTransfersAsync(session, cancellationToken))).ConfigureAwait(false);
+        return statuses.Any(status => status.BlocksStop)
+            ? Result.Failure("mount.uploads_pending", "Files are still uploading or the cache needs attention. Close open documents, let uploads finish, then try again.", true)
+            : Result.Success();
+    }
+
+    public Task RefreshHealthAsync(CancellationToken cancellationToken = default) =>
+        Task.WhenAll(_sessions.Values.Select(session => RefreshHealthAsync(session, cancellationToken)));
+
+    private async Task RefreshHealthAsync(Session session, CancellationToken cancellationToken)
+    {
+        var gate = OperationGate(session.Definition.Id);
+        if (!await gate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
+            return;
+        try
+        {
+            if (session.Stopping || ProcessTermination.HasExitedOrUnavailable(session.Process))
+                return;
+            var ready = await ProbeReadyAsync(session, cancellationToken).ConfigureAwait(false);
+            var transfers = await ReadTransfersAsync(session, cancellationToken).ConfigureAwait(false);
+            if (session.Stopping || ProcessTermination.HasExitedOrUnavailable(session.Process))
+                return;
+            Publish(Snapshot(session.Definition, ready && !transfers.HasCacheError ? MountLifecycle.Mounted : MountLifecycle.Degraded,
+                ready
+                    ? transfers.Description
+                    : "Drive is not responding · " + transfers.Description + " · Checking again automatically"));
+        }
+        catch (Exception exception) when (Expected(exception))
+        {
+            if (!session.Stopping && !ProcessTermination.HasExitedOrUnavailable(session.Process))
+                Publish(Snapshot(session.Definition, MountLifecycle.Degraded, "Drive status unavailable · Checking again automatically"));
+        }
+        finally { gate.Release(); }
+    }
+
+    private static async Task<MountUploadObservation> ReadTransfersAsync(Session session, CancellationToken cancellationToken)
+    {
+        await session.TransferGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var current = session.Control is { } control && !ProcessTermination.HasExitedOrUnavailable(session.Process)
+                ? await VfsStatusReader.ReadAsync(control.Address, control.User, control.Password, cancellationToken).ConfigureAwait(false)
+                : null;
+            if (current is not null)
+                session.LastTransfers = current;
+            return new(current, session.LastTransfers);
+        }
+        finally { session.TransferGate.Release(); }
+    }
+
+    private async Task<bool> ProbeReadyAsync(Session session, CancellationToken cancellationToken)
+    {
+        // Directory probes can block in a filesystem driver. Keep at most one in flight
+        // per session, and never block the host or accumulate probes after a timeout.
+        session.ReadinessProbe ??= new MountReadinessProbe(async () =>
+            {
+                var result = await _inventory.IsMountedAsync(session.Definition.Target, _lifetime.Token).ConfigureAwait(false);
+                return result.Succeeded && result.Value;
+            });
+        return await session.ReadinessProbe.CheckAsync(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+    }
 
     public void MarkPending(MountId mountId, bool stopping)
     {
@@ -288,6 +355,15 @@ public sealed class RcloneMountCoordinator : IAsyncDisposable
             Publish(Snapshot(definition, MountLifecycle.Stopped, "Not mounted"));
             return Result.Success();
         }
+        if (!_lifetime.IsCancellationRequested)
+        {
+            var transfers = await ReadTransfersAsync(session, cancellationToken).ConfigureAwait(false);
+            if (transfers.BlocksStop)
+            {
+                Publish(Snapshot(definition, MountLifecycle.Degraded, transfers.Description + " · Wait before disconnecting"));
+                return Result.Failure("mount.uploads_pending", "Close open documents and wait for uploads to finish before disconnecting.", true);
+            }
+        }
         session.RequestStop();
         Publish(Snapshot(definition, MountLifecycle.Stopping, "Stopping…"));
         await RequestGracefulStopAsync(session, CancellationToken.None).ConfigureAwait(false);
@@ -445,25 +521,9 @@ public sealed class RcloneMountCoordinator : IAsyncDisposable
                 await _ownership.RemoveAsync(owned.MountId, cancellationToken).ConfigureAwait(false);
                 continue;
             }
-            var probe = await _inventory.IsMountedAsync(definition.Target, cancellationToken).ConfigureAwait(false);
-            if (!probe.Succeeded || !probe.Value)
-            {
-                Kill(process);
-                var stopped = await ProcessTermination.WaitForExitAsync(
-                        process,
-                        ForcedStopTimeout,
-                        CancellationToken.None)
-                    .ConfigureAwait(false);
-                process.Dispose();
-                if (stopped)
-                {
-                    await _ownership.RemoveAsync(owned.MountId, cancellationToken).ConfigureAwait(false);
-                }
-                continue;
-            }
             var session = new Session(process, definition, control: null);
             _sessions[mountId] = session;
-            Publish(Snapshot(definition, MountLifecycle.Mounted, "Mounted (recovered)"));
+            Publish(Snapshot(definition, MountLifecycle.Degraded, "Recovered drive · Checking readiness"));
             _ = ObserveExitAsync(session);
         }
     }
@@ -607,8 +667,7 @@ public sealed class RcloneMountCoordinator : IAsyncDisposable
         while (DateTimeOffset.UtcNow < deadline &&
                !ProcessTermination.HasExitedOrUnavailable(session.Process))
         {
-            var result = await _inventory.IsMountedAsync(session.Definition.Target, cancellationToken).ConfigureAwait(false);
-            if (result.Succeeded && result.Value)
+            if (await ProbeReadyAsync(session, cancellationToken).ConfigureAwait(false))
             {
                 return true;
             }
@@ -710,6 +769,9 @@ public sealed class RcloneMountCoordinator : IAsyncDisposable
         public MountDefinition Definition { get; } = definition;
         public RcloneControl? Control { get; } = control;
         public SemaphoreSlim CleanupGate { get; } = new(1, 1);
+        public SemaphoreSlim TransferGate { get; } = new(1, 1);
+        public VfsTransferStatus? LastTransfers { get; set; }
+        public MountReadinessProbe? ReadinessProbe { get; set; }
         public bool Stopping => Volatile.Read(ref _stopping) != 0;
 
         public void RequestStop() => Interlocked.Exchange(ref _stopping, 1);

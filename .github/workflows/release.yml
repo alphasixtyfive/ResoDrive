@@ -10,6 +10,7 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - name: Check out tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -25,13 +26,23 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           $project = [xml](Get-Content -LiteralPath Directory.Build.props -Raw)
-          $version = $project.Project.PropertyGroup.VersionPrefix | Select-Object -First 1
+          $version = $project.SelectSingleNode('/Project/PropertyGroup/VersionPrefix').InnerText
           if ($env:RELEASE_TAG -ne "v$version") {
             throw "Tag '$env:RELEASE_TAG' does not match VersionPrefix '$version'."
           }
       - name: Build and verify release
         shell: pwsh
         run: .\build.ps1 -Configuration Release -BuildMsi $true
+      - name: Verify installed application lifecycle
+        shell: pwsh
+        run: ./tests/installer-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName
+      - name: Preserve installer diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: installer-smoke-logs
+          path: ${{ runner.temp }}/resodrive-installer-smoke/*.log
+          if-no-files-found: ignore
       - name: Preserve release artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

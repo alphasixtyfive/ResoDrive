@@ -36,3 +36,30 @@ credentials, private service addresses, configuration files, or unredacted logs.
 - UI logs automatically redact common secrets, credential-bearing URLs, host
   names, and absolute paths. Free-form error text cannot be classified perfectly,
   so review log contents before sharing them.
+- Diagnostic exports use an allowlist of component versions, numeric performance
+  options, enumerated states and UI error IDs. They do not include raw configuration,
+  raw exception messages, process arguments, server addresses, paths or account names.
+- Mount upload statistics are fetched from authenticated IPv4 loopback control
+  endpoints with proxies and redirects disabled, a three-second deadline, and a
+  bounded response size. An unavailable result is never presented as zero uploads.
+
+## Local file cache and account revocation
+
+Credential encryption does **not** encrypt rclone's VFS file cache. Cached file
+contents remain local after disconnecting, revoking server access, upgrading or
+uninstalling. Use separate Windows accounts and disk encryption such as BitLocker
+to protect stored data. Neither protects it from someone controlling the unlocked
+user session. Ordinary deletion is not a promise of forensic erasure on an SSD,
+and copies created by Office or other applications can exist outside ResoDrive.
+
+Remote wipe is not implemented in this version. The intended integration is
+[Nextcloud's Remote Wipe protocol](https://docs.nextcloud.com/server/latest/developer_manual/client_apis/RemoteWipe/index.html),
+using a dedicated app token obtained through its login flow. An authentication
+rejection triggers a wipe-status check; only an explicit `wipe: true` authorizes
+removal of account data. Disabling an account or an ordinary 401/403 response alone
+is not such an instruction. A conforming implementation must isolate all local
+account data, stop its mounts and jobs, remove that data (including pending writes),
+and acknowledge success only after cleanup completes. Unreachable clients cannot
+receive remote wipe, and client-side cleanup cannot prevent a hostile local user
+from retaining previously copied data. No deletion-on-authentication-failure rule
+is enabled by ResoDrive.

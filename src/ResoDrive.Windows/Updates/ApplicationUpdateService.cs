@@ -119,9 +119,11 @@ public sealed partial class ApplicationUpdateService
     {
         ArgumentNullException.ThrowIfNull(update);
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationDirectory);
-        if (!update.UpdateAvailable || !TryVersion(update.AvailableVersion, out _) ||
+        if (!update.UpdateAvailable || !TryVersion(update.AvailableVersion, out var version) ||
+            update.AvailableVersion != version.ToString(3) ||
             update.InstallerDownload is null || update.ChecksumDownload is null ||
-            !IsTrustedAsset(update.InstallerDownload) || !IsTrustedAsset(update.ChecksumDownload))
+            !IsTrustedAsset(update.InstallerDownload, update.AvailableVersion, checksum: false) ||
+            !IsTrustedAsset(update.ChecksumDownload, update.AvailableVersion, checksum: true))
         {
             return Result.Failure<ApplicationUpdatePackage>(
                 "app.update_download_invalid",
@@ -138,7 +140,8 @@ public sealed partial class ApplicationUpdateService
         try
         {
             Directory.CreateDirectory(directory);
-            var expectedHash = await DownloadChecksumAsync(update.ChecksumDownload, timeout.Token)
+            var expectedHash = await DownloadChecksumAsync(update.ChecksumDownload,
+                    Path.GetFileName(installerPath), timeout.Token)
                 .ConfigureAwait(false);
             if (expectedHash is null)
             {
@@ -203,9 +206,10 @@ public sealed partial class ApplicationUpdateService
         }
     }
 
-    private async Task<string?> DownloadChecksumAsync(Uri uri, CancellationToken cancellationToken)
+    private async Task<string?> DownloadChecksumAsync(Uri uri, string installerName, CancellationToken cancellationToken)
     {
-        using var response = await _client.GetAsync(uri, cancellationToken).ConfigureAwait(false);
+        using var response = await _client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode || response.Content.Headers.ContentLength is > 4096)
             return null;
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken)
@@ -223,8 +227,11 @@ public sealed partial class ApplicationUpdateService
         if (length == buffer.Length)
             return null;
         var text = Encoding.ASCII.GetString(buffer, 0, length);
-        var match = Sha256Pattern().Match(text);
-        return match.Success ? match.Value : null;
+        var lines = text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+        if (lines.Length != 1) return null;
+        var match = ChecksumLinePattern().Match(lines[0]);
+        return match.Success && match.Groups[2].Value.Equals(installerName, StringComparison.Ordinal)
+            ? match.Groups[1].Value : null;
     }
 
     private static bool TryReadRelease(Uri? uri, out Version version)
@@ -240,12 +247,15 @@ public sealed partial class ApplicationUpdateService
         return !tag.Contains('/') && TryVersion(tag, out version);
     }
 
-    private static bool IsTrustedAsset(Uri uri) =>
+    private static bool IsTrustedAsset(Uri uri, string version, bool checksum) =>
         uri.Scheme == Uri.UriSchemeHttps &&
+        uri.IsDefaultPort && string.IsNullOrEmpty(uri.UserInfo) &&
+        string.IsNullOrEmpty(uri.Query) && string.IsNullOrEmpty(uri.Fragment) &&
         uri.Host.Equals(ProductLinks.Repository.Host, StringComparison.OrdinalIgnoreCase) &&
-        uri.AbsolutePath.StartsWith(
-            ProductLinks.Repository.AbsolutePath.TrimEnd('/') + "/releases/download/",
-            StringComparison.OrdinalIgnoreCase);
+        uri.AbsolutePath.Equals(
+            ProductLinks.Repository.AbsolutePath.TrimEnd('/') +
+            $"/releases/download/v{version}/resodrive-win-x64-{version}.msi" + (checksum ? ".sha256" : string.Empty),
+            StringComparison.Ordinal);
 
     private static bool TryVersion(string? value, out Version version)
     {
@@ -285,8 +295,8 @@ public sealed partial class ApplicationUpdateService
         return client;
     }
 
-    [GeneratedRegex(@"(?i)\b[0-9a-f]{64}\b", RegexOptions.CultureInvariant)]
-    private static partial Regex Sha256Pattern();
+    [GeneratedRegex(@"\A([0-9a-fA-F]{64})[ \t]+\*?([^\\/\r\n]+)\z", RegexOptions.CultureInvariant)]
+    private static partial Regex ChecksumLinePattern();
 
     [GeneratedRegex(@"(?i)^v?(\d+\.\d+\.\d+)(?:\+[0-9a-z.-]+)?$", RegexOptions.CultureInvariant)]
     private static partial Regex StableVersionPattern();

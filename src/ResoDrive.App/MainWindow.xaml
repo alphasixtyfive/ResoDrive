@@ -594,6 +594,7 @@
                   <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                   </Grid.RowDefinitions>
                   <Path x:Name="ApplicationUpdateStatusIcon" Style="{StaticResource StatusIcon}" />
                   <TextBlock Grid.Column="1" Text="ResoDrive" FontWeight="SemiBold" Margin="0,0,16,0" />
@@ -605,6 +606,9 @@
                     ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                     AutomationProperties.LiveSetting="Polite"
                   />
+                  <ProgressBar x:Name="ApplicationDownloadProgress" Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2"
+                               Style="{StaticResource SlimProgressBar}" Margin="0,8,0,0" Visibility="Collapsed"
+                               AutomationProperties.Name="ResoDrive download progress" Value="0" />
                   <StackPanel Grid.RowSpan="2" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button
                       x:Name="ApplicationUpdateActionButton"
@@ -751,6 +755,11 @@
                       <TextBlock Style="{StaticResource InlineButtonGlyph}" Text="&#xE896;" />
                       <TextBlock Text="Import settings" VerticalAlignment="Center" />
                     </StackPanel>
+                  </Button>
+                  <Button Style="{StaticResource ButtonStyle}" Click="ExportDiagnostics_Click"
+                          AutomationProperties.Name="Export diagnostic report" Margin="0,0,8,8"
+                          ToolTip="Versions, performance settings and error references. Private connection details are omitted.">
+                    <TextBlock Text="Export diagnostics" />
                   </Button>
                 </WrapPanel>
               </StackPanel>

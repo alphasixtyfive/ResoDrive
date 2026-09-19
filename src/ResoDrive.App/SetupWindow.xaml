@@ -183,7 +183,8 @@
             <TextBox x:Name="RemotePathBox" Grid.Row="8" Grid.Column="1" Style="{StaticResource EditorTextBox}" Margin="0,0,0,8" ToolTip="Optional folder inside this connection" AutomationProperties.Name="Remote folder" />
 
             <TextBlock Grid.Row="9" Text="Drive letter" VerticalAlignment="Center" />
-            <StackPanel Grid.Row="9" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+            <StackPanel Grid.Row="9" Grid.Column="1">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
               <ComboBox
                 x:Name="DriveBox"
                 Style="{StaticResource EditorComboBox}"
@@ -195,9 +196,12 @@
                 Content="Network drive"
                 Margin="16,0,0,0"
                 VerticalAlignment="Center"
-                ToolTip="Present this mount to Windows as a network drive instead of a fixed drive."
+                ToolTip="Tell Windows this is remote storage. Turning this off presents a local drive."
                 AutomationProperties.Name="Present as a network drive"
               />
+            </StackPanel>
+            <TextBlock Text="Network mode tells Windows this is remote storage. Local mode can attract installer temporary files. Office may create temporary files in either mode."
+                       TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,6,0,0" />
             </StackPanel>
 
             <Expander

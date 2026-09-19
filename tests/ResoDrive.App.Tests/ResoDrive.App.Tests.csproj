@@ -28,6 +28,8 @@
     <Content Include="..\..\src\ResoDrive.App\SyncEditorWindow.xaml" Link="Fixtures\SyncEditorWindow.xaml" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\src\ResoDrive.App\MessageDialog.xaml" Link="Fixtures\MessageDialog.xaml" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\src\ResoDrive.App\MainWindow.xaml.cs" Link="Fixtures\MainWindow.xaml.cs" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\src\ResoDrive.App\MainWindow.Components.cs" Link="Fixtures\MainWindow.Components.cs" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\installer\Package.wxs" Link="Fixtures\Package.wxs" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\installer\Bundle.wxs" Link="Fixtures\Bundle.wxs" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

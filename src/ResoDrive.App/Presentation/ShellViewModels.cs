@@ -264,7 +264,7 @@ public sealed class MountRow : NotifyBase
             ? System.Windows.Visibility.Visible
             : System.Windows.Visibility.Collapsed;
     public System.Windows.Visibility StatusVisibility =>
-        _lifecycle is MountLifecycle.Failed or MountLifecycle.Degraded or MountLifecycle.WaitingToRestart
+        _lifecycle is MountLifecycle.Mounted or MountLifecycle.Failed or MountLifecycle.Degraded or MountLifecycle.WaitingToRestart
         || (!Enabled && !ShouldStop)
             ? System.Windows.Visibility.Visible
             : System.Windows.Visibility.Collapsed;

@@ -399,7 +399,8 @@ public sealed class MainWindowMarkupTests
         var source = File.ReadAllText(Path.Combine(
             AppContext.BaseDirectory,
             "Fixtures",
-            "MainWindow.xaml.cs"));
+            "MainWindow.xaml.cs")) + File.ReadAllText(Path.Combine(
+                AppContext.BaseDirectory, "Fixtures", "MainWindow.Components.cs"));
 
         Assert.DoesNotContain("InstallApplicationUpdate_Click(sender, e)", source, StringComparison.Ordinal);
         Assert.DoesNotContain("UpdateRclone_Click(sender, e)", source, StringComparison.Ordinal);

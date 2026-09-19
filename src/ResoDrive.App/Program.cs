@@ -130,7 +130,7 @@ public static class Program
             var response = await HostClient.SendAsync(
                 new HostRequest("shutdown", Confirmed: true),
                 timeout.Token).ConfigureAwait(false);
-            if (response.ErrorCode == "host.unavailable")
+            if (response.ErrorCode is "host.unavailable" or "host.different_installation")
                 return 0;
             if (!response.Succeeded)
                 return 1;

@@ -9,20 +9,17 @@
     <TextBlock x:Name="ModeHint" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,4,0,10" />
     <Grid>
       <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="12" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-      <StackPanel>
+      <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
         <TextBlock Text="Cache size target" Margin="0,0,0,4" />
-        <ComboBox x:Name="SizeBox" Style="{StaticResource EditorComboBox}" IsEditable="True"
+        <ComboBox x:Name="SizeBox" Grid.Row="1" Style="{StaticResource EditorComboBox}" IsEditable="True"
           DisplayMemberPath="Label" SelectedValuePath="Value" SelectionChanged="Option_Changed"
           ToolTip="Choose a target or enter a custom rclone size, for example 3G. G means GiB."
           AutomationProperties.Name="Cache size target" />
-      </StackPanel>
-      <StackPanel Grid.Column="2">
-        <TextBlock Text="Keep unused cached files for" TextWrapping="Wrap" Margin="0,0,0,4" />
-        <ComboBox x:Name="AgeBox" Style="{StaticResource EditorComboBox}" IsEditable="True"
+        <TextBlock Grid.Column="2" Text="Keep unused cached files for" TextWrapping="Wrap" Margin="0,0,0,4" />
+        <ComboBox x:Name="AgeBox" Grid.Row="1" Grid.Column="2" Style="{StaticResource EditorComboBox}" IsEditable="True"
           DisplayMemberPath="Label" SelectedValuePath="Value" SelectionChanged="Option_Changed"
           ToolTip="Choose a duration or enter a custom value, for example 48h. Measured since last access."
           AutomationProperties.Name="Keep unused cached files for" />
-      </StackPanel>
     </Grid>
     <TextBlock Text="The size target applies to this mount and can be exceeded while files are in use. Retention is measured since last access. You can type custom values."
       Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,5,0,12" />

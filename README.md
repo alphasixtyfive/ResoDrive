@@ -21,8 +21,9 @@
 
 ResoDrive is a small Windows tray app for storage that normally lives in a browser
 or command line. Connect Nextcloud, WebDAV, or SFTP, choose a drive letter, and use
-the storage from Explorer. Closing the window does not interrupt active mounts or
-transfers.
+the storage from Explorer. By default, closing the window keeps active mounts and
+transfers running in the tray. With **Minimize to tray** turned off, closing the
+window uses the same checks and confirmation as **Exit**.
 
 ## What it does
 
@@ -87,6 +88,20 @@ Your settings, encrypted credentials, logs, cache, and managed rclone copy live 
 install, you can check for and install ResoDrive updates from Settings.
 Application and rclone downloads can continue from a partial file after a dropped
 connection, which avoids starting large transfers again on metered or satellite links.
+Downloads can be cancelled from Settings and resumed later.
+
+Mounted drives show queued uploads and cache errors when rclone can report them.
+ResoDrive checks these again before disconnecting, reconnecting or preparing an
+update. Close open documents first: no queued uploads does not mean that another
+application has saved its changes. Recovered processes and unavailable statistics
+are shown explicitly; Windows shutdown and crashes cannot provide this safeguard.
+Readiness checks run periodically, including after resume, but do not prove server
+connectivity when files can be served from cache.
+
+Use **Settings → Export diagnostics** to create a report with component versions,
+numeric performance options, mount states and recent UI error references. Names,
+addresses, paths, credentials and raw log messages are omitted. Review the report
+before sharing it.
 
 Adding and editing a drive use the same caching controls under **Advanced**:
 cache mode, cache size target, and retention since last access. Presets and custom

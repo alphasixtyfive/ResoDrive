@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.7] - 2026-09-19
+
+- Add a branded native setup with progress, repair/removal, launch and failure-log actions.
+- Stop the installed application during uninstall as well as upgrades, with bounded process waits and preserved user data.
+- Bind update downloads and checksum filenames to the exact selected version.
+- Verify installation, repair, previous-version upgrade, running-app removal and settings/cache preservation in Windows CI before release.
+- Show queued and active uploads, cache errors, and unavailable upload status on mounted drives; check again before stopping, reconnecting, exiting, or updating.
+- Recheck drive readiness after slow starts and interruptions without killing a recovered live process after a single failed probe.
+- Add cancellation to ResoDrive update downloads and clarify local/network mode beside the drive selector.
+- Export a privacy-filtered diagnostic report with versions, performance options, mount states and recent UI error references.
+- Keep upload warnings when control communication fails, fix rclone cancellation during active updates, and align download progress and cache selectors.
+
 ## [0.3.6] - 2026-09-10
 
 - Use the same cache mode, size target, and retention controls when adding and editing drives.

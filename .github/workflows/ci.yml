@@ -16,6 +16,7 @@ concurrency:
 jobs:
   test:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -25,22 +26,22 @@ jobs:
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: global.json
-      - name: Restore locked dependencies
-        run: dotnet restore resodrive.slnx --locked-mode
-      - name: Test
-        run: dotnet test resodrive.slnx --configuration Release --no-restore
-      - name: Publish process smoke output
-        run: >-
-          dotnet publish src/ResoDrive.App/ResoDrive.App.csproj
-          --configuration Release
-          --no-restore
-          --runtime win-x64
-          --self-contained false
-          -p:PublishSingleFile=false
-          --output "${{ runner.temp }}\resodrive-process-smoke"
+      - name: Build and verify packages
+        shell: pwsh
+        run: ./build.ps1 -Configuration Release -BuildMsi $true
       - name: Process smoke
         shell: pwsh
         timeout-minutes: 4
         run: >-
           ./tests/process-smoke.ps1
-          -AppPath "${{ runner.temp }}\resodrive-process-smoke\resodrive.exe"
+          -AppPath "artifacts\win-x64\resodrive\resodrive.exe"
+      - name: Verify installation, upgrade and removal
+        shell: pwsh
+        run: ./tests/installer-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName
+      - name: Preserve installer diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: installer-smoke-logs
+          path: ${{ runner.temp }}/resodrive-installer-smoke/*.log
+          if-no-files-found: ignore

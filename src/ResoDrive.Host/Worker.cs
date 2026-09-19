@@ -51,7 +51,7 @@ public sealed partial class Worker : BackgroundService
         {
             LogInitializationFailure(_logger, result.Error?.Code, result.Error?.Message);
         }
-        await Task.WhenAll(ServeAsync(stoppingToken), ScheduleAsync(stoppingToken)).ConfigureAwait(false);
+        await Task.WhenAll(ServeAsync(stoppingToken), ScheduleAsync(stoppingToken), MonitorMountsAsync(stoppingToken)).ConfigureAwait(false);
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)
@@ -213,6 +213,10 @@ public sealed partial class Worker : BackgroundService
         await _reloadGate.WaitAsync(token).ConfigureAwait(false);
         try
         {
+            if (_shutdownRequested)
+                return new(false, "host.stopping", "ResoDrive is stopping. Try again after it restarts.");
+            if (command == "check-uploads")
+                return _mounts is null ? Status() : Response(await _mounts.CheckPendingUploadsAsync(token).ConfigureAwait(false));
             if (command is "reload" or "activate-runtime")
             {
                 var reloaded = await ReloadCoreAsync(token, request.Confirmed).ConfigureAwait(false);
@@ -306,6 +310,12 @@ public sealed partial class Worker : BackgroundService
                 );
             }
 
+            if (_mounts is not null)
+            {
+                var uploads = await _mounts.CheckPendingUploadsAsync(token).ConfigureAwait(false);
+                if (!uploads.Succeeded)
+                    return Response(uploads);
+            }
             _shutdownRequested = true;
             if (HasWork() && !request.Confirmed)
             {
@@ -323,6 +333,21 @@ public sealed partial class Worker : BackgroundService
         finally
         {
             _reloadGate.Release();
+        }
+    }
+
+    private async Task MonitorMountsAsync(CancellationToken token)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
+        {
+            await _reloadGate.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                if (_mounts is not null && !_shutdownRequested)
+                    await _mounts.RefreshHealthAsync(token).ConfigureAwait(false);
+            }
+            finally { _reloadGate.Release(); }
         }
     }
 

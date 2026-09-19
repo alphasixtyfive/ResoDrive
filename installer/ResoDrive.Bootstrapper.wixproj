@@ -15,7 +15,7 @@
       DotNetDesktopRuntimeUrl=$(DotNetDesktopRuntimeUrl);
       DotNetDesktopRuntimeSha512=$(DotNetDesktopRuntimeSha512);
       DotNetDesktopRuntimeSize=$(DotNetDesktopRuntimeSize);
-      LicenseSource=$(MSBuildProjectDirectory)\License.rtf;
+      LogoSource=$(MSBuildProjectDirectory)\..\src\ResoDrive.App\Assets\resodrive-mark.png;
       IconSource=$(MSBuildProjectDirectory)\..\src\ResoDrive.App\resodrive.ico
     </DefineConstants>
   </PropertyGroup>

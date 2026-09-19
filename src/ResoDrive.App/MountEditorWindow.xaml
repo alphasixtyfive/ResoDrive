@@ -66,29 +66,30 @@
         />
 
         <TextBlock Grid.Row="2" Text="Drive letter" VerticalAlignment="Center" />
-        <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-          <ComboBox
-            x:Name="DriveBox"
-            Style="{StaticResource EditorComboBox}"
-            Width="88"
-            AutomationProperties.Name="Drive letter"
-          />
+        <StackPanel Grid.Row="2" Grid.Column="1" Margin="0,4,0,8">
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="88" />
+              <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <ComboBox x:Name="DriveBox" Style="{StaticResource EditorComboBox}"
+                      AutomationProperties.Name="Drive letter" />
+            <CheckBox x:Name="NetworkModeBox" Grid.Column="1" Content="Network drive"
+                      Margin="12,0,0,0" VerticalAlignment="Center"
+                      ToolTip="Tell Windows this is remote storage. Turning this off presents a local drive."
+                      AutomationProperties.Name="Present as a network drive" />
+          </Grid>
           <TextBlock
             x:Name="DriveStatusText"
             Text="Checking…"
             Foreground="{StaticResource MutedBrush}"
-            Margin="8,0,0,0"
+            Margin="0,4,0,0"
+            TextWrapping="Wrap"
             VerticalAlignment="Center"
             AutomationProperties.LiveSetting="Polite"
           />
-          <CheckBox
-            x:Name="NetworkModeBox"
-            Content="Network drive"
-            Margin="12,0,0,0"
-            VerticalAlignment="Center"
-            ToolTip="Present this mount to Windows as a network drive instead of a fixed drive."
-            AutomationProperties.Name="Present as a network drive"
-          />
+          <TextBlock Text="Network mode tells Windows this is remote storage. Local mode can attract installer temporary files. Office may create temporary files in either mode."
+                     TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,6,0,0" />
         </StackPanel>
 
         <TextBlock Grid.Row="3" Text="Availability" VerticalAlignment="Center" />

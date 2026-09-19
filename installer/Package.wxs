@@ -92,13 +92,13 @@
       FileRef="ResoDriveExecutableFile"
       ExeCommand="--prepare-update"
       Execute="immediate"
-      Return="ignore"
+      Return="check"
       Impersonate="yes"
     />
     <CustomAction
       Id="StopResoDriveForUpgrade"
       Directory="INSTALLFOLDER"
-      ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoP -NonI -WindowStyle Hidden -Command &quot;$p=(pwd).Path+'\resodrive.exe';gps resodrive -ea 0|? Path -eq $p|%{kill $_ -Force -ea Stop;$_.WaitForExit()};exit 0&quot;"
+      ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoP -NonI -WindowStyle Hidden -Command &quot;$p=(pwd).Path+'\resodrive.exe';gps resodrive -ea 0|? Path -eq $p|%{kill $_ -Force -ea Stop;if(!$_.WaitForExit(10000)){exit 1}};exit 0&quot;"
       Execute="immediate"
       Return="check"
       Impersonate="no"
@@ -114,18 +114,18 @@
 
     <InstallExecuteSequence>
       <!--
-        Drain work before replacing files during upgrades and maintenance reinstalls.
-        Do not run these actions for an explicit uninstall.
+        Drain work before replacing or removing installed files. Match processes
+        by installation path so portable copies are never stopped.
       -->
       <Custom
         Action="PrepareInstalledResoDriveForUpgrade"
         After="InstallValidate"
-        Condition="(WIX_UPGRADE_DETECTED OR Installed) AND NOT (REMOVE~=&quot;ALL&quot;)"
+        Condition="WIX_UPGRADE_DETECTED OR Installed"
       />
       <Custom
         Action="StopResoDriveForUpgrade"
         After="PrepareInstalledResoDriveForUpgrade"
-        Condition="(WIX_UPGRADE_DETECTED OR Installed) AND NOT (REMOVE~=&quot;ALL&quot;)"
+        Condition="WIX_UPGRADE_DETECTED OR Installed"
       />
       <Custom
         Action="UnregisterResoDriveAutostart"

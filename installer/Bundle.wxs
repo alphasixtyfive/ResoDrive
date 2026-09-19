@@ -4,14 +4,20 @@
   xmlns:netfx="http://wixtoolset.org/schemas/v4/wxs/netfx"
 >
   <Bundle
-    Name="$(var.ResoDriveProductName) Setup"
+    Name="$(var.ResoDriveProductName)"
     Manufacturer="$(var.ResoDrivePublisher)"
     Version="$(var.ResoDriveVersion)"
     UpgradeCode="$(var.ResoDriveBundleUpgradeCode)"
     IconSourceFile="$(var.IconSource)"
   >
     <BootstrapperApplication>
-      <bal:WixStandardBootstrapperApplication Theme="rtfLicense" LicenseFile="$(var.LicenseSource)" />
+      <bal:WixStandardBootstrapperApplication
+        Theme="hyperlinkLicense" ThemeFile="SetupTheme.xml"
+        LicenseUrl="https://github.com/alphasixtyfive/resodrive/blob/main/LICENSE"
+        LogoFile="$(var.LogoSource)" SuppressOptionsUI="yes"
+        LaunchTarget="[ProgramFiles64Folder]rdrive\resodrive.exe"
+        LaunchWorkingFolder="[ProgramFiles64Folder]rdrive" />
+      <Payload SourceFile="$(var.IconSource)" Name="app.ico" />
     </BootstrapperApplication>
 
     <netfx:DotNetCoreSearch
@@ -40,7 +46,7 @@
           Size="$(var.DotNetDesktopRuntimeSize)"
         />
       </ExePackage>
-      <MsiPackage SourceFile="$(var.MsiSource)" Compressed="yes" Vital="yes" />
+      <MsiPackage SourceFile="$(var.MsiSource)" Compressed="yes" Vital="yes" Visible="no" />
     </Chain>
   </Bundle>
 </Wix>

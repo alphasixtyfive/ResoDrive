@@ -44,6 +44,15 @@ public sealed partial class RecoveryToolsService
         }
     }
 
+    public async Task ExportDiagnosticReportAsync(string destinationPath, string report, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        var destination = ValidateDestination(destinationPath, ".txt");
+        if (IsWithinDirectory(destination, _paths.Root))
+            throw new ArgumentException("Choose a location outside the ResoDrive data folder.", nameof(destinationPath));
+        await WriteAtomicallyAsync(destination, System.Text.Encoding.UTF8.GetBytes(report), cancellationToken).ConfigureAwait(false);
+    }
+
     public static string Sanitize(string value)
     {
         var sanitized = SecretPattern().Replace(value, "$1$2<redacted>");

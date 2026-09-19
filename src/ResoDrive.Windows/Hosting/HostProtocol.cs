@@ -140,7 +140,9 @@ public static class HostClient
         var responseTimeout = request.Command.Equals("reload", StringComparison.OrdinalIgnoreCase) ||
             request.Command.Equals("activate-runtime", StringComparison.OrdinalIgnoreCase)
             ? TimeSpan.FromSeconds(45)
-            : TimeSpan.FromSeconds(8);
+            : request.Command.Equals("shutdown", StringComparison.OrdinalIgnoreCase) ||
+              request.Command.Equals("check-uploads", StringComparison.OrdinalIgnoreCase)
+                ? TimeSpan.FromSeconds(15) : TimeSpan.FromSeconds(8);
         return SendCoreAsync(request, responseTimeout, enforceInstallation: true, cancellationToken);
     }
 

@@ -130,6 +130,74 @@ public sealed class ApplicationUpdateServiceTests
         }
     }
 
+    [Theory]
+    [InlineData("v0.2.9/resodrive-win-x64-0.3.0.msi")]
+    [InlineData("v0.3.0/other.msi")]
+    [InlineData("v0.3.0/resodrive-win-x64-0.3.0.msi?download=1")]
+    [InlineData("v0.3.0/resodrive-win-x64-0.3.0.msi#other")]
+    public async Task DownloadInstallerAsync_RejectsAssetOutsideExactVersionAndFilename(string suffix)
+    {
+        using var client = new HttpClient(new NoRequestHandler());
+        var service = new ApplicationUpdateService(client, ProductLinks.LatestRelease);
+        var installer = new Uri(ProductLinks.Repository.AbsoluteUri + "/releases/download/" + suffix);
+        var update = new ApplicationUpdateCheck("0.2.29", "0.3.0", true,
+            ProductLinks.LatestRelease, installer, new Uri(installer.AbsoluteUri + ".sha256"));
+
+        var result = await service.DownloadInstallerAsync(update, Path.GetTempPath());
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("app.update_download_invalid", result.Error?.Code);
+    }
+
+    [Theory]
+    [InlineData("wrong-name")]
+    [InlineData("bare-hash")]
+    [InlineData("duplicate")]
+    [InlineData("oversized")]
+    [InlineData("mismatch")]
+    public async Task DownloadInstallerAsync_RejectsInvalidChecksumWithoutPublishingPackage(string scenario)
+    {
+        const string name = "resodrive-win-x64-0.3.0.msi";
+        var installer = new Uri(ProductLinks.Repository.AbsoluteUri + "/releases/download/v0.3.0/" + name);
+        var checksumUri = new Uri(installer.AbsoluteUri + ".sha256");
+        var payload = Encoding.UTF8.GetBytes("test installer bytes");
+        var hash = Convert.ToHexString(SHA256.HashData(payload));
+        var checksum = scenario switch
+        {
+            "wrong-name" => hash + "  different.msi",
+            "bare-hash" => hash,
+            "duplicate" => hash + "  " + name + "\n" + hash + "  " + name,
+            "oversized" => new string('a', 4097),
+            _ => new string('0', 64) + "  " + name,
+        };
+        using var client = new HttpClient(new RoutingHandler(new Dictionary<string, byte[]>
+        {
+            [installer.AbsoluteUri] = payload,
+            [checksumUri.AbsoluteUri] = Encoding.ASCII.GetBytes(checksum),
+        }));
+        var service = new ApplicationUpdateService(client, ProductLinks.LatestRelease);
+        var directory = Path.Combine(Path.GetTempPath(), "resodrive-checksum-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var result = await service.DownloadInstallerAsync(
+                new ApplicationUpdateCheck("0.2.29", "0.3.0", true, ProductLinks.LatestRelease, installer, checksumUri), directory);
+
+            Assert.False(result.Succeeded);
+            Assert.Equal(scenario == "mismatch" ? "app.update_checksum_mismatch" : "app.update_checksum_invalid", result.Error?.Code);
+            Assert.False(File.Exists(Path.Combine(directory, name)));
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private sealed class NoRequestHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => throw new InvalidOperationException("Invalid metadata must be rejected before making an HTTP request.");
+    }
+
     private static HttpClient Client(HttpStatusCode statusCode, string finalUri) =>
         new(new ResponseHandler(statusCode, new Uri(finalUri)));
 
