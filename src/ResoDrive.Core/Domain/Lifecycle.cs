@@ -13,6 +13,9 @@ public enum MountLifecycle
 
 public sealed record MountSnapshot
 {
+    public long? UploadsQueued { get; init; }
+    public long? UploadsInProgress { get; init; }
+    public bool UploadStatusStale { get; init; }
     public required MountId MountId { get; init; }
     public MountLifecycle Lifecycle { get; init; }
     public string? StatusText { get; init; }

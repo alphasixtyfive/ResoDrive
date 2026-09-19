@@ -7,6 +7,8 @@ ResoDrive 0.3.7 is the consolidated release containing the installer, update, sa
 - Update preparation now reports upload/cache shutdown blocks before Windows Installer starts.
 - Fix the confirmed immediate 1603/1722 failure when an elevated installer contacts an unelevated 0.3.6 host. The MSI now carries its own preparation helper and authenticates the host's actual Windows account across UAC elevation.
 - Show preparation stages and specific shutdown failures. Keep pending-upload protection and preserve settings and cache if preparation fails.
+- Keep idle drive rows compact. Show uploads beside the domain only while files are queued or uploading; retain cache errors when attention is needed.
+- Pass custom data directories explicitly to Windows Installer, and repair the app without repairing the shared .NET runtime.
 - The setup includes the ResoDrive icon and logo, clear progress, repair/removal screens, a launch action and a direct failure-log link.
 
 - Setup provides a direct link to its log when an installation fails.

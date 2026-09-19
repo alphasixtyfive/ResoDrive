@@ -10,8 +10,16 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
-        if (args.Length == 3 && args[0].Equals("--prepare-install", StringComparison.OrdinalIgnoreCase))
+        if (args.Length is 3 or 4 && args[0].Equals("--prepare-install", StringComparison.OrdinalIgnoreCase))
+        {
+            if (args.Length == 4)
+            {
+                if (!Path.IsPathFullyQualified(args[3]))
+                    return 2;
+                Environment.SetEnvironmentVariable("RDRIVE_DATA_DIR", Path.GetFullPath(args[3]));
+            }
             return InstallerPreparation.Run(args[1], int.TryParse(args[2], out var uiLevel) && uiLevel >= 3);
+        }
 
         if (ApplicationUpdateHandoff.TryParseCompletionRequest(args, out var completionRequest))
         {

@@ -246,8 +246,9 @@ public sealed class MainWindowMarkupTests
             (string?)element.Attribute(xaml + "Key") == "ConnectionBadgeText");
         Assert.Equal("Center", SetterValue(badgeTextStyle, presentation, "VerticalAlignment"));
 
-        var host = Assert.Single(document.Descendants(presentation + "TextBlock"), element =>
-            (string?)element.Attribute("Text") == "{Binding ConnectionHostDisplay}");
+          var host = Assert.Single(document.Descendants(presentation + "TextBlock"), element =>
+              element.Elements(presentation + "Run").Any(run =>
+                  (string?)run.Attribute("Text") == "{Binding ConnectionHostDisplay}"));
         Assert.Equal("CharacterEllipsis", (string?)host.Attribute("TextTrimming"));
         Assert.Null(host.Attribute("MaxWidth"));
     }

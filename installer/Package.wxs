@@ -17,11 +17,14 @@
     <MajorUpgrade
       DowngradeErrorMessage="A newer version of $(var.ResoDriveProductName) is already installed."
       Schedule="afterInstallInitialize"
+      AllowSameVersionUpgrades="$(var.ResoDriveAllowSameVersionUpgrades)"
     />
     <MediaTemplate EmbedCab="yes" />
 
     <Icon Id="resodrive.ico" SourceFile="$(var.IconSource)" />
     <Property Id="ARPPRODUCTICON" Value="resodrive.ico" />
+    <Property Id="RDRIVE_DATA_ROOT" Secure="yes" />
+    <SetProperty Id="RDRIVE_DATA_ROOT" Value="[LocalAppDataFolder]rdrive" Before="CostFinalize" Sequence="execute" Condition="NOT RDRIVE_DATA_ROOT" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch $(var.ResoDriveProductName)" />
     <netfx:DotNetCompatibilityCheck
@@ -91,7 +94,7 @@
     <CustomAction
       Id="PrepareInstalledResoDriveForUpgrade"
       BinaryRef="ResoDriveInstallationHelper"
-      ExeCommand="--prepare-install &quot;[INSTALLFOLDER].&quot; [UILevel]"
+      ExeCommand="--prepare-install &quot;[INSTALLFOLDER].&quot; [UILevel] &quot;[RDRIVE_DATA_ROOT]\.&quot;"
       Execute="immediate"
       Return="check"
       Impersonate="yes"

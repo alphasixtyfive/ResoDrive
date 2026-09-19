@@ -2,6 +2,8 @@
 
 ## [0.3.7] - 2026-09-19
 
+- Keep idle drive rows compact and show active or queued uploads beside the domain. Pass structured upload counters to the UI rather than interpreting status messages.
+- Pass custom data directories explicitly through the installer and avoid repairing the shared .NET runtime when repairing the app.
 - Fix elevated-installer communication with an unelevated legacy host by authenticating its actual Windows account SID. Embed current preparation code in the MSI instead of invoking the old executable.
 - Show installer preparation progress and specific failures; document the incident and add an isolated UAC regression test.
 - Add guarded Nextcloud remote wipe using a DPAPI-protected dedicated app password, same-host HTTPS validation, and the official wipe-check and wipe-success protocol.

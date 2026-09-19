@@ -13,7 +13,7 @@ public sealed class InstallerPackageTests
 
         Assert.Null(action.Attribute("FileRef"));
         Assert.Equal("ResoDriveInstallationHelper", (string?)action.Attribute("BinaryRef"));
-        Assert.Equal("--prepare-install \"[INSTALLFOLDER].\" [UILevel]", (string?)action.Attribute("ExeCommand"));
+        Assert.Equal("--prepare-install \"[INSTALLFOLDER].\" [UILevel] \"[RDRIVE_DATA_ROOT]\\.\"", (string?)action.Attribute("ExeCommand"));
         Assert.Equal("check", (string?)action.Attribute("Return"));
         Assert.Equal("yes", (string?)action.Attribute("Impersonate"));
     }

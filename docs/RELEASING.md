@@ -56,6 +56,11 @@ Also verify the real in-app update from the prior public version and inspect the
 installed ProductVersion/commit. A build, mocked exit code, or XML assertion is
 not a substitute for this check. Never skip an upload block to make a test pass.
 
+For a nondefault data directory, use `ResoDriveDataRoot="D:\path\to\data"` with
+the setup executable or `RDRIVE_DATA_ROOT="D:\path\to\data"` with msiexec. A
+process-local environment variable alone is not propagated through the Windows
+Installer service. The built-in updater passes the active data root explicitly.
+
 ## Signing
 
 Current local packages include SHA-256 sidecars but are not Authenticode signed.

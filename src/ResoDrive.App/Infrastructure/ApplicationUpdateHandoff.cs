@@ -399,10 +399,11 @@ internal static class ApplicationUpdateHandoff
     internal static ProcessStartInfo CreateInstallerStartInfo(string installerPath)
     {
         var logPath = Path.ChangeExtension(installerPath, ".msi.log");
+        var dataRoot = new ApplicationPaths().Root;
         return new ProcessStartInfo
         {
             FileName = "msiexec.exe",
-            Arguments = $"/i \"{installerPath}\" /passive /norestart /l*v \"{logPath}\"",
+            Arguments = $"/i \"{installerPath}\" /passive /norestart /l*v \"{logPath}\" RDRIVE_DATA_ROOT=\"{Path.TrimEndingDirectorySeparator(dataRoot)}\\.\"",
             UseShellExecute = true,
             Verb = "runas",
             WorkingDirectory = Path.GetDirectoryName(installerPath),

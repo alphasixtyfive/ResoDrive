@@ -168,6 +168,7 @@ public sealed class ApplicationUpdateHandoffTests
         Assert.Contains("/norestart", startInfo.Arguments, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("/l*v", startInfo.Arguments, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("resodrive-win-x64-0.3.0.msi.log", startInfo.Arguments, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("RDRIVE_DATA_ROOT=", startInfo.Arguments, StringComparison.Ordinal);
     }
 
     [Fact]

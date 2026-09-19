@@ -80,3 +80,40 @@ See [dotnet/runtime issue 123903](https://github.com/dotnet/runtime/issues/12390
 
 Remote wipe is a separate destructive operation. Never test it against the real
 user's accounts or cache as part of installer validation.
+
+## Additional repair regression found during validation
+
+The installer service does not reliably inherit a caller's process-local
+`RDRIVE_DATA_DIR`. The isolated CI host used a custom data directory, while the
+MSI helper looked in the default directory. The new fail-closed helper correctly
+refused to terminate a running process whose host it could not contact. Previous
+force-stop logic had masked this mismatch.
+
+Custom roots now travel explicitly through `RDRIVE_DATA_ROOT` (MSI) or
+`ResoDriveDataRoot` (setup bundle). The in-app updater supplies its active root.
+The smoke test supplies its isolated root through that same supported interface.
+Never fix this test by ignoring a failed handshake. Also, repairing ResoDrive must
+not repair the shared .NET runtime while applications are using it; the bundle
+installs a missing prerequisite but leaves an existing runtime alone on repair.
+
+Because the owner explicitly requested replacement under 0.3.7, that version alone
+allows MSI same-version replacement. ICE61 is suppressed only for that version's
+intentional inclusive upgrade range; the remaining MSI validation stays enabled.
+Future versions revert to normal increasing-version upgrades. This prevents two
+separately registered 0.3.7 products during recovery; it does not make the app's
+version comparison treat 0.3.7 as newer than 0.3.7.
+
+## Observed desktop results on 19 September
+
+- The isolated elevation reproduction passed against the actual 0.3.6 binary:
+  helper exit 0, legacy host exited, settings and cache-marker hashes unchanged.
+- The legacy 0.3.6 updater handoff successfully installed the corrected MSI on the
+  affected machine at 16:55 local time. MSI returned 0 and the app reopened with
+  ProductVersion `0.3.7+37183b46d7ffe281ce8f97405e1beb887821dc89`.
+- Settings, encrypted rclone configuration, protected credentials, and profile
+  hashes matched their pre-upgrade values. Cache remained present; its file count
+  changed during normal rclone operation, so no claim of byte-identical live cache
+  is made.
+- A canceled UAC attempt left 0.3.6 installed and reactivated the original app.
+- These observations establish the original UAC fix. They do not replace the
+  release gates for later source changes, including custom-root repair support.

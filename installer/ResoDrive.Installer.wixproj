@@ -4,10 +4,15 @@
     <NuGetLockFilePath>packages.installer.lock.json</NuGetLockFilePath>
     <DefaultItemExcludes>$(DefaultItemExcludes);Bundle.wxs</DefaultItemExcludes>
     <InstallerPlatform>x64</InstallerPlatform>
+    <!-- Owner-approved 0.3.7 replacement only. Future releases must increase the version. -->
+    <ResoDriveAllowSameVersionUpgrades>no</ResoDriveAllowSameVersionUpgrades>
+    <ResoDriveAllowSameVersionUpgrades Condition="'$(ResoDriveVersion)' == '0.3.7'">yes</ResoDriveAllowSameVersionUpgrades>
+    <SuppressIces Condition="'$(ResoDriveVersion)' == '0.3.7'">$(SuppressIces);ICE61</SuppressIces>
     <OutputName>$(ResoDriveExecutableBaseName)-$(ResoDriveRuntime)-$(ResoDriveVersion)</OutputName>
     <DefineConstants>
       PackageSource=$(PackageSource);
       ResoDriveVersion=$(ResoDriveVersion);
+      ResoDriveAllowSameVersionUpgrades=$(ResoDriveAllowSameVersionUpgrades);
       ResoDriveUpgradeCode=$(ResoDriveUpgradeCode);
       ResoDriveProductName=$(ResoDriveProductName);
       ResoDrivePublisher=$(ResoDrivePublisher);

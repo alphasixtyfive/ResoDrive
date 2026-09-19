@@ -213,6 +213,9 @@ internal static class StatusPalette
 
 public sealed class MountRow : NotifyBase
 {
+    private long? _uploadsQueued;
+    private long? _uploadsInProgress;
+    private bool _uploadStatusStale;
     private MountLifecycle _lifecycle = MountLifecycle.Stopped;
     private string _status = "Not mounted";
     private string _errorDetail = string.Empty;
@@ -231,6 +234,19 @@ public sealed class MountRow : NotifyBase
     public char Drive => Settings.Target.DriveLetter ?? '?';
     public string DriveDisplay => $"{Drive}:";
     public string ConnectionHostDisplay => Settings.ConnectionHost?.Trim() ?? string.Empty;
+    public string UploadActivityText => !ShouldStop || (_uploadsQueued is not > 0 && _uploadsInProgress is not > 0)
+        ? string.Empty
+        : _uploadStatusStale ? "Upload status unavailable"
+        : "↑ " + string.Join(" · ", new[]
+        {
+            _uploadsInProgress > 0 ? $"{_uploadsInProgress} uploading" : null,
+            _uploadsQueued > 0 ? $"{_uploadsQueued} queued" : null
+        }.Where(value => value is not null));
+    public string UploadActivitySuffix => UploadActivityText.Length == 0 ? string.Empty
+        : (ConnectionHostDisplay.Length > 0 ? "  ·  " : string.Empty) + UploadActivityText;
+    public System.Windows.Visibility ConnectionDetailVisibility =>
+        ConnectionHostDisplay.Length > 0 || UploadActivityText.Length > 0
+            ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
     public string ConnectionTypeDisplay => Settings.ConnectionType?.Trim().ToLowerInvariant() switch
     {
         "webdav" => "WebDAV",
@@ -264,7 +280,7 @@ public sealed class MountRow : NotifyBase
             ? System.Windows.Visibility.Visible
             : System.Windows.Visibility.Collapsed;
     public System.Windows.Visibility StatusVisibility =>
-        _lifecycle is MountLifecycle.Mounted or MountLifecycle.Failed or MountLifecycle.Degraded or MountLifecycle.WaitingToRestart
+        _lifecycle is MountLifecycle.Failed or MountLifecycle.Degraded or MountLifecycle.WaitingToRestart
         || (!Enabled && !ShouldStop)
             ? System.Windows.Visibility.Visible
             : System.Windows.Visibility.Collapsed;
@@ -325,16 +341,23 @@ public sealed class MountRow : NotifyBase
                         : "Unknown mount state";
         var nextErrorDetail = nextLifecycle == MountLifecycle.Failed ? detail : string.Empty;
         if (previousLifecycle == nextLifecycle && _status == nextStatus &&
-            _errorDetail == nextErrorDetail)
+            _errorDetail == nextErrorDetail && _uploadsQueued == status?.UploadsQueued &&
+            _uploadsInProgress == status?.UploadsInProgress && _uploadStatusStale == (status?.UploadStatusStale ?? false))
             return;
         _status = nextStatus;
         _errorDetail = nextErrorDetail;
+        _uploadsQueued = status?.UploadsQueued;
+        _uploadsInProgress = status?.UploadsInProgress;
+        _uploadStatusStale = status?.UploadStatusStale ?? false;
         ChangedState();
     }
 
     private void ChangedState()
     {
         Changed(nameof(StatusText));
+        Changed(nameof(UploadActivityText));
+        Changed(nameof(UploadActivitySuffix));
+        Changed(nameof(ConnectionDetailVisibility));
         Changed(nameof(StatusVisibility));
         Changed(nameof(ErrorDetail));
         Changed(nameof(ErrorVisibility));

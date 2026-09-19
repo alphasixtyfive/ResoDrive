@@ -129,7 +129,12 @@ public sealed class RcloneMountCoordinator : IAsyncDisposable
             Publish(Snapshot(session.Definition, ready && !transfers.HasCacheError ? MountLifecycle.Mounted : MountLifecycle.Degraded,
                 ready
                     ? transfers.Description
-                    : "Drive is not responding · " + transfers.Description + " · Checking again automatically"));
+                    : "Drive is not responding · " + transfers.Description + " · Checking again automatically") with
+            {
+                UploadsQueued = (transfers.Current ?? transfers.LastKnown)?.Queued,
+                UploadsInProgress = (transfers.Current ?? transfers.LastKnown)?.Uploading,
+                UploadStatusStale = transfers.Current is null
+            });
         }
         catch (Exception exception) when (Expected(exception))
         {

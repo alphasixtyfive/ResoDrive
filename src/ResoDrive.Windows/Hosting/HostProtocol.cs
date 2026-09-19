@@ -16,7 +16,10 @@ public sealed record HostRequest(
 public sealed record HostMountStatus(
     Guid MountId,
     string Lifecycle,
-    string Status);
+    string Status,
+    long? UploadsQueued = null,
+    long? UploadsInProgress = null,
+    bool UploadStatusStale = false);
 
 public sealed record HostSyncStatus(
     Guid MountId,
@@ -71,7 +74,10 @@ public static class HostProtocol
     public static HostMountStatus ToStatus(MountSnapshot snapshot) => new(
         snapshot.MountId.Value,
         snapshot.Lifecycle.ToString(),
-        snapshot.StatusText ?? snapshot.Lifecycle.ToString());
+        snapshot.StatusText ?? snapshot.Lifecycle.ToString(),
+        snapshot.UploadsQueued,
+        snapshot.UploadsInProgress,
+        snapshot.UploadStatusStale);
 
     public static HostSyncStatus ToStatus(SyncSnapshot snapshot) => new(
         snapshot.MountId.Value,
@@ -245,6 +251,11 @@ public static class HostClient
         catch (UnauthorizedAccessException exception)
         {
             return new HostResponse(false, "host.access_denied", exception.Message);
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return new HostResponse(false, "host.identity_unavailable",
+                "The background host identity could not be verified. Try again after ResoDrive restarts.");
         }
         catch (Exception exception) when (exception is InvalidDataException or JsonException)
         {

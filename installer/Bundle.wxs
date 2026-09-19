@@ -27,12 +27,12 @@
       Variable="DotNetDesktopRuntimeVersion"
     />
 
+    <Variable Name="ResoDriveDataRoot" Type="string" Value="" bal:Overridable="yes" />
     <Chain>
       <ExePackage
         Id="DotNetDesktopRuntime"
         DetectCondition="DotNetDesktopRuntimeVersion &gt;= v$(var.DotNetDesktopRuntimeMinimumVersion)"
         InstallArguments="/install /quiet /norestart"
-        RepairArguments="/repair /quiet /norestart"
         UninstallArguments="/uninstall /quiet /norestart"
         PerMachine="yes"
         Permanent="yes"
@@ -46,7 +46,9 @@
           Size="$(var.DotNetDesktopRuntimeSize)"
         />
       </ExePackage>
-      <MsiPackage SourceFile="$(var.MsiSource)" Compressed="yes" Vital="yes" Visible="no" />
+      <MsiPackage SourceFile="$(var.MsiSource)" Compressed="yes" Vital="yes" Visible="no">
+        <MsiProperty Name="RDRIVE_DATA_ROOT" Value="[ResoDriveDataRoot]" Condition="ResoDriveDataRoot" />
+      </MsiPackage>
     </Chain>
   </Bundle>
 </Wix>

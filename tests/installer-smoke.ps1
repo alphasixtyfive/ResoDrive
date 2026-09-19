@@ -25,6 +25,11 @@ $settingsHash = (Get-FileHash -LiteralPath $settings).Hash
 $markerHash = (Get-FileHash -LiteralPath $marker).Hash
 
 function Invoke-Installer([string]$Executable, [string]$Arguments) {
+    # Windows Installer's service does not inherit process-local RDRIVE_DATA_DIR.
+    # Pass the isolated root through the supported bundle/MSI property instead.
+    if ([IO.Path]::GetFileName($Executable) -ine 'msiexec.exe') {
+        $Arguments += " ResoDriveDataRoot=`"$env:RDRIVE_DATA_DIR`""
+    }
     $process = Start-Process -FilePath $Executable -ArgumentList $Arguments -WindowStyle Hidden -PassThru
     try {
         if (-not $process.WaitForExit(180000)) { throw "Installer timed out: $Arguments" }
@@ -88,5 +93,14 @@ try {
     Assert-DataPreserved
     Write-Output 'Installer smoke passed: fresh install, launch, running-app repair/removal, previous-version upgrade, and user-data preservation.'
 } finally {
+    foreach ($diagnosticRoot in @($env:RDRIVE_DATA_DIR, (Join-Path $env:LOCALAPPDATA 'rdrive'))) {
+        foreach ($relative in @('logs\resodrive-ui.log', 'updates\installer-preparation.json')) {
+            $diagnostic = Join-Path $diagnosticRoot $relative
+            if (Test-Path -LiteralPath $diagnostic) {
+                $prefix = if ($diagnosticRoot -eq $env:RDRIVE_DATA_DIR) { 'isolated-' } else { 'default-' }
+                Copy-Item -LiteralPath $diagnostic -Destination (Join-Path $testRoot ($prefix + [IO.Path]::GetFileName($diagnostic) + '.log'))
+            }
+        }
+    }
     $env:RDRIVE_DATA_DIR = $oldDataRoot
 }

@@ -254,8 +254,8 @@
                         <ColumnDefinition Width="*" />
                       </Grid.ColumnDefinitions>
                       <TextBlock Text="{Binding DriveDisplay}" Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center" />
-                      <TextBlock Grid.Column="1" Text="  ·  " Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center" Visibility="{Binding ConnectionHostVisibility}" />
-                      <TextBlock Grid.Column="2" Text="{Binding ConnectionHostDisplay}" Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Visibility="{Binding ConnectionHostVisibility}" />
+                      <TextBlock Grid.Column="1" Text="  ·  " Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center" Visibility="{Binding ConnectionDetailVisibility}" />
+                      <TextBlock Grid.Column="2" Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Visibility="{Binding ConnectionDetailVisibility}" ToolTip="{Binding StatusText}"><Run Text="{Binding ConnectionHostDisplay}" /><Run Text="{Binding UploadActivitySuffix}" Foreground="{StaticResource AccentHoverBrush}" /></TextBlock>
                     </Grid>
                     <TextBlock Grid.Row="2" Text="{Binding StatusText}" Foreground="{Binding StatusBrush}" FontSize="11" Padding="0" Margin="0,3,0,0" HorizontalAlignment="Left" TextAlignment="Left" TextTrimming="CharacterEllipsis" ToolTip="{Binding StatusText}" Visibility="{Binding StatusVisibility}" />
                   </Grid>
