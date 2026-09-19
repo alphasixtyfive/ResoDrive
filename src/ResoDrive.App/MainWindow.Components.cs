@@ -351,6 +351,17 @@ public partial class MainWindow
                 SetLiveText(ApplicationUpdateStatusText, uploads.ErrorMessage ?? "Could not check uploads. Try again.");
                 return;
             }
+            var shutdown = await HostClient.SendAsync(
+                new HostRequest("shutdown", Confirmed: true),
+                TimeSpan.FromSeconds(15),
+                _lifetimeCancellation.Token);
+            if (!shutdown.Succeeded && shutdown.ErrorCode != "host.unavailable")
+            {
+                SetLiveText(
+                    ApplicationUpdateStatusText,
+                    shutdown.ErrorMessage ?? "ResoDrive could not safely stop its background work. Close open documents and try again.");
+                return;
+            }
             SetLiveText(ApplicationUpdateStatusText, "Preparing Windows Installer…");
             ApplicationUpdateHandoff.Start(
                 downloaded.Value.Version,

@@ -52,14 +52,24 @@ to protect stored data. Neither protects it from someone controlling the unlocke
 user session. Ordinary deletion is not a promise of forensic erasure on an SSD,
 and copies created by Office or other applications can exist outside ResoDrive.
 
-Remote wipe is not implemented in this version. The intended integration is
-[Nextcloud's Remote Wipe protocol](https://docs.nextcloud.com/server/latest/developer_manual/client_apis/RemoteWipe/index.html),
-using a dedicated app token obtained through its login flow. An authentication
-rejection triggers a wipe-status check; only an explicit `wipe: true` authorizes
-removal of account data. Disabling an account or an ordinary 401/403 response alone
-is not such an instruction. A conforming implementation must isolate all local
-account data, stop its mounts and jobs, remove that data (including pending writes),
-and acknowledge success only after cleanup completes. Unreachable clients cannot
-receive remote wipe, and client-side cleanup cannot prevent a hostile local user
-from retaining previously copied data. No deletion-on-authentication-failure rule
-is enabled by ResoDrive.
+Nextcloud accounts provisioned through this version keep a DPAPI-protected
+remote-wipe registration. The background host probes the account's WebDAV
+endpoint and only contacts `/index.php/core/wipe/check` after an authenticated
+request returns 401 or 403. Local data is removed only when that endpoint returns
+the explicit JSON value `{"wipe":true}`. An ordinary credential rejection,
+disconnected server, timeout, malformed response, or disabled account without an
+active wipe request leaves local data intact.
+
+Because older versions use one shared rclone cache for all mounts, a confirmed
+wipe currently stops all ResoDrive mounts and sync jobs and removes the complete
+local ResoDrive account state (settings, encrypted rclone configuration, cache,
+ownership state, scheduler state and logs). The protected wipe token is retained
+only until cleanup succeeds and the client acknowledges `/index.php/core/wipe/success`.
+The setup flow must use a dedicated Nextcloud app password created for this client;
+ordinary account passwords are not suitable for remote wipe. Existing accounts
+must be reconnected through setup to create a registration.
+
+Unreachable clients cannot receive remote wipe, and client-side cleanup cannot
+prevent a hostile local user from retaining previously copied data. Ordinary file
+deletion is not forensic erasure on an SSD, and Office or other applications can
+create copies outside ResoDrive.

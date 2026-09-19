@@ -58,6 +58,7 @@ public sealed class ProfileProvisioningService
     private readonly IRcloneConfigMutationService _mutation;
     private readonly IProfileRcloneRunner _runner;
     private readonly HttpClient _httpClient;
+    private readonly RemoteWipeStore _remoteWipe;
 
     public ProfileProvisioningService(
         ApplicationPaths paths,
@@ -91,6 +92,7 @@ public sealed class ProfileProvisioningService
         _mutation = mutation ?? throw new ArgumentNullException(nameof(mutation));
         _runner = runner ?? throw new ArgumentNullException(nameof(runner));
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        _remoteWipe = new RemoteWipeStore(_paths);
     }
 
     public async Task<OperationResult<ProfileProvisioningResult>> ProvisionAsync(
@@ -161,6 +163,7 @@ public sealed class ProfileProvisioningService
         string? initialConfig = null;
         string? stagedSecret = null;
         string? stagedConfig = null;
+        string? stagedRemoteWipe = null;
         string configPassword;
         string configPasswordCommand;
         try
@@ -264,6 +267,20 @@ public sealed class ProfileProvisioningService
             if (!verification.Succeeded)
                 return FailureFrom(verification, "setup.remote_check", "The configured remote could not be verified.");
 
+            if (profile.Connection is WebDavConnectionDefinition
+                { Vendor: WebDavVendor.Nextcloud } nextcloud)
+            {
+                var registrations = await _remoteWipe.LoadAsync(cancellationToken).ConfigureAwait(false);
+                var registration = new RemoteWipeRegistration(
+                    mount.Value.Id,
+                    endpoint.ToString(),
+                    nextcloud.BaseUrl.ToString(),
+                    request.Username,
+                    normalizedPassword);
+                stagedRemoteWipe = await _remoteWipe.CreateStagedAsync(
+                    registrations.Append(registration), cancellationToken).ConfigureAwait(false);
+            }
+
             var files = new List<(string StagedPath, string DestinationPath)>();
             if (stagedSecret is not null)
             {
@@ -272,6 +289,11 @@ public sealed class ProfileProvisioningService
             }
             files.Add((stagedConfig, _paths.ConfigFile));
             stagedConfig = null;
+            if (stagedRemoteWipe is not null)
+            {
+                files.Add((stagedRemoteWipe, _paths.RemoteWipeFile));
+                stagedRemoteWipe = null;
+            }
             transaction = new SetupFileTransaction(files);
             progress?.Report("Ready");
             return Result.Success(new ProfileProvisioningResult(
@@ -294,6 +316,7 @@ public sealed class ProfileProvisioningService
             TryDelete(initialConfig);
             TryDelete(stagedSecret);
             TryDelete(stagedConfig);
+            TryDelete(stagedRemoteWipe);
         }
     }
 

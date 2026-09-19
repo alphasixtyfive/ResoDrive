@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.9] - 2026-09-19
+
+- Add guarded Nextcloud remote wipe support using a DPAPI-protected dedicated app password and the official wipe-check and wipe-success protocol.
+- Remove local ResoDrive settings, encrypted configuration, shared cache, scheduler state, ownership state and logs only after the server explicitly returns `wipe: true` following a 401/403 account response.
+- Explain the dedicated app-password requirement in setup and report update shutdown blocks before starting Windows Installer.
+
 ## [0.3.8] - 2026-09-19
 
 - Run the coordinated application shutdown before Windows Installer checks for files in use, so a stale background process no longer causes an avoidable upgrade failure with MSI error 1603.
@@ -76,6 +82,7 @@ First public preview of the cleaned ResoDrive codebase.
 
 [0.3.7]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.7
 [0.3.8]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.8
+[0.3.9]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.9
 [0.3.6]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.6
 [0.3.5]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.5
 [0.3.4]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.4

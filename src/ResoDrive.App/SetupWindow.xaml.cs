@@ -260,7 +260,11 @@ public partial class SetupWindow : WpfWindow
         PasswordLabel.Text = usesKey
             ? "Key passphrase"
             : connectionType == "Nextcloud" ? "App password" : "Password";
-        PasswordBox.ToolTip = usesKey ? "Optional passphrase for an encrypted private key" : null;
+        PasswordBox.ToolTip = usesKey
+            ? "Optional passphrase for an encrypted private key"
+            : connectionType == "Nextcloud"
+                ? "Use a dedicated Nextcloud app password created for this ResoDrive client. It enables remote wipe."
+                : null;
         PasswordBox.SetValue(
             System.Windows.Automation.AutomationProperties.NameProperty,
             usesKey ? "Private key passphrase, optional" : PasswordLabel.Text);

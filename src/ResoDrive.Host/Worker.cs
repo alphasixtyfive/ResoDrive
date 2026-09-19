@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.IO.Pipes;
+using System.Security.Cryptography;
 using System.Text.Json;
 using ResoDrive.Core.Domain;
 using ResoDrive.Core.Results;
@@ -21,6 +22,8 @@ public sealed partial class Worker : BackgroundService
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _operations = new();
     private readonly ConcurrentDictionary<int, Task> _tasks = new();
     private readonly ConcurrentDictionary<SyncJobId, DateTimeOffset> _lastRuns = new();
+    private readonly RemoteWipeStore _remoteWipe;
+    private readonly RemoteWipeClient _remoteWipeClient = new();
     private AtomicSettingsStore? _store;
     private RcloneMountCoordinator? _mounts;
     private RcloneSyncCoordinator? _syncs;
@@ -31,6 +34,7 @@ public sealed partial class Worker : BackgroundService
     private int _taskId;
     private bool _firstSchedulePass = true;
     private bool _shutdownRequested;
+    private RemoteWipeRegistration? _pendingRemoteWipe;
 
     public Worker(
         ApplicationPaths paths,
@@ -40,6 +44,7 @@ public sealed partial class Worker : BackgroundService
         _paths = paths;
         _logger = logger;
         _applicationLifetime = applicationLifetime;
+        _remoteWipe = new RemoteWipeStore(paths);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -51,7 +56,11 @@ public sealed partial class Worker : BackgroundService
         {
             LogInitializationFailure(_logger, result.Error?.Code, result.Error?.Message);
         }
-        await Task.WhenAll(ServeAsync(stoppingToken), ScheduleAsync(stoppingToken), MonitorMountsAsync(stoppingToken)).ConfigureAwait(false);
+        await Task.WhenAll(
+            ServeAsync(stoppingToken),
+            ScheduleAsync(stoppingToken),
+            MonitorMountsAsync(stoppingToken),
+            MonitorRemoteWipeAsync(stoppingToken)).ConfigureAwait(false);
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)
@@ -95,6 +104,23 @@ public sealed partial class Worker : BackgroundService
             }
             _syncs?.Dispose();
             _store?.Dispose();
+
+            var pendingWipe = _pendingRemoteWipe;
+            if (pendingWipe is not null)
+            {
+                try
+                {
+                    RemoteWipeCleanup.DeleteAccountData(_paths);
+                    await _remoteWipeClient.SignalSuccessAsync(pendingWipe, CancellationToken.None).ConfigureAwait(false);
+                    if (File.Exists(_paths.RemoteWipeFile))
+                        File.Delete(_paths.RemoteWipeFile);
+                    LogRemoteWipeCompleted(_logger);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or HttpRequestException)
+                {
+                    LogRemoteWipeFailure(_logger, exception);
+                }
+            }
         }
     }
 
@@ -348,6 +374,47 @@ public sealed partial class Worker : BackgroundService
                     await _mounts.RefreshHealthAsync(token).ConfigureAwait(false);
             }
             finally { _reloadGate.Release(); }
+        }
+    }
+
+    private async Task MonitorRemoteWipeAsync(CancellationToken token)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1));
+        while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
+        {
+            IReadOnlyList<RemoteWipeRegistration> registrations;
+            try
+            {
+                registrations = await _remoteWipe.LoadAsync(token).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+                                               CryptographicException or JsonException)
+            {
+                LogRemoteWipeRegistrationFailure(_logger, exception);
+                continue;
+            }
+
+            foreach (var registration in registrations)
+            {
+                try
+                {
+                    if (!await _remoteWipeClient.IsWipeRequestedAsync(registration, token).ConfigureAwait(false))
+                        continue;
+
+                    _pendingRemoteWipe = registration;
+                    LogRemoteWipeRequested(_logger);
+                    _applicationLifetime.StopApplication();
+                    return;
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or HttpRequestException)
+                {
+                    LogRemoteWipeCheckFailure(_logger, exception);
+                }
+            }
         }
     }
 
@@ -721,4 +788,14 @@ public sealed partial class Worker : BackgroundService
     private static partial void LogStateFailure(ILogger logger, Exception exception);
     [LoggerMessage(1006, LogLevel.Warning, "Timed out while draining {TaskCount} host operations during shutdown.")]
     private static partial void LogDrainTimeout(ILogger logger, int taskCount);
+    [LoggerMessage(1007, LogLevel.Information, "Remote wipe completed and was acknowledged by the server.")]
+    private static partial void LogRemoteWipeCompleted(ILogger logger);
+    [LoggerMessage(1008, LogLevel.Error, "Remote wipe could not be completed or acknowledged; retaining the protected wipe registration for retry.")]
+    private static partial void LogRemoteWipeFailure(ILogger logger, Exception exception);
+    [LoggerMessage(1009, LogLevel.Warning, "The protected remote-wipe registration could not be read.")]
+    private static partial void LogRemoteWipeRegistrationFailure(ILogger logger, Exception exception);
+    [LoggerMessage(1010, LogLevel.Warning, "Nextcloud requested a remote wipe; stopping local work before deleting account data.")]
+    private static partial void LogRemoteWipeRequested(ILogger logger);
+    [LoggerMessage(1011, LogLevel.Warning, "Remote-wipe status could not be checked for a configured account.")]
+    private static partial void LogRemoteWipeCheckFailure(ILogger logger, Exception exception);
 }
