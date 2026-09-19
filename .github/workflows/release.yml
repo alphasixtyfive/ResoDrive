@@ -36,6 +36,9 @@ jobs:
       - name: Verify installed application lifecycle
         shell: pwsh
         run: ./tests/installer-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName
+      - name: Verify populated application window and process recovery
+        shell: pwsh
+        run: ./tests/process-smoke.ps1 -AppPath artifacts/win-x64/resodrive/resodrive.exe
       - name: Preserve installer diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

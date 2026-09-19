@@ -117,3 +117,9 @@ version comparison treat 0.3.7 as newer than 0.3.7.
 - A canceled UAC attempt left 0.3.6 installed and reactivated the original app.
 - These observations establish the original UAC fix. They do not replace the
   release gates for later source changes, including custom-root repair support.
+
+The compact upload-indicator change also exposed a test gap: WPF `Run.Text`
+defaults to two-way binding, which cannot target read-only view-model properties.
+Display runs must use `Mode=OneWay`. The process smoke test now includes a disabled
+drive fixture and fails on dispatcher/startup exceptions, rather than testing
+only an empty window. Both CI and the release workflow run that populated test.

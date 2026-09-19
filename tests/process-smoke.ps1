@@ -175,6 +175,10 @@ function Wait-Until {
 
     $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
     do {
+        if ((Test-Path -LiteralPath $logPath) -and
+            (Get-Content -LiteralPath $logPath -Raw) -match 'event=(startup\.fatal|exception\.dispatcher)') {
+            throw "The application reported a UI failure while waiting for $Description."
+        }
         if (& $Condition) {
             return
         }
@@ -234,6 +238,10 @@ try {
         throw "The staged smoke executable was not created at '$resolvedApp'."
     }
     New-Item -ItemType Directory -Path $resolvedDataRoot -Force | Out-Null
+    # A populated row exercises the actual WPF template and read-only bindings.
+    # The disabled fixture never mounts a drive or contacts a remote server.
+    [IO.File]::WriteAllText((Join-Path $resolvedDataRoot 'settings.json'),
+        '{"schemaVersion":1,"revision":7,"application":{"minimizeToTray":true,"startWithWindows":false},"mounts":[{"id":"20c09145-8dd0-45dc-b0a8-4e13d27f5067","displayName":"Smoke test drive","remoteName":"smoke","connectionHost":"example.invalid","connectionType":"webdav","enabled":false,"autoMount":"never","target":{"kind":"drive","driveLetter":"Z"}}]}')
 
     # A cold-start race should elect exactly one UI primary. Background secondaries
     # exit without stealing focus or waiting for the primary window.
@@ -291,7 +299,7 @@ try {
     $showAfterRelaunch = Start-OwnedProcess @('--show')
     Wait-ExitCode $showAfterRelaunch 0 'acknowledged show request after relaunch'
 
-    Write-Host 'ResoDrive process smoke passed: cold race, tray/show acknowledgement, host recovery, and relaunch.'
+    Write-Host 'ResoDrive process smoke passed: populated drive-row rendering, cold race, tray/show acknowledgement, host recovery, and relaunch.'
 }
 finally {
     $job.Dispose()

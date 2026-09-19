@@ -248,7 +248,7 @@ public sealed class MainWindowMarkupTests
 
           var host = Assert.Single(document.Descendants(presentation + "TextBlock"), element =>
               element.Elements(presentation + "Run").Any(run =>
-                  (string?)run.Attribute("Text") == "{Binding ConnectionHostDisplay}"));
+                  (string?)run.Attribute("Text") == "{Binding ConnectionHostDisplay, Mode=OneWay}"));
         Assert.Equal("CharacterEllipsis", (string?)host.Attribute("TextTrimming"));
         Assert.Null(host.Attribute("MaxWidth"));
     }
