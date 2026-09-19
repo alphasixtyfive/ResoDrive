@@ -2,6 +2,8 @@
 
 ## [0.3.7] - 2026-09-19
 
+- Fix elevated-installer communication with an unelevated legacy host by authenticating its actual Windows account SID. Embed current preparation code in the MSI instead of invoking the old executable.
+- Show installer preparation progress and specific failures; document the incident and add an isolated UAC regression test.
 - Add guarded Nextcloud remote wipe using a DPAPI-protected dedicated app password, same-host HTTPS validation, and the official wipe-check and wipe-success protocol.
 - Remove local ResoDrive settings, encrypted configuration, shared cache, scheduler state, ownership state and logs only after the server explicitly returns `wipe: true` following a 401/403 account response.
 - Run coordinated application shutdown before Windows Installer checks for files in use, while keeping the upload-safety block when managed work cannot be drained.

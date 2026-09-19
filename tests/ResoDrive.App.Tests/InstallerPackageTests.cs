@@ -11,24 +11,19 @@ public sealed class InstallerPackageTests
     {
         var action = LoadAction("PrepareInstalledResoDriveForUpgrade");
 
-        Assert.Equal("ResoDriveExecutableFile", (string?)action.Attribute("FileRef"));
-        Assert.Equal("--prepare-update", (string?)action.Attribute("ExeCommand"));
+        Assert.Null(action.Attribute("FileRef"));
+        Assert.Equal("ResoDriveInstallationHelper", (string?)action.Attribute("BinaryRef"));
+        Assert.Equal("--prepare-install \"[INSTALLFOLDER].\" [UILevel]", (string?)action.Attribute("ExeCommand"));
         Assert.Equal("check", (string?)action.Attribute("Return"));
         Assert.Equal("yes", (string?)action.Attribute("Impersonate"));
     }
 
     [Fact]
-    public void UpgradeStopFallbackIsHiddenPathScopedAndWaitsForExit()
+    public void UpgradeDoesNotUseASeparateForceKillFallback()
     {
-        var action = LoadAction("StopResoDriveForUpgrade");
-        var command = Assert.IsType<XAttribute>(action.Attribute("ExeCommand")).Value;
-
-        Assert.Equal("check", (string?)action.Attribute("Return"));
-        Assert.Equal("no", (string?)action.Attribute("Impersonate"));
-        Assert.Contains("-WindowStyle Hidden", command, StringComparison.Ordinal);
-        Assert.Contains("Path -eq $p", command, StringComparison.Ordinal);
-        Assert.Contains("WaitForExit(10000)", command, StringComparison.Ordinal);
-        Assert.Contains(";exit 0", command, StringComparison.Ordinal);
+        var document = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Package.wxs"));
+        Assert.DoesNotContain(document.Descendants(Wix + "CustomAction"), action =>
+            ((string?)action.Attribute("ExeCommand"))?.Contains("powershell", StringComparison.OrdinalIgnoreCase) == true);
     }
 
     [Fact]
@@ -37,13 +32,8 @@ public sealed class InstallerPackageTests
         var document = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Package.wxs"));
         var prepare = Assert.Single(document.Descendants(Wix + "Custom"), action =>
             (string?)action.Attribute("Action") == "PrepareInstalledResoDriveForUpgrade");
-        var stop = Assert.Single(document.Descendants(Wix + "Custom"), action =>
-            (string?)action.Attribute("Action") == "StopResoDriveForUpgrade");
-
         Assert.Equal("WIX_UPGRADE_DETECTED OR Installed", (string?)prepare.Attribute("Condition"));
-        Assert.Equal("WIX_UPGRADE_DETECTED OR Installed", (string?)stop.Attribute("Condition"));
         Assert.Equal("InstallValidate", (string?)prepare.Attribute("Before"));
-        Assert.Equal("PrepareInstalledResoDriveForUpgrade", (string?)stop.Attribute("After"));
     }
 
     [Fact]

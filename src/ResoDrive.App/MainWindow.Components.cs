@@ -346,12 +346,15 @@ public partial class MainWindow
             _applicationDownloadCancellation.Dispose();
             _applicationDownloadCancellation = null;
             RefreshApplicationUpdateAction();
+            ApplicationDownloadProgress.IsIndeterminate = true;
+            SetLiveText(ApplicationUpdateStatusText, "Checking pending uploads…");
             var uploads = await HostClient.SendAsync(new HostRequest("check-uploads"), _lifetimeCancellation.Token);
             if (!uploads.Succeeded && uploads.ErrorCode != "host.unavailable")
             {
                 SetLiveText(ApplicationUpdateStatusText, uploads.ErrorMessage ?? "Could not check uploads. Try again.");
                 return;
             }
+            SetLiveText(ApplicationUpdateStatusText, "Stopping mounted drives and sync jobs…");
             var shutdown = await HostClient.SendAsync(
                 new HostRequest("shutdown", Confirmed: true),
                 TimeSpan.FromSeconds(15),

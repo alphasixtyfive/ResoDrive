@@ -8,6 +8,19 @@ namespace ResoDrive.App.Tests;
 public sealed class ApplicationUpdateHandoffTests
 {
     [Fact]
+    public void PreparationFailureIsShownOnlyForTheCurrentAttempt()
+    {
+        using var directory = new TemporaryDirectory();
+        var now = DateTimeOffset.UtcNow;
+        var path = Path.Combine(directory.Path, InstallerPreparation.ResultFileName);
+        File.WriteAllText(path, JsonSerializer.Serialize(new InstallerPreparationResult(false, "Uploads pending.", now)));
+        Assert.Equal("Uploads pending.", ApplicationUpdateHandoff.ReadPreparationFailure(directory.Path, now.AddSeconds(-1)));
+        Assert.Null(ApplicationUpdateHandoff.ReadPreparationFailure(directory.Path, now.AddSeconds(1)));
+        File.WriteAllText(path, "not json");
+        Assert.Null(ApplicationUpdateHandoff.ReadPreparationFailure(directory.Path, now.AddSeconds(-1)));
+    }
+
+    [Fact]
     public async Task CompleteAsync_RecordsUacCancellationAndRestoresReadyApplication()
     {
         using var directory = new TemporaryDirectory();

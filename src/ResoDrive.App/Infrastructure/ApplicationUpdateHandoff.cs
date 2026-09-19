@@ -224,6 +224,7 @@ internal static class ApplicationUpdateHandoff
             .ConfigureAwait(false);
 
         var status = "failed";
+        var installStartedAtUtc = DateTimeOffset.UtcNow;
         int? installerExitCode = null;
         var message = "Windows Installer did not complete the ResoDrive update.";
         try
@@ -236,6 +237,9 @@ internal static class ApplicationUpdateHandoff
             (status, message) = ClassifyInstallerExitCode(installerExitCode.Value);
             if (status == "failed")
             {
+                var preparation = ReadPreparationFailure(Path.GetDirectoryName(request.InstallerPath)!, installStartedAtUtc);
+                if (preparation is not null)
+                    message += " " + preparation;
                 message += " See the installer log at " +
                     Path.ChangeExtension(request.InstallerPath, ".msi.log") + ".";
             }
@@ -313,6 +317,23 @@ internal static class ApplicationUpdateHandoff
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or JsonException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    internal static string? ReadPreparationFailure(string updatesDirectory, DateTimeOffset startedAtUtc)
+    {
+        try
+        {
+            var path = Path.Combine(updatesDirectory, InstallerPreparation.ResultFileName);
+            if (!File.Exists(path) || new FileInfo(path).Length > 64 * 1024)
+                return null;
+            var result = JsonSerializer.Deserialize<InstallerPreparationResult>(File.ReadAllText(path));
+            return result is { Succeeded: false } && result.RecordedAtUtc >= startedAtUtc
+                ? result.Message : null;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
         {
             return null;
         }

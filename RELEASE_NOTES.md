@@ -5,11 +5,12 @@ ResoDrive 0.3.7 is the consolidated release containing the installer, update, sa
 - The client stops mounts and syncs, removes settings, encrypted configuration, cache, scheduler state, ownership state and logs, then acknowledges `/index.php/core/wipe/success`.
 - Setup explains that a dedicated Nextcloud app password is required. Existing accounts must be reconnected through setup to register remote wipe.
 - Update preparation now reports upload/cache shutdown blocks before Windows Installer starts.
-- The installer asks ResoDrive to drain managed work and stops the installed copy before Windows checks for files in use, avoiding stale-process 1603 failures.
+- Fix the confirmed immediate 1603/1722 failure when an elevated installer contacts an unelevated 0.3.6 host. The MSI now carries its own preparation helper and authenticates the host's actual Windows account across UAC elevation.
+- Show preparation stages and specific shutdown failures. Keep pending-upload protection and preserve settings and cache if preparation fails.
 - The setup includes the ResoDrive icon and logo, clear progress, repair/removal screens, a launch action and a direct failure-log link.
 
 - Setup provides a direct link to its log when an installation fails.
-- Uninstall now asks the background host to stop before removing the application. Process shutdown is scoped to the installed copy and has a bounded fallback wait.
+- Uninstall now asks the background host to stop before removing the application. Process shutdown is scoped to the installed copy and session; the host is allowed to finish cleanly within a bounded wait.
 - Application updates require the exact versioned installer URL and a checksum naming that installer. Downloads remain resumable and are verified again before installation.
 - Cancel a ResoDrive update download and resume it later from Settings.
 - Fix rclone's Cancel button during active component operations, align both download progress bars, and keep cache selectors aligned when labels wrap.

@@ -1,0 +1,17 @@
+<Window x:Class="ResoDrive.App.InstallerPreparationWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ResoDrive Setup" Width="540" SizeToContent="Height"
+        ResizeMode="NoResize" WindowStartupLocation="CenterScreen"
+        Background="{StaticResource WindowBrush}" Foreground="{StaticResource TextBrush}">
+  <StackPanel Margin="28">
+    <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
+      <Image Source="/resodrive;component/Assets/resodrive-mark.png" Width="48" Height="48" Margin="0,0,16,0" />
+      <TextBlock x:Name="Heading" Text="Preparing ResoDrive" FontSize="24" FontWeight="SemiBold" VerticalAlignment="Center" />
+    </StackPanel>
+    <TextBlock x:Name="Stage" Text="Connecting to the background host…" TextWrapping="Wrap" FontSize="15" Margin="0,0,0,18" />
+    <ProgressBar x:Name="Progress" IsIndeterminate="True" Height="6" Margin="0,0,0,18" />
+    <TextBlock Text="Your settings and cached files are preserved during installation." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" />
+    <Button x:Name="CloseButton" Content="Close" Visibility="Collapsed" HorizontalAlignment="Right" MinWidth="100" Margin="0,20,0,0" Style="{StaticResource ButtonStyle}" Click="Close_Click" />
+  </StackPanel>
+</Window>

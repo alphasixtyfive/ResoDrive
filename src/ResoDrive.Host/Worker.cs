@@ -140,9 +140,7 @@ public sealed partial class Worker : BackgroundService
     {
         while (!token.IsCancellationRequested)
         {
-            var pipe = new NamedPipeServerStream(HostProtocol.GetPipeName(_paths), PipeDirection.InOut,
-                NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte,
-                PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+            var pipe = CurrentUserPipe.CreateServer(HostProtocol.GetPipeName(_paths));
             try
             {
                 await pipe.WaitForConnectionAsync(token).ConfigureAwait(false);

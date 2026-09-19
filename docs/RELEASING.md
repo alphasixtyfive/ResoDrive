@@ -1,7 +1,9 @@
 # Releasing ResoDrive
 
-Starting with the first public release, GitHub keeps each published release and
-tag so users can review the history and download an earlier version if needed.
+Use increasing release versions and retain published tags. Withdraw known-broken
+downloads when necessary, with an explanation in the replacement release notes.
+Replacing a version is an exceptional owner-approved recovery operation; an
+existing installation of that version cannot discover it as a newer update.
 On the local development drive, keep only the current public build artifacts
 rather than archiving local copies.
 
@@ -23,7 +25,7 @@ public repository before publishing.
 2. Rewrite `RELEASE_NOTES.md` in short, plain language for the current release and
    update other release-facing documentation as needed.
 3. Run `./build.ps1` on Windows and smoke-test the setup executable, portable
-   package, and MSI.
+   package, and MSI. Complete the UAC upgrade checks below before publishing.
 4. Commit the release and create an annotated tag matching the version exactly,
    for example `git tag -a v0.3.0 -m "ResoDrive 0.3.0"`.
 5. Push the commit and tag. The Release workflow rebuilds and tests from the tag,
@@ -33,6 +35,26 @@ public repository before publishing.
 
 GitHub Actions are pinned to immutable commit hashes. Dependabot proposes action
 and NuGet updates for review.
+
+## Installer regression gate
+
+Read the [September 2026 installer incident](INSTALLER-INCIDENT-2026-09.md)
+before changing installer shutdown, IPC security, or updater handoff code.
+
+An elevated CI runner alone cannot prove that a normal user's app can be upgraded.
+From an **unelevated** Windows PowerShell session, run the isolated reproduction:
+
+```powershell
+./tests/elevation-smoke.ps1 -PreviousAppPath 'C:\Program Files\rdrive\resodrive.exe' -NewAppPath './artifacts/win-x64/resodrive/resodrive.exe'
+```
+
+The test copies the old single-file app, creates disposable settings and cache,
+launches the old host normally, and requests UAC elevation for the new package's
+preparation helper. It checks process exit and unchanged settings/cache hashes.
+It never uses production accounts. Keep its `result.json` and preparation logs.
+Also verify the real in-app update from the prior public version and inspect the
+installed ProductVersion/commit. A build, mocked exit code, or XML assertion is
+not a substitute for this check. Never skip an upload block to make a test pass.
 
 ## Signing
 

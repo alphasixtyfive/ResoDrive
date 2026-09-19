@@ -86,22 +86,15 @@
       Return="asyncNoWait"
       Impersonate="yes"
     />
-    <!-- Ask the installed app to drain managed work before stopping its UI process. -->
+    <!-- Always use preparation code shipped by THIS package, including for legacy upgrades. -->
+    <Binary Id="ResoDriveInstallationHelper" SourceFile="$(var.PackageSource)\$(var.ResoDriveExecutableName)" />
     <CustomAction
       Id="PrepareInstalledResoDriveForUpgrade"
-      FileRef="ResoDriveExecutableFile"
-      ExeCommand="--prepare-update"
+      BinaryRef="ResoDriveInstallationHelper"
+      ExeCommand="--prepare-install &quot;[INSTALLFOLDER].&quot; [UILevel]"
       Execute="immediate"
       Return="check"
       Impersonate="yes"
-    />
-    <CustomAction
-      Id="StopResoDriveForUpgrade"
-      Directory="INSTALLFOLDER"
-      ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoP -NonI -WindowStyle Hidden -Command &quot;$p=(pwd).Path+'\resodrive.exe';gps resodrive -ea 0|? Path -eq $p|%{kill $_ -Force -ea Stop;if(!$_.WaitForExit(10000)){exit 1}};exit 0&quot;"
-      Execute="immediate"
-      Return="check"
-      Impersonate="no"
     />
     <CustomAction
       Id="UnregisterResoDriveAutostart"
@@ -123,11 +116,6 @@
         Condition="WIX_UPGRADE_DETECTED OR Installed"
       />
       <Custom
-        Action="StopResoDriveForUpgrade"
-        After="PrepareInstalledResoDriveForUpgrade"
-        Condition="WIX_UPGRADE_DETECTED OR Installed"
-      />
-      <Custom
         Action="UnregisterResoDriveAutostart"
         Before="RemoveFiles"
         Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE"
@@ -135,6 +123,7 @@
     </InstallExecuteSequence>
 
     <UI>
+      <ProgressText Action="PrepareInstalledResoDriveForUpgrade" Message="Safely stopping ResoDrive before installation" />
       <Publish
         Dialog="ExitDialog"
         Control="Finish"

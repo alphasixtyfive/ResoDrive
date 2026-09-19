@@ -42,7 +42,8 @@ public sealed record HostResponse(
     string? ErrorMessage = null,
     IReadOnlyList<HostMountStatus>? Mounts = null,
     IReadOnlyList<HostSyncStatus>? SyncJobs = null,
-    string? HostBaseDirectory = null);
+    string? HostBaseDirectory = null,
+    int? HostProcessId = null);
 
 public static class HostProtocol
 {
@@ -132,6 +133,17 @@ public static class HostProtocol
 
 public static class HostClient
 {
+    public static Task<HostResponse> SendToInstallationAsync(
+        HostRequest request, string installationDirectory, TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(installationDirectory);
+        if (!Path.IsPathFullyQualified(installationDirectory))
+            throw new ArgumentException("An absolute installation directory is required.", nameof(installationDirectory));
+        return SendCoreAsync(request with { ExpectedHostBaseDirectory = Path.GetFullPath(installationDirectory) },
+            timeout, enforceInstallation: false, cancellationToken);
+    }
+
     public static Task<HostResponse> SendAsync(
         HostRequest request,
         CancellationToken cancellationToken = default)
@@ -189,11 +201,7 @@ public static class HostClient
             ? request with { ExpectedHostBaseDirectory = AppContext.BaseDirectory }
             : request;
         var paths = new ApplicationPaths();
-        using var pipe = new NamedPipeClientStream(
-            ".",
-            HostProtocol.GetPipeName(paths),
-            PipeDirection.InOut,
-            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using var pipe = CurrentUserPipe.CreateClient(HostProtocol.GetPipeName(paths));
         using var timeout = new CancellationTokenSource(responseTimeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
         var connected = false;
@@ -201,6 +209,8 @@ public static class HostClient
         {
             await pipe.ConnectAsync(linked.Token).ConfigureAwait(false);
             connected = true;
+            CurrentUserPipe.ValidateServerIdentity(pipe);
+            var serverProcessId = CurrentUserPipe.GetServerProcessId(pipe);
             await HostProtocol.WriteAsync(pipe, effectiveRequest, linked.Token).ConfigureAwait(false);
             var response = await HostProtocol.ReadAsync<HostResponse>(pipe, linked.Token).ConfigureAwait(false)
                 ?? new HostResponse(false, "host.invalid_response", "The background host returned an empty response.");
@@ -217,7 +227,7 @@ public static class HostClient
                     response.HostBaseDirectory
                 );
             }
-            return response;
+            return response with { HostProcessId = serverProcessId };
         }
         catch (OperationCanceledException) when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
