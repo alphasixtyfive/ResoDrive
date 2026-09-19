@@ -43,6 +43,13 @@ and NuGet updates for review.
 
 ## Installer regression gate
 
+Activation tests must not synchronously block xUnit worker threads while waiting
+for pipe callbacks on the same pool. Run their mutex-owning test bodies on dedicated
+threads and await completion from xUnit. A September 2026 release run exposed
+starvation that was reproduced with `DOTNET_PROCESSOR_COUNT=1`; both workflows now
+repeat the application tests under that constraint. Do not mask it with longer
+timeouts or repeated release attempts.
+
 Read the [September 2026 installer incident](INSTALLER-INCIDENT-2026-09.md)
 before changing installer shutdown, IPC security, or updater handoff code.
 

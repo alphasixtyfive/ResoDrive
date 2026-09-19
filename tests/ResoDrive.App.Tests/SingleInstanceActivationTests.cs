@@ -3,7 +3,7 @@ namespace ResoDrive.App.Tests;
 public sealed class SingleInstanceActivationTests
 {
     [Fact]
-    public void ScopeClient_WaitsForPrimaryReadinessWithoutTakingInstanceMutex()
+    public Task ScopeClient_WaitsForPrimaryReadinessWithoutTakingInstanceMutex() => RunOnDedicatedThreadAsync(() =>
     {
         var scope = $"Tests.{Guid.NewGuid():N}";
         using var primary = new SingleInstanceActivation(scope);
@@ -20,10 +20,10 @@ public sealed class SingleInstanceActivationTests
 
         Assert.True(received.IsSet);
         Assert.True(acknowledged);
-    }
+    });
 
     [Fact]
-    public void SecondaryRequest_WaitsUntilPrimaryAcknowledgesVisibleWindow()
+    public Task SecondaryRequest_WaitsUntilPrimaryAcknowledgesVisibleWindow() => RunOnDedicatedThreadAsync(() =>
     {
         var scope = $"Tests.{Guid.NewGuid():N}";
         using var primary = new SingleInstanceActivation(scope);
@@ -55,10 +55,10 @@ public sealed class SingleInstanceActivationTests
         secondaryThread.Join();
         Assert.False(secondaryWasFirst);
         Assert.True(acknowledged);
-    }
+    });
 
     [Fact]
-    public void SecondaryRequest_TimesOutWhenPrimaryCannotShowWindow()
+    public Task SecondaryRequest_TimesOutWhenPrimaryCannotShowWindow() => RunOnDedicatedThreadAsync(() =>
     {
         var scope = $"Tests.{Guid.NewGuid():N}";
         using var primary = new SingleInstanceActivation(scope);
@@ -77,10 +77,10 @@ public sealed class SingleInstanceActivationTests
         Assert.True(secondaryDone.Wait(TimeSpan.FromSeconds(5)));
         secondaryThread.Join();
         Assert.False(acknowledged);
-    }
+    });
 
     [Fact]
-    public void RequestMadeBeforeListenerRegistration_IsDelivered()
+    public Task RequestMadeBeforeListenerRegistration_IsDelivered() => RunOnDedicatedThreadAsync(() =>
     {
         var scope = $"Tests.{Guid.NewGuid():N}";
         using var primary = new SingleInstanceActivation(scope);
@@ -109,10 +109,10 @@ public sealed class SingleInstanceActivationTests
         Assert.True(secondaryDone.Wait(TimeSpan.FromSeconds(5)));
         secondaryThread.Join();
         Assert.True(acknowledged);
-    }
+    });
 
     [Fact]
-    public void ConcurrentSecondaries_ReceiveOnlyTheirOwnAcknowledgements()
+    public Task ConcurrentSecondaries_ReceiveOnlyTheirOwnAcknowledgements() => RunOnDedicatedThreadAsync(() =>
     {
         const int secondaryCount = 8;
         var scope = $"Tests.{Guid.NewGuid():N}";
@@ -143,5 +143,26 @@ public sealed class SingleInstanceActivationTests
         foreach (var thread in threads)
             Assert.True(thread.Join(TimeSpan.FromSeconds(10)));
         Assert.All(results, result => Assert.True(result));
+    });
+
+    // Keep mutex acquisition/disposal on one thread without blocking xUnit's
+    // worker pool, which also runs the asynchronous pipe listener and replies.
+    private static Task RunOnDedicatedThreadAsync(Action test)
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                test();
+                completion.SetResult();
+            }
+            catch (Exception exception)
+            {
+                completion.SetException(exception);
+            }
+        }) { IsBackground = true };
+        thread.Start();
+        return completion.Task.WaitAsync(TimeSpan.FromSeconds(30));
     }
 }

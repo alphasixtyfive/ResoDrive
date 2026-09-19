@@ -36,6 +36,11 @@ jobs:
       - name: Verify installed application lifecycle
         shell: pwsh
         run: ./tests/installer-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName
+      - name: Verify application tests with one available CPU
+        shell: pwsh
+        env:
+          DOTNET_PROCESSOR_COUNT: '1'
+        run: dotnet test tests/ResoDrive.App.Tests -c Release --no-build --no-restore
       - name: Verify populated application window and process recovery
         shell: pwsh
         run: ./tests/process-smoke.ps1 -AppPath artifacts/win-x64/resodrive/resodrive.exe

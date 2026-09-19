@@ -29,6 +29,11 @@ jobs:
       - name: Build and verify packages
         shell: pwsh
         run: ./build.ps1 -Configuration Release -BuildMsi $true
+      - name: Verify application tests with one available CPU
+        shell: pwsh
+        env:
+          DOTNET_PROCESSOR_COUNT: '1'
+        run: dotnet test tests/ResoDrive.App.Tests -c Release --no-build --no-restore
       - name: Process smoke
         shell: pwsh
         timeout-minutes: 4
