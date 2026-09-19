@@ -13,7 +13,7 @@
     <BootstrapperApplication>
       <bal:WixStandardBootstrapperApplication
         Theme="hyperlinkLicense" ThemeFile="SetupTheme.xml"
-        LicenseUrl="https://github.com/alphasixtyfive/resodrive/blob/main/LICENSE"
+        LicenseUrl="https://github.com/alphasixtyfive/ResoDrive/blob/main/LICENSE"
         LogoFile="$(var.LogoSource)" SuppressOptionsUI="yes"
         LaunchTarget="[ProgramFiles64Folder]rdrive\resodrive.exe"
         LaunchWorkingFolder="[ProgramFiles64Folder]rdrive" />

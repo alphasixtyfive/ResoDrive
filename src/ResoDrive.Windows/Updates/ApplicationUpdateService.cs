@@ -247,15 +247,18 @@ public sealed partial class ApplicationUpdateService
         return !tag.Contains('/') && TryVersion(tag, out version);
     }
 
-    private static bool IsTrustedAsset(Uri uri, string version, bool checksum) =>
-        uri.Scheme == Uri.UriSchemeHttps &&
+    private static bool IsTrustedAsset(Uri uri, string version, bool checksum)
+    {
+        var repositoryPath = ProductLinks.Repository.AbsolutePath.TrimEnd('/');
+        return uri.Scheme == Uri.UriSchemeHttps &&
         uri.IsDefaultPort && string.IsNullOrEmpty(uri.UserInfo) &&
         string.IsNullOrEmpty(uri.Query) && string.IsNullOrEmpty(uri.Fragment) &&
         uri.Host.Equals(ProductLinks.Repository.Host, StringComparison.OrdinalIgnoreCase) &&
-        uri.AbsolutePath.Equals(
-            ProductLinks.Repository.AbsolutePath.TrimEnd('/') +
+        uri.AbsolutePath.StartsWith(repositoryPath + "/", StringComparison.OrdinalIgnoreCase) &&
+        uri.AbsolutePath[repositoryPath.Length..].Equals(
             $"/releases/download/v{version}/resodrive-win-x64-{version}.msi" + (checksum ? ".sha256" : string.Empty),
             StringComparison.Ordinal);
+    }
 
     private static bool TryVersion(string? value, out Version version)
     {

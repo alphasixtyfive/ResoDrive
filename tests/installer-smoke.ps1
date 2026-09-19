@@ -66,7 +66,7 @@ try {
     # Upgrade the preceding public MSI while its application is running.
     $name = "resodrive-win-x64-$PreviousVersion.msi"
     $previous = Join-Path $testRoot $name
-    $url = "https://github.com/alphasixtyfive/resodrive/releases/download/v$PreviousVersion/$name"
+    $url = "https://github.com/alphasixtyfive/ResoDrive/releases/download/v$PreviousVersion/$name"
     Invoke-WebRequest -Uri $url -OutFile $previous
     $checksum = (Invoke-WebRequest -Uri "$url.sha256").Content
     if ($checksum -is [byte[]]) { $checksum = [Text.Encoding]::ASCII.GetString($checksum) }

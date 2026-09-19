@@ -88,11 +88,13 @@ public sealed class ApplicationUpdateServiceTests
         Assert.Equal("app.update_response_invalid", result.Error?.Code);
     }
 
-    [Fact]
-    public async Task DownloadInstallerAsync_VerifiesChecksumAndReplacesOldPackage()
+    [Theory]
+    [InlineData("resodrive")]
+    [InlineData("ResoDrive")]
+    public async Task DownloadInstallerAsync_VerifiesChecksumAndReplacesOldPackage(string repository)
     {
         var installerUri = new Uri(
-            "https://github.com/alphasixtyfive/resodrive/releases/download/v0.3.0/resodrive-win-x64-0.3.0.msi");
+            $"https://github.com/alphasixtyfive/{repository}/releases/download/v0.3.0/resodrive-win-x64-0.3.0.msi");
         var checksumUri = new Uri(installerUri.AbsoluteUri + ".sha256");
         var payload = Encoding.UTF8.GetBytes("verified installer payload");
         var checksum = Encoding.ASCII.GetBytes(
@@ -133,6 +135,7 @@ public sealed class ApplicationUpdateServiceTests
     [Theory]
     [InlineData("v0.2.9/resodrive-win-x64-0.3.0.msi")]
     [InlineData("v0.3.0/other.msi")]
+    [InlineData("v0.3.0/ResoDrive-win-x64-0.3.0.msi")]
     [InlineData("v0.3.0/resodrive-win-x64-0.3.0.msi?download=1")]
     [InlineData("v0.3.0/resodrive-win-x64-0.3.0.msi#other")]
     public async Task DownloadInstallerAsync_RejectsAssetOutsideExactVersionAndFilename(string suffix)

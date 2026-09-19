@@ -9,13 +9,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alphasixtyfive/resodrive/releases/latest">Download</a>
-  · <a href="https://github.com/alphasixtyfive/resodrive/issues">Report an issue</a>
+  <a href="https://github.com/alphasixtyfive/ResoDrive/releases/latest">Download</a>
+  · <a href="https://github.com/alphasixtyfive/ResoDrive/issues">Report an issue</a>
   · <a href="CHANGELOG.md">Changelog</a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/alphasixtyfive/resodrive/actions/workflows/ci.yml"><img src="https://github.com/alphasixtyfive/resodrive/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="https://github.com/alphasixtyfive/ResoDrive/actions/workflows/ci.yml"><img src="https://github.com/alphasixtyfive/ResoDrive/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
 </p>
 
@@ -76,7 +76,7 @@ only when it is missing. Mounting a drive requires
 ## Install
 
 Download `ResoDrive-Setup.exe` from the latest
-[release](https://github.com/alphasixtyfive/resodrive/releases/latest), run it,
+[release](https://github.com/alphasixtyfive/ResoDrive/releases/latest), run it,
 and open ResoDrive. The first time through:
 
 1. Let ResoDrive download and verify rclone.

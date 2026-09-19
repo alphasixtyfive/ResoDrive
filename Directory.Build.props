@@ -17,7 +17,7 @@
     <!-- Repository identity is centralized here for application links, package
          metadata, update checks, documentation, and release automation. -->
     <GitHubOwner>alphasixtyfive</GitHubOwner>
-    <GitHubRepository>resodrive</GitHubRepository>
+    <GitHubRepository>ResoDrive</GitHubRepository>
     <GitHubBaseUrl>https://github.com</GitHubBaseUrl>
     <DeveloperUrl>$(GitHubBaseUrl)/$(GitHubOwner)</DeveloperUrl>
     <RepositoryUrl>$(GitHubBaseUrl)/$(GitHubOwner)/$(GitHubRepository)</RepositoryUrl>
