@@ -119,7 +119,7 @@
       -->
       <Custom
         Action="PrepareInstalledResoDriveForUpgrade"
-        After="InstallValidate"
+        Before="InstallValidate"
         Condition="WIX_UPGRADE_DETECTED OR Installed"
       />
       <Custom

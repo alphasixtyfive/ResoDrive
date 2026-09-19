@@ -35,12 +35,15 @@ public sealed class InstallerPackageTests
     public void RemovalAlsoPreparesAndStopsTheInstalledApplication()
     {
         var document = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Package.wxs"));
-        foreach (var id in new[] { "PrepareInstalledResoDriveForUpgrade", "StopResoDriveForUpgrade" })
-        {
-            var scheduled = Assert.Single(document.Descendants(Wix + "Custom"), action =>
-                (string?)action.Attribute("Action") == id);
-            Assert.Equal("WIX_UPGRADE_DETECTED OR Installed", (string?)scheduled.Attribute("Condition"));
-        }
+        var prepare = Assert.Single(document.Descendants(Wix + "Custom"), action =>
+            (string?)action.Attribute("Action") == "PrepareInstalledResoDriveForUpgrade");
+        var stop = Assert.Single(document.Descendants(Wix + "Custom"), action =>
+            (string?)action.Attribute("Action") == "StopResoDriveForUpgrade");
+
+        Assert.Equal("WIX_UPGRADE_DETECTED OR Installed", (string?)prepare.Attribute("Condition"));
+        Assert.Equal("WIX_UPGRADE_DETECTED OR Installed", (string?)stop.Attribute("Condition"));
+        Assert.Equal("InstallValidate", (string?)prepare.Attribute("Before"));
+        Assert.Equal("PrepareInstalledResoDriveForUpgrade", (string?)stop.Attribute("After"));
     }
 
     [Fact]

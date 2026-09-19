@@ -1,4 +1,9 @@
-ResoDrive 0.3.7 introduces a compact native Windows setup with the ResoDrive icon and logo, clear progress, repair and removal screens, and an Open ResoDrive button.
+ResoDrive 0.3.8 fixes an upgrade race that could leave Windows Installer with error 1603 when an old background process still held the installed executable.
+
+- The installer now asks ResoDrive to drain managed work and stops the installed copy before Windows checks for files in use.
+- Updates still stop when managed uploads cannot be safely drained.
+
+ResoDrive 0.3.7 introduced a compact native Windows setup with the ResoDrive icon and logo, clear progress, repair and removal screens, and an Open ResoDrive button.
 
 - Setup provides a direct link to its log when an installation fails.
 - Uninstall now asks the background host to stop before removing the application. Process shutdown is scoped to the installed copy and has a bounded fallback wait.

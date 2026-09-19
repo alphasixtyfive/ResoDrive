@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.8] - 2026-09-19
+
+- Run the coordinated application shutdown before Windows Installer checks for files in use, so a stale background process no longer causes an avoidable upgrade failure with MSI error 1603.
+- Keep the upload-safety check blocking when managed work cannot be drained.
+
 ## [0.3.7] - 2026-09-19
 
 - Add a branded native setup with progress, repair/removal, launch and failure-log actions.
@@ -70,6 +75,7 @@ First public preview of the cleaned ResoDrive codebase.
   only when it is missing.
 
 [0.3.7]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.7
+[0.3.8]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.8
 [0.3.6]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.6
 [0.3.5]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.5
 [0.3.4]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.4
