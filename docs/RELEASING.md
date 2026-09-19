@@ -30,8 +30,13 @@ public repository before publishing.
    for example `git tag -a v0.3.0 -m "ResoDrive 0.3.0"`.
 5. Push the commit and tag. The Release workflow rebuilds and tests from the tag,
    uploads the versioned ZIP, MSI, setup executable, SHA-256 files, and stable
-   `ResoDrive-Setup.exe` download, then creates the GitHub release.
-6. Confirm that Settings > Components > ResoDrive discovers the published version.
+   `ResoDrive-Setup.exe` download, then creates a draft GitHub release.
+6. Download the draft's assets and verify their SHA-256 sidecars. Complete the
+   desktop UAC and actual prior-version updater checks using those exact assets.
+   Record installer outcome, installed commit and preservation of account data.
+   Do not rebuild or replace the accepted assets.
+7. Publish the accepted draft and mark it latest. Confirm that Settings >
+   Components > ResoDrive discovers the published version.
 
 GitHub Actions are pinned to immutable commit hashes. Dependabot proposes action
 and NuGet updates for review.

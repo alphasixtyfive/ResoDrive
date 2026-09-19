@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] - 0.3.8
+## [0.3.8] - 2026-09-19
 
 - Align About with HASS Connect: a 48-pixel icon, closely grouped name/version, native keyboard-accessible links and wrapping text.
 - Persist accepted Nextcloud wipes before stopping work; resume cleanup and acknowledgement after interruption without remounting accounts.

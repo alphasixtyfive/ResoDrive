@@ -58,7 +58,7 @@ jobs:
             artifacts/win-x64/*.exe
             artifacts/win-x64/*.exe.sha256
           if-no-files-found: error
-      - name: Publish GitHub release
+      - name: Stage GitHub release for desktop acceptance
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -81,7 +81,7 @@ jobs:
             throw "Expected eight release files, found $($assets.Count)."
           }
           gh release create $env:RELEASE_TAG $assets.FullName `
-            --verify-tag --notes-file RELEASE_NOTES.md --title "ResoDrive $env:RELEASE_TAG"
+            --draft --verify-tag --notes-file RELEASE_NOTES.md --title "ResoDrive $env:RELEASE_TAG"
           if ($LASTEXITCODE -ne 0) {
             throw "GitHub release creation failed with exit code $LASTEXITCODE."
           }
