@@ -112,13 +112,20 @@ public sealed partial class DpapiSecretStore : IConfigSecretStore
         return password;
     }
 
-    public async Task<string> LoadProtectedFileAsync(
+    public Task<string> LoadProtectedFileAsync(string path, CancellationToken cancellationToken = default) =>
+        LoadProtectedFileAsync(path, MaximumPasswordBytes, cancellationToken);
+
+    internal async Task<string> LoadProtectedFileAsync(
         string path,
+        int maximumPlaintextBytes,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumPlaintextBytes, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumPlaintextBytes, 64 * 1024);
         var info = new FileInfo(Path.GetFullPath(path));
-        if (!info.Exists || info.Length is <= 0 or > MaximumEncodedFileBytes)
+        var maximumEncodedBytes = Math.Max(MaximumEncodedFileBytes, maximumPlaintextBytes * 2 + 4096);
+        if (!info.Exists || info.Length <= 0 || info.Length > maximumEncodedBytes)
             throw new CryptographicException("The protected rclone secret has an invalid size.");
         var encoded = await File.ReadAllTextAsync(info.FullName, cancellationToken).ConfigureAwait(false);
         var protectedBytes = Convert.FromBase64String(encoded.Trim());
@@ -126,7 +133,7 @@ public sealed partial class DpapiSecretStore : IConfigSecretStore
         try
         {
             plaintext = Crypt(protectedBytes, _entropy, protect: false);
-            if (plaintext.Length is <= 0 or > MaximumPasswordBytes)
+            if (plaintext.Length <= 0 || plaintext.Length > maximumPlaintextBytes)
                 throw new CryptographicException("The protected rclone secret has invalid content.");
             var password = StrictUtf8.GetString(plaintext);
             if (string.IsNullOrWhiteSpace(password) || password.Any(char.IsControl))

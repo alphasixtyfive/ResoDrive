@@ -18,6 +18,7 @@ public sealed class ApplicationPaths
         OwnershipFile = Path.Combine(Root, "ownership.json");
         ConfigSecretFile = Path.Combine(Root, "config-pass.dpapi");
         RemoteWipeFile = Path.Combine(Root, "remote-wipe.dpapi");
+        RemoteWipeStateFile = Path.Combine(Root, "remote-wipe-state.dpapi");
         ProfilesFile = Path.Combine(Root, "profiles.json");
         SyncRunStateFile = Path.Combine(Root, "sync-run-state.json");
         WelcomeCompletedFile = Path.Combine(Root, "welcome.complete");
@@ -36,6 +37,7 @@ public sealed class ApplicationPaths
     public string OwnershipFile { get; }
     public string ConfigSecretFile { get; }
     public string RemoteWipeFile { get; }
+    public string RemoteWipeStateFile { get; }
     public string ProfilesFile { get; }
     public string SyncRunStateFile { get; }
     public string WelcomeCompletedFile { get; }

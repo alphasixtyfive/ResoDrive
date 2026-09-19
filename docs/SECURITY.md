@@ -69,6 +69,13 @@ The setup flow must use a dedicated Nextcloud app password created for this clie
 ordinary account passwords are not suitable for remote wipe. Existing accounts
 must be reconnected through setup to create a registration.
 
+Accepted wipes are persisted before shutdown. Cleanup includes backups and setup
+recovery files, and must finish before acknowledgement. An interrupted wipe or
+failed acknowledgement resumes without loading old accounts. A token-free
+completion marker prevents a stale UI session from restoring account state.
+See [the administrator guide and test procedure](REMOTE-WIPE.md) for the exact
+scope, recovery behavior and limits of the automated verification.
+
 Unreachable clients cannot receive remote wipe, and client-side cleanup cannot
 prevent a hostile local user from retaining previously copied data. Ordinary file
 deletion is not forensic erasure on an SSD, and Office or other applications can

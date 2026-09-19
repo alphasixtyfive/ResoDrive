@@ -23,7 +23,8 @@ public sealed partial class Worker : BackgroundService
     private readonly ConcurrentDictionary<int, Task> _tasks = new();
     private readonly ConcurrentDictionary<SyncJobId, DateTimeOffset> _lastRuns = new();
     private readonly RemoteWipeStore _remoteWipe;
-    private readonly RemoteWipeClient _remoteWipeClient = new();
+    private readonly RemoteWipeClient _remoteWipeClient;
+    private readonly RemoteWipeCoordinator _wipeCoordinator;
     private AtomicSettingsStore? _store;
     private RcloneMountCoordinator? _mounts;
     private RcloneSyncCoordinator? _syncs;
@@ -34,21 +35,38 @@ public sealed partial class Worker : BackgroundService
     private int _taskId;
     private bool _firstSchedulePass = true;
     private bool _shutdownRequested;
-    private RemoteWipeRegistration? _pendingRemoteWipe;
+    internal bool CanResumeRemoteWipe { get; private set; } = true;
+    internal bool RestartForRemoteWipe { get; private set; }
+    private bool _recoveringRemoteWipe;
 
     public Worker(
         ApplicationPaths paths,
         ILogger<Worker> logger,
         IHostApplicationLifetime applicationLifetime)
+        : this(paths, logger, applicationLifetime, new RemoteWipeClient())
+    {
+    }
+
+    internal Worker(ApplicationPaths paths, ILogger<Worker> logger,
+        IHostApplicationLifetime applicationLifetime, RemoteWipeClient remoteWipeClient)
     {
         _paths = paths;
         _logger = logger;
         _applicationLifetime = applicationLifetime;
+        _remoteWipeClient = remoteWipeClient;
         _remoteWipe = new RemoteWipeStore(paths);
+        _wipeCoordinator = new(paths, _remoteWipeClient);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // Resume accepted commands before loading settings or starting any automatic work.
+        if (new RemoteWipeStateStore(_paths).Read() is { Phase: not RemoteWipePhase.Completed })
+        {
+            _recoveringRemoteWipe = true;
+            await Task.WhenAll(ServeAsync(stoppingToken), ResumeRemoteWipeAsync(stoppingToken)).ConfigureAwait(false);
+            return;
+        }
         _store = new AtomicSettingsStore(_paths);
         await LoadScheduleStateAsync(stoppingToken).ConfigureAwait(false);
         var result = await ReloadAsync(stoppingToken).ConfigureAwait(false);
@@ -95,6 +113,7 @@ public sealed partial class Worker : BackgroundService
                 catch (TimeoutException)
                 {
                     LogDrainTimeout(_logger, tasks.Length);
+                    CanResumeRemoteWipe = false;
                 }
             }
 
@@ -105,27 +124,14 @@ public sealed partial class Worker : BackgroundService
             _syncs?.Dispose();
             _store?.Dispose();
 
-            var pendingWipe = _pendingRemoteWipe;
-            if (pendingWipe is not null)
-            {
-                try
-                {
-                    RemoteWipeCleanup.DeleteAccountData(_paths);
-                    await _remoteWipeClient.SignalSuccessAsync(pendingWipe, CancellationToken.None).ConfigureAwait(false);
-                    if (File.Exists(_paths.RemoteWipeFile))
-                        File.Delete(_paths.RemoteWipeFile);
-                    LogRemoteWipeCompleted(_logger);
-                }
-                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or HttpRequestException)
-                {
-                    LogRemoteWipeFailure(_logger, exception);
-                }
-            }
+            // The next host lifetime resumes the durable command after this lifetime has
+            // finished disposing work. Cleanup never races active host operations.
         }
     }
 
     public override void Dispose()
     {
+        _remoteWipeClient.Dispose();
         _reloadGate.Dispose();
         _scheduleStateGate.Dispose();
         _slots.Dispose();
@@ -226,6 +232,14 @@ public sealed partial class Worker : BackgroundService
             };
         }
         var command = request.Command.Trim().ToLowerInvariant();
+        if (_recoveringRemoteWipe || new RemoteWipeStateStore(_paths).Read() is { Phase: not RemoteWipePhase.Completed })
+        {
+            // An idle recovery host can be stopped for an update. Its durable work resumes
+            // next launch; account operations remain blocked, even if acknowledgement just finished.
+            return _recoveringRemoteWipe && command == "shutdown" && request.Confirmed
+                ? new(true)
+                : new(false, "host.remote_wipe", "Nextcloud requested removal of local ResoDrive data.");
+        }
         if (command == "status")
         {
             return Status();
@@ -378,7 +392,7 @@ public sealed partial class Worker : BackgroundService
     private async Task MonitorRemoteWipeAsync(CancellationToken token)
     {
         using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1));
-        while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
+        do
         {
             IReadOnlyList<RemoteWipeRegistration> registrations;
             try
@@ -386,7 +400,7 @@ public sealed partial class Worker : BackgroundService
                 registrations = await _remoteWipe.LoadAsync(token).ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
-                                               CryptographicException or JsonException)
+                                               CryptographicException or JsonException or FormatException)
             {
                 LogRemoteWipeRegistrationFailure(_logger, exception);
                 continue;
@@ -399,7 +413,9 @@ public sealed partial class Worker : BackgroundService
                     if (!await _remoteWipeClient.IsWipeRequestedAsync(registration, token).ConfigureAwait(false))
                         continue;
 
-                    _pendingRemoteWipe = registration;
+                    await _wipeCoordinator.AcceptAsync(registration, token).ConfigureAwait(false);
+                    _shutdownRequested = true;
+                    RestartForRemoteWipe = true;
                     LogRemoteWipeRequested(_logger);
                     _applicationLifetime.StopApplication();
                     return;
@@ -413,7 +429,36 @@ public sealed partial class Worker : BackgroundService
                     LogRemoteWipeCheckFailure(_logger, exception);
                 }
             }
+        } while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false));
+    }
+
+    private async Task<bool> TryCompleteRemoteWipeAsync(CancellationToken token)
+    {
+        try
+        {
+            await _wipeCoordinator.ResumeAsync(
+                cancellation => RemoteWipeWorkStopper.StopOwnedMountsAsync(_paths, cancellation), token)
+                .ConfigureAwait(false);
+            LogRemoteWipeCompleted(_logger);
+            return true;
         }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+            HttpRequestException or TimeoutException or System.ComponentModel.Win32Exception ||
+            exception is OperationCanceledException && !token.IsCancellationRequested)
+        {
+            LogRemoteWipeFailure(_logger, exception);
+            return false;
+        }
+    }
+
+    private async Task ResumeRemoteWipeAsync(CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            if (await TryCompleteRemoteWipeAsync(token).ConfigureAwait(false)) break;
+            await Task.Delay(TimeSpan.FromMinutes(1), token).ConfigureAwait(false);
+        }
+        _applicationLifetime.StopApplication();
     }
 
     private async Task ScheduleAsync(CancellationToken token)

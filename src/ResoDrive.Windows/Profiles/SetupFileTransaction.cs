@@ -8,9 +8,11 @@ public sealed class SetupFileTransaction : IDisposable
 {
     private readonly List<Entry> _entries;
     private TransactionState _state;
+    private readonly AccountDataGuard? _accountData;
 
-    public SetupFileTransaction(IEnumerable<(string StagedPath, string DestinationPath)> files)
+    public SetupFileTransaction(IEnumerable<(string StagedPath, string DestinationPath)> files, AccountDataGuard? accountData = null)
     {
+        _accountData = accountData;
         ArgumentNullException.ThrowIfNull(files);
         _entries = files.Select(file => new Entry(
             Path.GetFullPath(file.StagedPath),
@@ -29,6 +31,7 @@ public sealed class SetupFileTransaction : IDisposable
 
     public void Apply()
     {
+        using var lease = _accountData?.AcquireAsync().GetAwaiter().GetResult();
         EnsureState(TransactionState.Prepared);
         try
         {
@@ -90,6 +93,15 @@ public sealed class SetupFileTransaction : IDisposable
         {
             return;
         }
+
+        // A remote wipe supersedes rollback: restoring backups would recreate revoked credentials.
+        if (_accountData?.IsBlocked == true)
+        {
+            _state = TransactionState.RolledBack;
+            CleanupArtifacts();
+            return;
+        }
+        using var lease = _accountData?.AcquireAsync().GetAwaiter().GetResult();
 
         if (_state is TransactionState.Applied or TransactionState.RecoveryRequired)
         {

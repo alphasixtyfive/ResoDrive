@@ -263,7 +263,7 @@ public partial class SetupWindow : WpfWindow
         PasswordBox.ToolTip = usesKey
             ? "Optional passphrase for an encrypted private key"
             : connectionType == "Nextcloud"
-                ? "Use a dedicated Nextcloud app password created for this ResoDrive client. It enables remote wipe."
+                ? "Use a dedicated Nextcloud app password for this ResoDrive client. A server-requested wipe removes all local ResoDrive accounts and cache on this PC."
                 : null;
         PasswordBox.SetValue(
             System.Windows.Automation.AutomationProperties.NameProperty,

@@ -17,6 +17,7 @@ public sealed record RemoteWipeRegistration(
 /// </summary>
 public sealed class RemoteWipeStore
 {
+    private const int MaximumRegistrationBytes = 64 * 1024;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = false
@@ -37,7 +38,7 @@ public sealed class RemoteWipeStore
             return [];
 
         var json = await _protection.LoadProtectedFileAsync(
-            _paths.RemoteWipeFile, cancellationToken).ConfigureAwait(false);
+            _paths.RemoteWipeFile, MaximumRegistrationBytes, cancellationToken).ConfigureAwait(false);
         var registrations = JsonSerializer.Deserialize<List<RemoteWipeRegistration>>(json, JsonOptions);
         if (registrations is null)
             throw new CryptographicException("The protected remote-wipe file is invalid.");
@@ -55,6 +56,8 @@ public sealed class RemoteWipeStore
             .Select(group => group.Last())
             .ToArray();
         var json = JsonSerializer.Serialize(normalized, JsonOptions);
+        if (Encoding.UTF8.GetByteCount(json) > MaximumRegistrationBytes)
+            throw new CryptographicException("The remote-wipe registration catalog is too large.");
         var stagedPath = _paths.RemoteWipeFile + $".{Guid.NewGuid():N}.setup-wipe";
         try
         {

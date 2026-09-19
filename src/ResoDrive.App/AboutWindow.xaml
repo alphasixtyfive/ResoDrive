@@ -1,154 +1,42 @@
-<Window
-  x:Class="ResoDrive.App.AboutWindow"
+<Window x:Class="ResoDrive.App.AboutWindow"
   xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
   xmlns:local="clr-namespace:ResoDrive.App"
-  Title="{x:Static local:ProductInfo.AboutTitle}"
-  Width="500"
-  SizeToContent="Height"
-  ResizeMode="NoResize"
-  WindowStartupLocation="CenterOwner"
-  ShowInTaskbar="False"
-  Background="{StaticResource WindowBrush}"
-  Foreground="{StaticResource TextBrush}"
->
+  Title="{x:Static local:ProductInfo.AboutTitle}" Width="468" SizeToContent="Height"
+  ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+  Background="{StaticResource WindowBrush}" Foreground="{StaticResource TextBrush}">
   <Window.Resources>
-    <Style x:Key="AboutLinkButton" TargetType="Button" BasedOn="{StaticResource ButtonStyle}">
-      <Setter Property="MinHeight" Value="28" />
-      <Setter Property="Padding" Value="4,2" />
-      <Setter Property="Background" Value="Transparent" />
-      <Setter Property="BorderBrush" Value="Transparent" />
-      <Setter Property="BorderThickness" Value="0" />
-      <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="Button">
-            <Border
-              x:Name="LinkChrome"
-              Background="Transparent"
-              BorderBrush="{TemplateBinding BorderBrush}"
-              BorderThickness="{TemplateBinding BorderThickness}"
-            >
-              <ContentPresenter
-                Margin="{TemplateBinding Padding}"
-                HorizontalAlignment="Center"
-                VerticalAlignment="Center"
-              />
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter Property="Foreground" Value="{StaticResource AccentHoverBrush}" />
-              </Trigger>
-              <Trigger Property="IsPressed" Value="True">
-                <Setter TargetName="LinkChrome" Property="Opacity" Value="0.72" />
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
+    <Style TargetType="Hyperlink">
+      <Setter Property="Foreground" Value="{DynamicResource AccentHoverBrush}" />
+      <Setter Property="TextDecorations" Value="{x:Null}" />
+      <Style.Triggers>
+        <Trigger Property="IsMouseOver" Value="True"><Setter Property="TextDecorations" Value="Underline" /></Trigger>
+        <Trigger Property="IsKeyboardFocused" Value="True"><Setter Property="TextDecorations" Value="Underline" /></Trigger>
+      </Style.Triggers>
     </Style>
   </Window.Resources>
-
-  <Grid Margin="24,22,24,20">
-    <Grid.RowDefinitions>
-      <RowDefinition Height="Auto" />
-      <RowDefinition Height="Auto" />
-      <RowDefinition Height="Auto" />
-      <RowDefinition Height="Auto" />
-      <RowDefinition Height="Auto" />
-    </Grid.RowDefinitions>
-
-    <Grid MinHeight="44">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="44" />
-        <ColumnDefinition Width="*" />
-      </Grid.ColumnDefinitions>
-      <Image
-        Width="40"
-        Height="40"
-        HorizontalAlignment="Center"
-        VerticalAlignment="Center"
-        Source="Assets/resodrive-mark.png"
-        Stretch="Uniform"
-        RenderOptions.BitmapScalingMode="HighQuality"
-      />
-      <StackPanel Grid.Column="1" Margin="10,0,0,0" Orientation="Horizontal" VerticalAlignment="Center">
-        <TextBlock Text="{x:Static local:ProductInfo.Name}" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center" />
-        <TextBlock
-          x:Name="VersionText"
-          Foreground="{StaticResource MutedBrush}"
-          FontSize="12"
-          Margin="8,2,0,0"
-          VerticalAlignment="Center"
-        />
+  <StackPanel Margin="24">
+    <Grid>
+      <Grid.ColumnDefinitions><ColumnDefinition Width="48" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+      <Image Width="48" Height="48" Source="Assets/resodrive-mark.png" Stretch="Uniform"
+        VerticalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality" />
+      <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
+        <TextBlock Text="{x:Static local:ProductInfo.Name}" FontSize="18" FontWeight="SemiBold" />
+        <TextBlock x:Name="VersionText" FontSize="12" Margin="0,2,0,0" Foreground="{StaticResource MutedBrush}" />
       </StackPanel>
     </Grid>
-
-    <TextBlock
-      Grid.Row="1"
-      Text="Mount Nextcloud, WebDAV, and SFTP storage as Windows drives."
-      Foreground="{StaticResource MutedBrush}"
-      TextWrapping="NoWrap"
-      Margin="0,14,0,0"
-    />
-
-    <Border
-      Grid.Row="3"
-      BorderBrush="{StaticResource BorderBrush}"
-      BorderThickness="0,1,0,0"
-      Margin="0,14,0,8"
-    />
-
-    <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
-      <TextBlock Text="Built by " Foreground="{StaticResource MutedBrush}" />
-      <TextBlock Text="{x:Static local:ProductInfo.DeveloperName}" FontWeight="SemiBold" />
-      <TextBlock Text=" · Open source under the MIT License" Foreground="{StaticResource MutedBrush}" />
-    </StackPanel>
-
-    <WrapPanel Grid.Row="4" HorizontalAlignment="Left">
-      <Button
-        Style="{StaticResource AboutLinkButton}"
-        Click="OpenRepository_Click"
-        AutomationProperties.Name="Open ResoDrive repository on GitHub"
-      >
-        <StackPanel Orientation="Horizontal">
-          <TextBlock Text="GitHub" VerticalAlignment="Center" />
-          <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12" Margin="6,0,0,0" VerticalAlignment="Center" />
-        </StackPanel>
-      </Button>
-      <TextBlock Text="·" Foreground="{StaticResource MutedBrush}" Margin="8,0" VerticalAlignment="Center" />
-      <Button
-        Style="{StaticResource AboutLinkButton}"
-        Click="OpenReleases_Click"
-        AutomationProperties.Name="Open ResoDrive releases on GitHub"
-      >
-        <StackPanel Orientation="Horizontal">
-          <TextBlock Text="Releases" VerticalAlignment="Center" />
-          <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12" Margin="6,0,0,0" VerticalAlignment="Center" />
-        </StackPanel>
-      </Button>
-      <TextBlock Text="·" Foreground="{StaticResource MutedBrush}" Margin="8,0" VerticalAlignment="Center" />
-      <Button
-        Style="{StaticResource AboutLinkButton}"
-        Click="OpenIssues_Click"
-        AutomationProperties.Name="Report a ResoDrive issue on GitHub"
-      >
-        <StackPanel Orientation="Horizontal">
-          <TextBlock Text="Report issue" VerticalAlignment="Center" />
-          <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12" Margin="6,0,0,0" VerticalAlignment="Center" />
-        </StackPanel>
-      </Button>
-      <TextBlock Text="·" Foreground="{StaticResource MutedBrush}" Margin="8,0" VerticalAlignment="Center" />
-      <Button
-        Style="{StaticResource AboutLinkButton}"
-        Click="OpenLicense_Click"
-        AutomationProperties.Name="Open the ResoDrive MIT license"
-      >
-        <StackPanel Orientation="Horizontal">
-          <TextBlock Text="MIT License" VerticalAlignment="Center" />
-          <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12" Margin="6,0,0,0" VerticalAlignment="Center" />
-        </StackPanel>
-      </Button>
-    </WrapPanel>
-  </Grid>
+    <TextBlock Text="Mount Nextcloud, WebDAV, and SFTP storage as Windows drives."
+      TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,14,0,0" />
+    <TextBlock TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,10,0,0">
+      <Run Text="By " /><Hyperlink NavigateUri="{x:Static local:ProductInfo.DeveloperPage}" RequestNavigate="OpenLink" ToolTip="Developer on GitHub"><Run Text="{x:Static local:ProductInfo.DeveloperName}" /></Hyperlink><Run Text=". Licensed under the " /><Hyperlink NavigateUri="{x:Static local:ProductInfo.LicensePage}" RequestNavigate="OpenLink" ToolTip="MIT License on GitHub">MIT License</Hyperlink><Run Text="." />
+    </TextBlock>
+    <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,14,0,10" />
+    <TextBlock TextWrapping="Wrap" LineHeight="26">
+      <Hyperlink NavigateUri="{x:Static local:ProductInfo.RepositoryPage}" RequestNavigate="OpenLink" AutomationProperties.Name="Open ResoDrive repository on GitHub">GitHub ↗</Hyperlink>
+      <Run Text="     " />
+      <Hyperlink NavigateUri="{x:Static local:ProductInfo.ReleasesPage}" RequestNavigate="OpenLink" AutomationProperties.Name="Open ResoDrive releases on GitHub">Releases ↗</Hyperlink>
+      <Run Text="     " />
+      <Hyperlink NavigateUri="{x:Static local:ProductInfo.IssuesPage}" RequestNavigate="OpenLink" AutomationProperties.Name="Report a ResoDrive issue on GitHub">Report an issue ↗</Hyperlink>
+    </TextBlock>
+  </StackPanel>
 </Window>

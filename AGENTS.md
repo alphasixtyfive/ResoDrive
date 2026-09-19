@@ -14,3 +14,7 @@ read [the installer incident report](docs/INSTALLER-INCIDENT-2026-09.md) and
   checks. Use isolated data for process and destructive-operation tests.
 - Record exactly which checks ran and any remaining limits. Follow the release
   acceptance checklist before publishing a corrected installer.
+- For remote-wipe changes, read [the wipe guide](docs/REMOTE-WIPE.md). Keep the
+  durable request, account-write guard and no-acknowledgement-before-cleanup
+  ordering. Test with disposable data only; never use a production token to test
+  deletion. State explicitly whether HTTP is simulated or a live server was used.

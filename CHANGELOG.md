@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased] - 0.3.8
+
+- Align About with HASS Connect: a 48-pixel icon, closely grouped name/version, native keyboard-accessible links and wrapping text.
+- Persist accepted Nextcloud wipes before stopping work; resume cleanup and acknowledgement after interruption without remounting accounts.
+- Include settings backups and setup recovery files in cleanup, reject redirected cache paths, and do not acknowledge locked or partially deleted data.
+- Block stale UI/settings/setup writes after a wipe; retain only a token-free completion marker once the server acknowledges it.
+- Bound wipe responses and body-read time, validate HTTPS ports, preserve Nextcloud subdirectory URLs, and support larger protected registration catalogs.
+- Cover protocol failures, real background-worker recovery, verified process shutdown, file locks and directory junctions with isolated regression tests.
+
 ## [0.3.7] - 2026-09-19
 
 - Keep idle drive rows compact and show active or queued uploads beside the domain. Pass structured upload counters to the UI rather than interpreting status messages.

@@ -12,26 +12,21 @@ public partial class AboutWindow : WpfWindow
         InitializeComponent();
         VersionText.Text = $"Version {ProductInfo.Version}";
         WindowAppearance.PrepareDialog(this);
+        PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key != System.Windows.Input.Key.Escape) return;
+            e.Handled = true;
+            Close();
+        };
     }
 
-    private void OpenRepository_Click(object sender, RoutedEventArgs e) =>
-        OpenLink(ProductInfo.RepositoryPage, "Could not open the project repository");
-
-    private void OpenIssues_Click(object sender, RoutedEventArgs e) =>
-        OpenLink(ProductInfo.IssuesPage, "Could not open the issue tracker");
-
-    private void OpenReleases_Click(object sender, RoutedEventArgs e) =>
-        OpenLink(ProductInfo.ReleasesPage, "Could not open the releases page");
-
-    private void OpenLicense_Click(object sender, RoutedEventArgs e) =>
-        OpenLink(ProductInfo.LicensePage, "Could not open the license");
-
-    private void OpenLink(Uri destination, string title)
+    private void OpenLink(object sender, System.Windows.Navigation.RequestNavigateEventArgs e)
     {
+        e.Handled = true;
         try
         {
             using var process = Process.Start(
-                new ProcessStartInfo(destination.AbsoluteUri) { UseShellExecute = true }
+                new ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true }
             );
         }
         catch (Exception exception)
@@ -40,7 +35,7 @@ public partial class AboutWindow : WpfWindow
             WpfMessageBox.Show(
                 this,
                 exception.Message,
-                title,
+                "Could not open the link",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error
             );

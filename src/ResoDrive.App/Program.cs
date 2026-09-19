@@ -115,7 +115,7 @@ public static class Program
         {
             var paths = new ApplicationPaths();
             var executablePath = Environment.ProcessPath;
-            if (!File.Exists(paths.SettingsFile) || string.IsNullOrWhiteSpace(executablePath))
+            if ((!File.Exists(paths.SettingsFile) && !File.Exists(paths.RemoteWipeStateFile)) || string.IsNullOrWhiteSpace(executablePath))
                 return;
 
             using var process = Process.Start(new ProcessStartInfo(executablePath, "--host")

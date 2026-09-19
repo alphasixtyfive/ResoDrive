@@ -80,6 +80,15 @@ internal sealed class MountOwnershipStore : IDisposable
         }
     }
 
+    internal async Task<IReadOnlyList<OwnedMount>> LoadForRemoteWipeAsync(CancellationToken cancellationToken)
+    {
+        var records = await TryReadAsync(_path, cancellationToken).ConfigureAwait(false) ??
+            await TryReadAsync(_backupPath, cancellationToken).ConfigureAwait(false);
+        if (records is null && (File.Exists(_path) || File.Exists(_backupPath)))
+            throw new IOException("Remote wipe cannot verify the recorded mount processes.");
+        return records ?? [];
+    }
+
     internal static bool IsSameExecutablePath(string? left, string? right)
     {
         if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))

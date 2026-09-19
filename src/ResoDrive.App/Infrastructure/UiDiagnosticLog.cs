@@ -8,19 +8,31 @@ namespace ResoDrive.App;
 internal sealed class UiDiagnosticLog
 {
     private const long DefaultMaximumBytes = 512 * 1024;
-    private static readonly Lazy<UiDiagnosticLog> Instance = new(
-        () => new UiDiagnosticLog(new ApplicationPaths().UiLogFile));
+    private static readonly Lazy<UiDiagnosticLog> Instance = new(CreateCurrent);
     private readonly object _gate = new();
     private readonly string _path;
     private readonly long _maximumBytes;
+    private readonly AccountDataGuard? _accountData;
 
-    internal UiDiagnosticLog(string path, long maximumBytes = DefaultMaximumBytes)
+    internal UiDiagnosticLog(string path, long maximumBytes = DefaultMaximumBytes, AccountDataGuard? accountData = null)
     {
         _path = Path.GetFullPath(path);
         _maximumBytes = maximumBytes;
+        _accountData = accountData;
     }
 
     internal static UiDiagnosticLog Current => Instance.Value;
+
+    private static UiDiagnosticLog CreateCurrent()
+    {
+        var paths = new ApplicationPaths();
+        try { return new(paths.UiLogFile, accountData: new AccountDataGuard(paths)); }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // An unreadable security marker must block the app, not its startup-error reporting.
+            return new(paths.UiLogFile);
+        }
+    }
 
     internal void Information(string eventName, string? detail = null) =>
         Write("INFO", eventName, detail, errorId: null);
@@ -41,6 +53,7 @@ internal sealed class UiDiagnosticLog
     {
         try
         {
+            if (_accountData?.IsBlocked == true) return;
             var safeEvent = OneLine(eventName);
             var safeDetail = string.IsNullOrWhiteSpace(detail)
                 ? string.Empty

@@ -49,7 +49,7 @@ public sealed class RemoteWipeTests : IDisposable
     }
 
     [Fact]
-    public void CleanupRemovesAccountStateButKeepsTheProtectedWipeRegistrationForAcknowledgementRetry()
+    public void CleanupRemovesAccountStateIncludingRegistrationSecrets()
     {
         var paths = new ApplicationPaths(_root);
         paths.EnsureCreated();
@@ -63,7 +63,7 @@ public sealed class RemoteWipeTests : IDisposable
 
         Assert.False(File.Exists(paths.SettingsFile));
         Assert.False(File.Exists(paths.ConfigFile));
-        Assert.True(File.Exists(paths.RemoteWipeFile));
+        Assert.False(File.Exists(paths.RemoteWipeFile));
         Assert.Empty(Directory.EnumerateFileSystemEntries(paths.Cache));
         Assert.Empty(Directory.EnumerateFileSystemEntries(paths.Logs));
     }

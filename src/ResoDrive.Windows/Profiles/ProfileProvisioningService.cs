@@ -59,6 +59,7 @@ public sealed class ProfileProvisioningService
     private readonly IProfileRcloneRunner _runner;
     private readonly HttpClient _httpClient;
     private readonly RemoteWipeStore _remoteWipe;
+    private readonly AccountDataGuard _accountData;
 
     public ProfileProvisioningService(
         ApplicationPaths paths,
@@ -93,6 +94,7 @@ public sealed class ProfileProvisioningService
         _runner = runner ?? throw new ArgumentNullException(nameof(runner));
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _remoteWipe = new RemoteWipeStore(_paths);
+        _accountData = new(_paths);
     }
 
     public async Task<OperationResult<ProfileProvisioningResult>> ProvisionAsync(
@@ -168,6 +170,7 @@ public sealed class ProfileProvisioningService
         string configPasswordCommand;
         try
         {
+            using var accountLease = await _accountData.AcquireAsync(cancellationToken).ConfigureAwait(false);
             _paths.EnsureCreated();
             var configExists = File.Exists(_paths.ConfigFile);
             if (configExists)
@@ -294,7 +297,7 @@ public sealed class ProfileProvisioningService
                 files.Add((stagedRemoteWipe, _paths.RemoteWipeFile));
                 stagedRemoteWipe = null;
             }
-            transaction = new SetupFileTransaction(files);
+            transaction = new SetupFileTransaction(files, _accountData);
             progress?.Report("Ready");
             return Result.Success(new ProfileProvisioningResult(
                 mount.Value,

@@ -19,6 +19,7 @@ public sealed class AtomicSettingsStore : IDisposable
     };
 
     private readonly string _path;
+    private readonly AccountDataGuard _accountData;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public AtomicSettingsStore(ApplicationPaths paths)
@@ -26,6 +27,7 @@ public sealed class AtomicSettingsStore : IDisposable
         ArgumentNullException.ThrowIfNull(paths);
         paths.EnsureCreated();
         _path = paths.SettingsFile;
+        _accountData = new(paths);
     }
 
     public async Task<OperationResult<ManagerSettings>> LoadAsync(CancellationToken cancellationToken = default)
@@ -58,6 +60,7 @@ public sealed class AtomicSettingsStore : IDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            using var accountLease = await _accountData.AcquireAsync(cancellationToken).ConfigureAwait(false);
             var candidate = ValidateSettings(settings);
             if (!candidate.Succeeded)
             {
@@ -111,6 +114,7 @@ public sealed class AtomicSettingsStore : IDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            using var accountLease = await _accountData.AcquireAsync(cancellationToken).ConfigureAwait(false);
             var source = Path.GetFullPath(sourcePath);
             if (!File.Exists(source))
             {

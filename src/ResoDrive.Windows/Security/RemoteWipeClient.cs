@@ -5,12 +5,16 @@ using System.Text.Json;
 
 namespace ResoDrive.Windows;
 
-public sealed class RemoteWipeClient
+public sealed class RemoteWipeClient : IDisposable
 {
     private readonly HttpClient _httpClient;
+    private readonly bool _ownsClient;
+    private readonly TimeSpan _requestTimeout;
 
-    public RemoteWipeClient(HttpClient? httpClient = null)
+    public RemoteWipeClient(HttpClient? httpClient = null, TimeSpan? requestTimeout = null)
     {
+        _ownsClient = httpClient is null;
+        _requestTimeout = requestTimeout ?? TimeSpan.FromSeconds(15);
         _httpClient = httpClient ?? new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
         {
             Timeout = TimeSpan.FromSeconds(15)
@@ -24,6 +28,9 @@ public sealed class RemoteWipeClient
         ArgumentNullException.ThrowIfNull(registration);
         if (!TryValidateRegistration(registration, out var probeEndpoint, out var serverBase))
             return false;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(_requestTimeout);
+        var requestToken = deadline.Token;
 
         using var probe = new HttpRequestMessage(new HttpMethod("PROPFIND"), probeEndpoint);
         probe.Headers.Add("Depth", "0");
@@ -34,13 +41,13 @@ public sealed class RemoteWipeClient
         try
         {
             response = await _httpClient.SendAsync(
-                probe, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+                probe, HttpCompletionOption.ResponseHeadersRead, requestToken).ConfigureAwait(false);
         }
         catch (HttpRequestException)
         {
             return false;
         }
-        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             return false;
         }
@@ -60,13 +67,13 @@ public sealed class RemoteWipeClient
         try
         {
             using var checkResponse = await _httpClient.SendAsync(
-                check, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+                check, HttpCompletionOption.ResponseHeadersRead, requestToken).ConfigureAwait(false);
             if (checkResponse.StatusCode != HttpStatusCode.OK)
                 return false;
-            await using var stream = await checkResponse.Content.ReadAsStreamAsync(cancellationToken)
-                .ConfigureAwait(false);
-            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
+            // ResponseHeadersRead does not bound body reads. Apply the same deadline and a small size limit.
+            await checkResponse.Content.LoadIntoBufferAsync(4096, requestToken).ConfigureAwait(false);
+            using var document = JsonDocument.Parse(await checkResponse.Content.ReadAsByteArrayAsync(requestToken)
+                .ConfigureAwait(false));
             return document.RootElement.ValueKind == JsonValueKind.Object &&
                 document.RootElement.TryGetProperty("wipe", out var wipe) &&
                 wipe.ValueKind == JsonValueKind.True;
@@ -75,7 +82,7 @@ public sealed class RemoteWipeClient
         {
             return false;
         }
-        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             return false;
         }
@@ -83,14 +90,20 @@ public sealed class RemoteWipeClient
         {
             return false;
         }
+        catch (IOException)
+        {
+            return false;
+        }
     }
 
-    public async Task SignalSuccessAsync(
+    public async Task<bool> SignalSuccessAsync(
         RemoteWipeRegistration registration,
         CancellationToken cancellationToken = default)
     {
         if (!TryValidateRegistration(registration, out _, out var serverBase))
             throw new InvalidOperationException("The remote-wipe registration is not a valid HTTPS endpoint.");
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(_requestTimeout);
         var successUri = new Uri(serverBase, "index.php/core/wipe/success");
         using var request = new HttpRequestMessage(HttpMethod.Post, successUri)
         {
@@ -98,9 +111,14 @@ public sealed class RemoteWipeClient
         };
         request.Headers.UserAgent.ParseAdd("ResoDrive-remote-wipe/1.0");
         using var response = await _httpClient.SendAsync(
-            request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            request, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false);
+        // Nextcloud removes the token on acknowledgement. A retry after a lost response
+        // can return 404; it means there is no longer a token to acknowledge, not proof
+        // that this specific request reached the server. Local cleanup already finished.
+        if (response.StatusCode == HttpStatusCode.NotFound) return false;
         if (!response.IsSuccessStatusCode)
             throw new HttpRequestException($"Nextcloud returned HTTP {(int)response.StatusCode} while acknowledging remote wipe.");
+        return true;
     }
 
     private static void AddBasicAuthentication(HttpRequestMessage request, string username, string token)
@@ -127,9 +145,17 @@ public sealed class RemoteWipeClient
             !string.Equals(probeEndpoint.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(serverBase.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(probeEndpoint.Host, serverBase.Host, StringComparison.OrdinalIgnoreCase) ||
+            probeEndpoint.Port != serverBase.Port ||
             !string.IsNullOrEmpty(serverBase.Query) || !string.IsNullOrEmpty(serverBase.Fragment) ||
+            !string.IsNullOrEmpty(probeEndpoint.Query) || !string.IsNullOrEmpty(probeEndpoint.Fragment) ||
             !string.IsNullOrEmpty(probeEndpoint.UserInfo) || !string.IsNullOrEmpty(serverBase.UserInfo))
             return false;
+        serverBase = new Uri(serverBase.AbsoluteUri.TrimEnd('/') + "/");
         return true;
+    }
+
+    public void Dispose()
+    {
+        if (_ownsClient) _httpClient.Dispose();
     }
 }

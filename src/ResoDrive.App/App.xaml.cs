@@ -51,6 +51,19 @@ public partial class App : System.Windows.Application
         _activation.Listen(ShowRequested);
         UiDiagnosticLog.Current.Information("activation.listener_ready");
 
+        var wipeState = new ResoDrive.Windows.RemoteWipeStateStore(new ResoDrive.Windows.ApplicationPaths()).Read();
+        if (wipeState is { Phase: not ResoDrive.Windows.RemoteWipePhase.Completed })
+        {
+            Program.TryStartHostEarly();
+            if (!startInBackground)
+                System.Windows.MessageBox.Show(
+                    "Nextcloud requested removal of local ResoDrive data. Cleanup is continuing in the background. " +
+                    "Close documents opened from ResoDrive and keep this computer online. Reopen ResoDrive after cleanup completes.",
+                    "ResoDrive remote wipe", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+            Shutdown();
+            return;
+        }
+
         // Let the host load settings and queue automatic mounts while WPF builds the
         // main window and inspects optional components.
         Program.TryStartHostEarly();

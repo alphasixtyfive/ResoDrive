@@ -259,21 +259,21 @@ public sealed class MainWindowMarkupTests
         var document = Load("AboutWindow.xaml");
         XNamespace presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
 
-        var actions = document.Descendants(presentation + "Button")
-            .Select(button => (string?)button.Attribute("Click"))
+        var actions = document.Descendants(presentation + "Hyperlink")
+            .Select(link => (string?)link.Attribute("NavigateUri"))
             .Where(value => value is not null)
             .ToArray();
 
-        Assert.Contains("OpenRepository_Click", actions);
-        Assert.Contains("OpenReleases_Click", actions);
-        Assert.Contains("OpenIssues_Click", actions);
-        Assert.Contains("OpenLicense_Click", actions);
+        Assert.Contains("{x:Static local:ProductInfo.RepositoryPage}", actions);
+        Assert.Contains("{x:Static local:ProductInfo.ReleasesPage}", actions);
+        Assert.Contains("{x:Static local:ProductInfo.IssuesPage}", actions);
+        Assert.Contains("{x:Static local:ProductInfo.LicensePage}", actions);
         Assert.DoesNotContain(document.Descendants(presentation + "Button"), button =>
             (string?)button.Attribute("Content") == "Close");
 
         var subtitle = Assert.Single(document.Descendants(presentation + "TextBlock"), element =>
             (string?)element.Attribute("Text") == "Mount Nextcloud, WebDAV, and SFTP storage as Windows drives.");
-        Assert.Equal("NoWrap", (string?)subtitle.Attribute("TextWrapping"));
+        Assert.Equal("Wrap", (string?)subtitle.Attribute("TextWrapping"));
     }
 
     [Fact]

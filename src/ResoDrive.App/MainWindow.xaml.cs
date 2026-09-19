@@ -27,6 +27,7 @@ public partial class MainWindow : WpfWindow
     private static readonly TimeSpan StartingHostProbeTimeout = TimeSpan.FromMilliseconds(750);
     private const int MaximumAutomaticHostRecoveryAttempts = 3;
     private readonly ApplicationPaths _paths = new();
+    private readonly AccountDataGuard _accountData = new(new ApplicationPaths());
     private readonly ShellViewModel _model = new();
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(4) };
     private readonly CancellationTokenSource _lifetimeCancellation = new();
@@ -540,6 +541,7 @@ public partial class MainWindow : WpfWindow
 
     private async Task RefreshStatusAsync()
     {
+        if (CloseForRemoteWipe()) return;
         if (_refreshing)
             return;
         _refreshing = true;
@@ -1061,7 +1063,7 @@ public partial class MainWindow : WpfWindow
 
     private async Task<bool> EnterSettingsMutationAsync()
     {
-        if (_settingsClosing)
+        if (_settingsClosing || CloseForRemoteWipe())
         {
             return false;
         }
@@ -1075,13 +1077,33 @@ public partial class MainWindow : WpfWindow
             return false;
         }
 
-        if (!_settingsClosing)
+        if (!_settingsClosing && !CloseForRemoteWipe())
         {
             return true;
         }
 
         _settingsMutationGate.Release();
         return false;
+    }
+
+    private bool CloseForRemoteWipe()
+    {
+        if (IsClosing) return true;
+        if (!_accountData.IsBlocked) return false;
+        _settingsClosing = true;
+        _exitRequested = true;
+        _exitChecking = false;
+        _timer.Stop();
+        _lifetimeCancellation.Cancel();
+        IsEnabled = false;
+        foreach (System.Windows.Window dialog in OwnedWindows.Cast<System.Windows.Window>().ToArray())
+            dialog.Close();
+        WpfMessageBox.Show(this,
+            "Nextcloud requested removal of local ResoDrive data. ResoDrive will close while cleanup finishes. " +
+            "Close documents opened from its drives and keep this computer online.",
+            "Remote wipe requested", MessageBoxButton.OK, MessageBoxImage.Information);
+        Close();
+        return true;
     }
 
     private async Task<bool> TryRestoreSettingsAsync(ManagerSettings previousSettings)

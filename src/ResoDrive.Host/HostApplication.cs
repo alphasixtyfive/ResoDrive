@@ -14,9 +14,16 @@ public static class HostApplication
         if (!createdNew)
             return;
 
-        var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder(args);
-        builder.Services.AddSingleton(paths);
-        builder.Services.AddHostedService<Worker>();
-        await builder.Build().RunAsync(cancellationToken).ConfigureAwait(false);
+        do
+        {
+            var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder(args);
+            builder.Services.AddSingleton(paths);
+            builder.Services.AddHostedService<Worker>();
+            var host = builder.Build();
+            var worker = host.Services.GetServices<IHostedService>().OfType<Worker>().Single();
+            await host.RunAsync(cancellationToken).ConfigureAwait(false);
+            if (!worker.CanResumeRemoteWipe || !worker.RestartForRemoteWipe) break;
+        } while (!cancellationToken.IsCancellationRequested &&
+            new RemoteWipeStateStore(paths).Read() is { Phase: not RemoteWipePhase.Completed });
     }
 }
