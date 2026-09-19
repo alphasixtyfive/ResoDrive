@@ -238,11 +238,12 @@ public partial class MainWindow
     {
         if (_applicationUpdateBusy)
             return;
+
+        // Refresh the latest-release redirect before every update action so a
+        // failed handoff cannot leave an older available version stuck in the UI.
+        await CheckApplicationUpdateAsync();
         if (_applicationUpdate is not { UpdateAvailable: true })
-        {
-            await CheckApplicationUpdateAsync();
             return;
-        }
 
         await InstallApplicationUpdateAsync();
     }

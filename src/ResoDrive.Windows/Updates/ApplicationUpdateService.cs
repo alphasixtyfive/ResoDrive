@@ -53,8 +53,11 @@ public sealed partial class ApplicationUpdateService
         timeout.CancelAfter(TimeSpan.FromSeconds(45));
         try
         {
-            using var response = await _client.GetAsync(
-                _endpoint,
+            using var request = new HttpRequestMessage(HttpMethod.Get, _endpoint);
+            request.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true };
+            request.Headers.Pragma.Add(new NameValueHeaderValue("no-cache"));
+            using var response = await _client.SendAsync(
+                request,
                 HttpCompletionOption.ResponseHeadersRead,
                 timeout.Token).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)

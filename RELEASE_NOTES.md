@@ -1,20 +1,12 @@
-ResoDrive 0.3.10 adds a final endpoint-validation hardening pass to the guarded Nextcloud remote wipe support.
-
-- Remote-wipe probes and acknowledgements accept only same-host HTTPS endpoints recorded by setup.
-
-ResoDrive 0.3.9 added guarded Nextcloud remote wipe support and improved update preparation feedback.
+ResoDrive 0.3.7 is the consolidated release containing the installer, update, safety and remote-wipe fixes.
 
 - Nextcloud accounts configured with a dedicated app password are checked only after a 401/403 response. Local account state is wiped only after Nextcloud explicitly returns `{"wipe":true}`.
+- Remote-wipe probes and acknowledgements accept only same-host HTTPS endpoints recorded by setup.
 - The client stops mounts and syncs, removes settings, encrypted configuration, cache, scheduler state, ownership state and logs, then acknowledges `/index.php/core/wipe/success`.
 - Setup explains that a dedicated Nextcloud app password is required. Existing accounts must be reconnected through setup to register remote wipe.
 - Update preparation now reports upload/cache shutdown blocks before Windows Installer starts.
-
-ResoDrive 0.3.8 fixes an upgrade race that could leave Windows Installer with error 1603 when an old background process still held the installed executable.
-
-- The installer now asks ResoDrive to drain managed work and stops the installed copy before Windows checks for files in use.
-- Updates still stop when managed uploads cannot be safely drained.
-
-ResoDrive 0.3.7 introduced a compact native Windows setup with the ResoDrive icon and logo, clear progress, repair and removal screens, and an Open ResoDrive button.
+- The installer asks ResoDrive to drain managed work and stops the installed copy before Windows checks for files in use, avoiding stale-process 1603 failures.
+- The setup includes the ResoDrive icon and logo, clear progress, repair/removal screens, a launch action and a direct failure-log link.
 
 - Setup provides a direct link to its log when an installation fails.
 - Uninstall now asks the background host to stop before removing the application. Process shutdown is scoped to the installed copy and has a bounded fallback wait.
@@ -29,4 +21,4 @@ ResoDrive 0.3.7 introduced a compact native Windows setup with the ResoDrive ico
 
 Download `ResoDrive-Setup.exe` for normal installation. The MSI remains available for administrators and the in-app updater. Existing drive settings and credentials are preserved; no manual settings changes are needed for this release. Close documents opened from mounted drives before installing or removing ResoDrive.
 
-Upload statistics are snapshots of rclone's disk cache, not a guarantee that open documents have been saved. If statistics cannot be read (including recovered processes or cache-off mounts), ResoDrive displays an unavailable status. A responsive mount does not prove that its server is reachable. Windows shutdown, process crashes and older installed versions cannot provide the new upload guard. Cached data remains on disk for recovery on 0.3.8 and older installations.
+Upload statistics are snapshots of rclone's disk cache, not a guarantee that open documents have been saved. If statistics cannot be read (including recovered processes or cache-off mounts), ResoDrive displays an unavailable status. A responsive mount does not prove that its server is reachable. Windows shutdown, process crashes and older installed versions cannot provide the new upload guard.

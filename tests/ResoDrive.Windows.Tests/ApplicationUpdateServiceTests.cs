@@ -30,6 +30,23 @@ public sealed class ApplicationUpdateServiceTests
     }
 
     [Fact]
+    public async Task CheckAsyncRequestsFreshLatestReleaseRedirect()
+    {
+        var handler = new ResponseHandler(
+            HttpStatusCode.OK,
+            new Uri("https://github.com/alphasixtyfive/resodrive/releases/tag/v0.3.9"));
+        using var client = new HttpClient(handler);
+        var service = new ApplicationUpdateService(
+            client,
+            new Uri("https://api.github.test/releases/latest"));
+
+        var result = await service.CheckAsync("0.3.8");
+
+        Assert.True(result.Succeeded);
+        Assert.True(handler.SawNoCacheRequest);
+    }
+
+    [Fact]
     public async Task CheckAsync_DoesNotTrustNonRepositoryReleaseLink()
     {
         using var client = Client(HttpStatusCode.OK, "https://example.com/releases/tag/v0.2.29");
@@ -206,13 +223,19 @@ public sealed class ApplicationUpdateServiceTests
 
     private sealed class ResponseHandler(HttpStatusCode statusCode, Uri finalUri) : HttpMessageHandler
     {
+        public bool SawNoCacheRequest { get; private set; }
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new HttpResponseMessage(statusCode)
+            CancellationToken cancellationToken)
+        {
+            SawNoCacheRequest = request.Headers.CacheControl?.NoCache == true &&
+                request.Headers.Pragma.Any(value => value.Name.Equals("no-cache", StringComparison.OrdinalIgnoreCase));
+            return Task.FromResult(new HttpResponseMessage(statusCode)
             {
                 RequestMessage = new HttpRequestMessage(request.Method, finalUri),
             });
+        }
     }
 
     private sealed class RoutingHandler(IReadOnlyDictionary<string, byte[]> responses) : HttpMessageHandler
