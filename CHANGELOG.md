@@ -4,37 +4,35 @@
 
 ## [0.3.10] - 2026-09-21
 
-- Keep enrolled Nextcloud download jobs in dedicated managed folders that are included in remote wipe, even after their jobs or settings are removed.
-- Default new enrolled download jobs to managed copies and clearly identify existing external folders and upload originals as outside wipe coverage.
-- Reject managed upload sources, redirected folders, overlapping jobs and paths outside each job's assigned folder; require Nextcloud enrollment before downloading.
-- Keep wipe pending across locked, inaccessible or redirected managed files and acknowledge only after all managed copies and account data are removed.
-- Block cleanup and acknowledgement while an unverified process still uses the private rclone runtime after a host crash; never terminate unrelated processes.
-- Replace the process-ownership test's PowerShell sleeper with a lightweight readiness-controlled child and clean up both children after partial startup failure.
+- Add managed download folders for enrolled Nextcloud accounts. Remote wipe covers these folders even after their sync jobs are removed.
+- Use managed folders by default for new enrolled download jobs. Existing external folders and upload originals remain outside wipe coverage.
+- Prevent managed folders from being used for uploads, shared between jobs or redirected to another location.
+- Keep a wipe pending until all managed files and account data can be removed, including after a crash or restart.
+- Wait for a leftover ResoDrive transfer process to exit before completing a wipe after a crash.
 
 ## [0.3.9] - 2026-09-21
 
-- Identify storage requests with the actual ResoDrive version, Windows edition/release/build and client/OS architectures in the User-Agent header.
-- Isolate Nextcloud wipe probes from session cookies and reject ambiguous wipe responses or unexpected acknowledgement status codes.
-- Keep recovery state readable for large registrations and prevent stale recovery attempts from deleting newly connected accounts.
-- Remove the host's scheduler state and its backup/staging files during remote wipe.
-- Report local cleanup separately from server-confirmed acknowledgement and cover locked-cache recovery across host restarts.
-- Document device-specific and administrator-wide Nextcloud wipe commands, enrollment, scope, recovery and disposable acceptance testing.
+- Include the ResoDrive version, Windows edition, release, build and architecture in storage requests' User-Agent header.
+- Reject unclear Nextcloud wipe responses and keep browser session cookies out of wipe requests.
+- Fix wipe recovery for large account lists and protect newly connected accounts from an older wipe recovery attempt.
+- Include scheduler data and its backups in remote wipe.
+- Show when local cleanup is complete but confirmation to Nextcloud is still pending. Resume cleanup of locked files after a restart.
+- Add an administrator guide for enabling, requesting and recovering from Nextcloud remote wipe.
 
 ## [0.3.8] - 2026-09-19
 
-- Refine About with a 48-pixel icon, closely grouped name/version, native keyboard-accessible links and wrapping text.
-- Persist accepted Nextcloud wipes before stopping work; resume cleanup and acknowledgement after interruption without remounting accounts.
-- Include settings backups and setup recovery files in cleanup, reject redirected cache paths, and do not acknowledge locked or partially deleted data.
-- Block stale UI/settings/setup writes after a wipe; retain only a token-free completion marker once the server acknowledges it.
-- Bound wipe responses and body-read time, validate HTTPS ports, preserve Nextcloud subdirectory URLs, and support larger protected registration catalogs.
-- Cover protocol failures, real background-worker recovery, verified process shutdown, file locks and directory junctions with isolated regression tests.
+- Make the About page easier to read, with a larger icon, clearer version information and keyboard-accessible links.
+- Resume interrupted Nextcloud wipes before reconnecting accounts.
+- Include settings backups and setup recovery files in cleanup. Keep wipes pending while files are locked or the cache folder points elsewhere.
+- Prevent an open app window or setup recovery from restoring account data after a wipe, and remove the stored wipe token once Nextcloud confirms completion.
+- Handle slow or oversized wipe responses, check the server's HTTPS port, preserve Nextcloud subdirectory addresses and support larger account lists.
 
 ## [0.3.7] - 2026-09-19
 
-- Keep idle drive rows compact and show active or queued uploads beside the domain. Pass structured upload counters to the UI rather than interpreting status messages.
+- Keep idle drive rows compact and show active or queued uploads beside the domain.
 - Pass custom data directories explicitly through the installer and avoid repairing the shared .NET runtime when repairing the app.
 - Fix elevated-installer communication with an unelevated legacy host by authenticating its actual Windows account SID. Embed current preparation code in the MSI instead of invoking the old executable.
-- Show installer preparation progress and specific failures; document the incident and add an isolated UAC regression test.
+- Show installer preparation progress and explain shutdown failures.
 - Add guarded Nextcloud remote wipe using a DPAPI-protected dedicated app password, same-host HTTPS validation, and the official wipe-check and wipe-success protocol.
 - Remove local ResoDrive settings, encrypted configuration, shared cache, scheduler state, ownership state and logs only after the server explicitly returns `wipe: true` following a 401/403 account response.
 - Run coordinated application shutdown before Windows Installer checks for files in use, while keeping the upload-safety block when managed work cannot be drained.
@@ -42,7 +40,6 @@
 - Add a branded native setup with progress, repair/removal, launch and failure-log actions.
 - Stop the installed application during uninstall as well as upgrades, with bounded process waits and preserved user data.
 - Bind update downloads and checksum filenames to the exact selected version.
-- Verify installation, repair, previous-version upgrade, running-app removal and settings/cache preservation in Windows CI before release.
 - Show queued and active uploads, cache errors, and unavailable upload status on mounted drives; check again before stopping, reconnecting, exiting, or updating.
 - Recheck drive readiness after slow starts and interruptions without killing a recovered live process after a single failed probe.
 - Add cancellation to ResoDrive update downloads and clarify local/network mode beside the drive selector.
@@ -94,7 +91,7 @@
 
 ## [0.3.0] - 2026-08-28
 
-First public preview of the cleaned ResoDrive codebase.
+First public preview of ResoDrive.
 
 - Mount Nextcloud, WebDAV, and SFTP storage as Windows drives.
 - Run copy and mirror jobs independently of mounted drive availability.
