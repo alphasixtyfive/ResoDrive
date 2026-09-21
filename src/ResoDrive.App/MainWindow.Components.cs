@@ -482,11 +482,7 @@ public partial class MainWindow
             await RefreshStatusAsync();
             await UpdateLocalRcloneStatusAsync();
             SetRcloneStatusDetail(status);
-            if ((installing || repairing) && !File.Exists(_paths.ConfigFile))
-            {
-                await RunSetupAsync(firstRun: true, hostAlreadyRunning: true);
-            }
-            else if (installing || repairing)
+            if (result.Value.Updated)
             {
                 var reload = await HostClient.SendAsync(
                     new HostRequest("activate-runtime"),
@@ -497,6 +493,10 @@ public partial class MainWindow
                         $"{status}. {reload.ErrorMessage ?? $"Restart {ProductInfo.Name} to activate it."}");
                 }
                 await RefreshStatusAsync();
+            }
+            if ((installing || repairing) && !File.Exists(_paths.ConfigFile))
+            {
+                await RunSetupAsync(firstRun: true, hostAlreadyRunning: true);
             }
         }
         catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)

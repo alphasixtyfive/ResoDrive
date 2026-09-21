@@ -70,9 +70,9 @@ public sealed partial class Worker : BackgroundService
     {
         if (_inspectRuntimeUserAgent)
         {
-            var runtime = await new RcloneRuntimeLocator(_paths).InspectAsync(stoppingToken).ConfigureAwait(false);
-            if (runtime.Succeeded)
-                _clientUserAgent = ClientUserAgent.WithRcloneVersion(runtime.Value?.Version);
+            var refreshed = await RefreshRuntimeUserAgentAsync(stoppingToken).ConfigureAwait(false);
+            if (!refreshed.Succeeded)
+                LogRuntimeInspectionFailure(_logger, refreshed.Error?.Code, refreshed.Error?.Message);
         }
         _remoteWipeClient.SetClientUserAgent(_clientUserAgent);
         // Resume accepted commands before loading settings or starting any automatic work.
@@ -277,6 +277,12 @@ public sealed partial class Worker : BackgroundService
                 return _mounts is null ? Status() : Response(await _mounts.CheckPendingUploadsAsync(token).ConfigureAwait(false));
             if (command is "reload" or "activate-runtime")
             {
+                if (command == "activate-runtime")
+                {
+                    var refreshed = await RefreshRuntimeUserAgentAsync(token).ConfigureAwait(false);
+                    if (!refreshed.Succeeded)
+                        return Response(refreshed);
+                }
                 var reloaded = await ReloadCoreAsync(token, request.Confirmed).ConfigureAwait(false);
                 if (!reloaded.Succeeded || command == "reload")
                     return Response(reloaded);
@@ -767,6 +773,22 @@ public sealed partial class Worker : BackgroundService
         }
     }
 
+    private async Task<OperationResult> RefreshRuntimeUserAgentAsync(CancellationToken token)
+    {
+        var runtime = await new RcloneRuntimeLocator(_paths).InspectAsync(token).ConfigureAwait(false);
+        if (!runtime.Succeeded || runtime.Value is null)
+            return Result.Failure(
+                runtime.Error?.Code ?? "rclone.invalid",
+                runtime.Error?.Message ?? "The managed rclone installation could not be verified.",
+                runtime.Error?.IsTransient ?? false);
+
+        _clientUserAgent = ClientUserAgent.WithRcloneVersion(runtime.Value.Version);
+        _remoteWipeClient.SetClientUserAgent(_clientUserAgent);
+        _mounts?.SetClientUserAgent(_clientUserAgent);
+        _syncs?.SetClientUserAgent(_clientUserAgent);
+        return Result.Success();
+    }
+
     private bool HasWork() =>
         !_operations.IsEmpty ||
         (_mounts?.GetSnapshots().Any(snapshot => snapshot.Lifecycle is not MountLifecycle.Stopped and not MountLifecycle.Failed) ?? false) ||
@@ -897,4 +919,6 @@ public sealed partial class Worker : BackgroundService
     private static partial void LogRemoteWipeRequested(ILogger logger);
     [LoggerMessage(1012, LogLevel.Warning, "Remote-wipe enrollment could not be recovered. Existing connections were preserved and enrollment will be retried.")]
     private static partial void LogRemoteWipeEnrollmentFailure(ILogger logger);
+    [LoggerMessage(1013, LogLevel.Warning, "The managed rclone version could not be added to the client identity: {Code} {Message}")]
+    private static partial void LogRuntimeInspectionFailure(ILogger logger, string? code, string? message);
 }

@@ -18,7 +18,7 @@ public sealed class RcloneMountCoordinator : IAsyncDisposable
     private readonly string _rclonePath;
     private readonly string _configPath;
     private readonly ApplicationPaths _paths;
-    private readonly string _clientUserAgent;
+    private string _clientUserAgent;
     private readonly IMountTargetInventory _inventory;
     private readonly MountOwnershipStore _ownership;
     private readonly ConcurrentDictionary<MountId, MountDefinition> _definitions = new();
@@ -50,6 +50,12 @@ public sealed class RcloneMountCoordinator : IAsyncDisposable
     }
 
     public IReadOnlyList<MountSnapshot> GetSnapshots() => _snapshots.Values.OrderBy(x => x.MountId.Value).ToArray();
+
+    public void SetClientUserAgent(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        Volatile.Write(ref _clientUserAgent, value);
+    }
 
     public async Task<OperationResult> ReconcileAsync(IReadOnlyList<MountDefinition> definitions, CancellationToken cancellationToken = default)
     {
@@ -581,7 +587,8 @@ public sealed class RcloneMountCoordinator : IAsyncDisposable
         yield return _configPath;
         yield return "--ask-password=false";
         foreach (var argument in RcloneUserAgentArguments.Create(
-                     definition.Arguments, Environment.GetEnvironmentVariable("RCLONE_USER_AGENT"), _clientUserAgent))
+                     definition.Arguments, Environment.GetEnvironmentVariable("RCLONE_USER_AGENT"),
+                     Volatile.Read(ref _clientUserAgent)))
             yield return argument;
         if (File.Exists(_paths.ConfigSecretFile))
         {

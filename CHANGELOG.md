@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Refresh the reported rclone version after the managed engine is installed, repaired or updated, including during first-time setup.
+
 ## [0.3.12] - 2026-09-21
 
 - Include the verified bundled rclone version in ResoDrive's storage User-Agent so administrators can distinguish the client and storage engine versions.

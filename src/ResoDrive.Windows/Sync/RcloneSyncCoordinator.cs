@@ -11,7 +11,7 @@ public sealed class RcloneSyncCoordinator : IDisposable
     private readonly string _rclonePath;
     private readonly string _configPath;
     private readonly ApplicationPaths _paths;
-    private readonly string _clientUserAgent;
+    private string _clientUserAgent;
     private readonly Func<IReadOnlyList<MountDefinition>> _definitionProvider;
     private readonly IRcloneProcessRunner _processRunner;
     private readonly SyncRunStateStore _runStateStore;
@@ -70,6 +70,12 @@ public sealed class RcloneSyncCoordinator : IDisposable
                 mountId == snapshot.MountId)
             .OrderBy(snapshot => snapshot.JobId.Value)
             .ToArray();
+    }
+
+    public void SetClientUserAgent(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        Volatile.Write(ref _clientUserAgent, value);
     }
 
     public void MarkQueued(MountId mountId, SyncJobId syncJobId)
@@ -311,7 +317,8 @@ public sealed class RcloneSyncCoordinator : IDisposable
         yield return _configPath;
         yield return "--ask-password=false";
         foreach (var argument in RcloneUserAgentArguments.Create(
-                     job.Arguments, Environment.GetEnvironmentVariable("RCLONE_USER_AGENT"), _clientUserAgent))
+                     job.Arguments, Environment.GetEnvironmentVariable("RCLONE_USER_AGENT"),
+                     Volatile.Read(ref _clientUserAgent)))
             yield return argument;
         if (File.Exists(_paths.ConfigSecretFile))
         {
