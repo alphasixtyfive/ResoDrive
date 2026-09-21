@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [0.3.9] - 2026-09-21
+
 - Identify storage requests with the actual ResoDrive version, Windows edition/release/build and client/OS architectures in the User-Agent header.
 - Isolate Nextcloud wipe probes from session cookies and reject ambiguous wipe responses or unexpected acknowledgement status codes.
 - Keep recovery state readable for large registrations and prevent stale recovery attempts from deleting newly connected accounts.
@@ -95,6 +97,8 @@ First public preview of the cleaned ResoDrive codebase.
 - Install through a small setup bundle that downloads the .NET Desktop Runtime
   only when it is missing.
 
+[0.3.9]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.9
+[0.3.8]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.8
 [0.3.7]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.7
 [0.3.6]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.6
 [0.3.5]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.5

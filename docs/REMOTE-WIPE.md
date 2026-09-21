@@ -1,8 +1,8 @@
 # Nextcloud remote wipe: administrator guide
 
-This guide describes the current source on `main`. Fixes under **Unreleased** in
-the [changelog](../CHANGELOG.md) are not in existing release packages. Server
-commands and UI below were checked against Nextcloud's official documentation
+This guide describes ResoDrive 0.3.9. Earlier packages do not include all recovery
+fixes listed in the [changelog](../CHANGELOG.md). Server commands and UI below
+were checked against Nextcloud's official documentation
 and `stable32` source on 21 September 2026; live server acceptance is still required.
 
 **A confirmed wipe removes all local ResoDrive accounts and managed cache in the

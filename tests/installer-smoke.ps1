@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$SetupPath, [string]$PreviousVersion = '0.3.6')
+param([Parameter(Mandatory)][string]$SetupPath, [string]$PreviousVersion = '0.3.7')
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
