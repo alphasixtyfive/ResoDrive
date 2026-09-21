@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$SetupPath, [string]$PreviousVersion = '0.3.7')
+param([Parameter(Mandatory)][string]$SetupPath, [string]$PreviousVersion = '')
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -6,7 +6,19 @@ Set-StrictMode -Version Latest
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
     throw 'Installer smoke tests require a disposable GitHub-hosted Windows runner.'
 }
+if ([string]::IsNullOrWhiteSpace($PreviousVersion)) {
+    $project = [xml](Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Directory.Build.props') -Raw)
+    $targetVersion = [version]$project.SelectSingleNode('/Project/PropertyGroup/VersionPrefix').InnerText
+    $releaseJson = gh release list --repo alphasixtyfive/ResoDrive --exclude-drafts --exclude-pre-releases --limit 100 --json tagName
+    if ($LASTEXITCODE -ne 0) { throw 'Could not identify the previous public installer.' }
+    $previousVersions = @($releaseJson | ConvertFrom-Json | ForEach-Object {
+        if ($_.tagName -match '^v(\d+\.\d+\.\d+)$') { [version]$Matches[1] }
+    } | Where-Object { $_ -lt $targetVersion } | Sort-Object -Descending)
+    if ($previousVersions.Count -eq 0) { throw 'No earlier public installer is available.' }
+    $PreviousVersion = $previousVersions[0].ToString()
+}
 if ($PreviousVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid previous version.' }
+Write-Output "Testing upgrade from public ResoDrive $PreviousVersion."
 $setup = (Resolve-Path -LiteralPath $SetupPath).Path
 $app = Join-Path $env:ProgramFiles 'rdrive\resodrive.exe'
 if (Test-Path -LiteralPath $app) { throw 'Refusing to overwrite a pre-existing installation.' }

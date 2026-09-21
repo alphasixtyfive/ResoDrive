@@ -49,7 +49,7 @@ WebDAV setup, Nextcloud access/wipe checks and managed rclone storage requests
 identify the client with a `User-Agent` such as:
 
 ```text
-ResoDrive/0.3.8 (Windows 11; Edition: Professional; Release: 24H2; Build: 10.0.26100.9457; ClientArchitecture: x64; OSArchitecture: x64)
+ResoDrive/0.3.11 (Windows 11; Edition: Professional; Release: 24H2; Build: 10.0.26100.9457; ClientArchitecture: x64; OSArchitecture: x64)
 ```
 
 This is an example, not a minimum supported build. The product version comes from
@@ -98,8 +98,20 @@ only until cleanup succeeds and `/index.php/core/wipe/success` returns HTTP 200,
 or returns 404 because the token can no longer be acknowledged. A 404 releases
 the token without claiming server-confirmed completion.
 The setup flow must use a dedicated Nextcloud app password created for this client;
-ordinary account passwords are not suitable for remote wipe. Existing accounts
-must be reconnected through setup to create a registration.
+ordinary account passwords are not suitable for remote wipe. On startup and when
+saved connections change, ResoDrive recovers the local wipe-check list from the
+existing encrypted rclone configuration. This also covers older/imported Nextcloud
+app-password connections using standard authenticated DAV URLs. It reuses their
+saved credentials without creating, rotating or changing a password or contacting
+an enrollment API. The recovered list is Windows-protected, and a pending wipe is
+checked before automatic drives start. The drive row shows whether local setup is
+configured or needs attention. This status does not certify server compatibility.
+
+Enrollment reads are serialized with setup and wipe. Configuration inspection is
+limited to the selected remotes, kept in memory and excluded from diagnostics.
+Redirects, insecure URLs, public-share endpoints, bearer authentication and
+ambiguous paths are not enrolled automatically. Each PC still needs its own app
+password: recovering a shared token does not make it device-specific.
 
 Accepted wipes are persisted before shutdown. Cleanup includes backups and setup
 recovery files, and must finish before acknowledgement. An interrupted wipe or

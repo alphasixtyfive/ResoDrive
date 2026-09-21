@@ -645,6 +645,7 @@ public partial class MainWindow : WpfWindow
 
     private void ShowHostInterrupted(string? detail, bool recoveryExhausted)
     {
+        _model.ClearRemoteWipeStatuses();
         HostRecoveryBanner.Visibility = Visibility.Visible;
         HostRetryButton.Visibility = recoveryExhausted ? Visibility.Visible : Visibility.Collapsed;
         SetLiveText(HostRecoveryText, recoveryExhausted

@@ -1,14 +1,13 @@
-ResoDrive 0.3.10 adds download folders that can be cleared by a Nextcloud remote wipe.
+ResoDrive 0.3.11 adds remote wipe to existing Nextcloud app-password connections after updating. Users do not need to sign in again or re-add their drives.
 
-- New download jobs on enrolled Nextcloud accounts use managed folders by default. These copies stay covered by remote wipe even after you remove the sync job.
-- Interrupted wipes resume when ResoDrive starts again. Locked files keep the wipe pending until they can be removed.
-- Storage requests now include the ResoDrive version and available Windows edition, release, build and architecture in the User-Agent. No username, computer name or device ID is added.
-- The About page is easier to read and supports keyboard navigation.
+- Reuses the URL, username and app password already saved in ResoDrive.
+- Checks for a pending wipe before automatic drives start.
+- Shows whether remote wipe is configured or needs attention beside each drive.
 
-To enable remote wipe for an existing connection, reconnect it through setup using a dedicated Nextcloud app password. Disabling an account alone does not erase local data; Nextcloud must request a wipe.
+This replaces the 0.3.10 downloads, which did not automatically include older connections.
 
-A wipe removes all local ResoDrive accounts, cache and managed download folders. Existing external folders, upload originals and server files are left alone. Switching an existing job to managed storage downloads a separate copy; it does not remove the old folder.
+Nextcloud must explicitly request a wipe. It removes local ResoDrive accounts, cache and managed download folders; external folders, upload originals and server files are left alone. ResoDrive must be running and able to reach Nextcloud. This is not a whole-PC reset.
 
-ResoDrive must be running and able to reach Nextcloud for the request to arrive. This does not reset the PC or protect an offline or tampered-with device. Use disk encryption to protect a lost or stolen PC, and complete the live Nextcloud acceptance steps in the [remote-wipe guide](https://github.com/alphasixtyfive/ResoDrive/blob/v0.3.10/docs/REMOTE-WIPE.md) before relying on remote wipe.
+See the [remote-wipe guide](https://github.com/alphasixtyfive/ResoDrive/blob/v0.3.11/docs/REMOTE-WIPE.md) for setup, scope and the live-server acceptance steps to complete before relying on it.
 
-Known limitation: the full desktop update from the previous public version, including cancellation and blocked shutdown, has not yet been checked on a disposable desktop. This release was published with that check outstanding.
+Known limitation: the full desktop update from the previous public version, including cancellation and blocked shutdown, still needs checking on a disposable desktop.

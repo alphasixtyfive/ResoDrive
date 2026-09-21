@@ -85,7 +85,7 @@ public sealed class SyncEditorWindowTests
             Assert.False(managed.IsChecked);
             Assert.False(managed.IsEnabled);
             Assert.Empty(local.Text);
-            Assert.Contains("Reconnect", Control<TextBlock>(editor, "LocalCopyNotice").Text, StringComparison.Ordinal);
+            Assert.Contains("remote-wipe status", Control<TextBlock>(editor, "LocalCopyNotice").Text, StringComparison.Ordinal);
 
             Control<ComboBox>(editor, "MountBox").SelectedItem = enrolled;
             Assert.True(managed.IsChecked);

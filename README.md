@@ -33,6 +33,8 @@ window uses the same checks and confirmation as **Exit**.
 - Run one-way copy or mirror jobs with readable progress and recent results.
 - Keep enrolled Nextcloud downloads in managed folders included in
   [remote wipe](docs/REMOTE-WIPE.md), with durable cleanup and explicit scope.
+- Pick up remote wipe for existing Nextcloud app-password connections after an
+  update, without reconnecting them.
 - Keep credentials encrypted for your Windows account and rclone isolated from any
   system installation.
 - Recover from background interruptions and unreliable connections automatically.

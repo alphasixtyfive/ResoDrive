@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.3.11] - 2026-09-21
+
+- Enable remote wipe for existing Nextcloud app-password connections after updating, without asking users to reconnect.
+- Reuse the saved connection details and check for pending wipes before automatic drives start.
+- Show remote-wipe setup status beside each drive.
+- Replace the 0.3.10 downloads with this version, which also covers existing connections.
+
 ## [0.3.10] - 2026-09-21
 
 - Add managed download folders for enrolled Nextcloud accounts. Remote wipe covers these folders even after their sync jobs are removed.
@@ -103,7 +110,8 @@ First public preview of ResoDrive.
 - Install through a small setup bundle that downloads the .NET Desktop Runtime
   only when it is missing.
 
-[0.3.10]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.10
+[0.3.11]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.11
+[0.3.10]: https://github.com/alphasixtyfive/ResoDrive/tree/v0.3.10
 [0.3.9]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.9
 [0.3.8]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.8
 [0.3.7]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.7

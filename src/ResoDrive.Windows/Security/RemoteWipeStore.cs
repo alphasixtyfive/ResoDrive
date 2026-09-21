@@ -9,7 +9,10 @@ public sealed record RemoteWipeRegistration(
     string ProbeEndpoint,
     string ServerBaseUrl,
     string Username,
-    string AppToken);
+    string AppToken)
+{
+    public override string ToString() => $"Remote-wipe registration for {MountId}";
+}
 
 /// <summary>
 /// Stores the dedicated Nextcloud login-flow/app token needed by the remote-wipe

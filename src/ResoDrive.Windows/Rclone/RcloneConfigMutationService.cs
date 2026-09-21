@@ -367,6 +367,8 @@ internal interface IRcloneRcSessionFactory
 internal interface IRcloneRcSession : IAsyncDisposable
 {
     Task<IReadOnlyList<string>> ListRemotesAsync(CancellationToken token);
+    Task<IReadOnlyDictionary<string, string>> GetConfigAsync(string remoteName, CancellationToken token) =>
+        throw new NotSupportedException("Reading remote configuration is not supported by this session.");
     Task CreateWebDavRemoteAsync(RcloneWebDavRemoteCreateRequest request, CancellationToken token);
     Task CreateSftpPasswordRemoteAsync(RcloneSftpPasswordRemoteCreateRequest request, CancellationToken token);
     Task CreateSftpKeyFileRemoteAsync(RcloneSftpKeyFileRemoteCreateRequest request, CancellationToken token);
@@ -440,10 +442,11 @@ internal sealed partial class RcloneRcSessionFactory : IRcloneRcSessionFactory
         foreach (var argument in RcloneUserAgentArguments.Create([]))
             startInfo.ArgumentList.Add(argument);
         foreach (var key in startInfo.Environment.Keys
-                     .Where(key => key.StartsWith("RCLONE_CONFIG_", StringComparison.OrdinalIgnoreCase))
+                     .Where(key => key.StartsWith("RCLONE_", StringComparison.OrdinalIgnoreCase) &&
+                                   !string.Equals(key, "RCLONE_USER_AGENT", StringComparison.OrdinalIgnoreCase))
                      .ToArray())
             startInfo.Environment.Remove(key);
-        startInfo.Environment.Remove("RCLONE_PASSWORD_COMMAND");
+        startInfo.Environment.Remove("_RCLONE_CONFIG_KEY_FILE");
         return startInfo;
     }
 
@@ -489,6 +492,7 @@ internal sealed partial class RcloneRcSessionFactory : IRcloneRcSessionFactory
 
 internal sealed class RcloneRcSession : IRcloneRcSession
 {
+    private const int MaximumConfigResponseBytes = 64 * 1024;
     private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromSeconds(5);
@@ -534,12 +538,87 @@ internal sealed class RcloneRcSession : IRcloneRcSession
 
     public async Task<IReadOnlyList<string>> ListRemotesAsync(CancellationToken token)
     {
-        using var response = await PostAsync("config/listremotes", new { }, token).ConfigureAwait(false);
+        using var response = await PostSensitiveAsync("config/listremotes", new { }, token).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
-        await using var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
-        var result = await JsonSerializer.DeserializeAsync<ListRemotesResponse>(stream, cancellationToken: token)
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeout.CancelAfter(RequestTimeout);
+        await response.Content.LoadIntoBufferAsync(MaximumConfigResponseBytes, timeout.Token).ConfigureAwait(false);
+        await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
+        var result = await JsonSerializer.DeserializeAsync<ListRemotesResponse>(stream, cancellationToken: timeout.Token)
             .ConfigureAwait(false);
-        return result?.Remotes ?? throw new JsonException("rclone returned no remote list.");
+        if (result?.Remotes is null || result.Remotes.Count > 1024 ||
+            result.Remotes.Any(name => string.IsNullOrWhiteSpace(name) || name.Length > 128 || name.Any(char.IsControl)))
+            throw new JsonException("rclone returned an invalid remote list.");
+        return result.Remotes;
+    }
+
+    public async Task<IReadOnlyDictionary<string, string>> GetConfigAsync(string remoteName, CancellationToken token)
+    {
+        using var response = await PostSensitiveAsync("config/get", new { name = remoteName }, token)
+            .ConfigureAwait(false);
+        return await ReadConfigResponseAsync(response, token).ConfigureAwait(false);
+    }
+
+    internal static async Task<IReadOnlyDictionary<string, string>> ReadConfigResponseAsync(
+        HttpResponseMessage response, CancellationToken token)
+    {
+        if (!response.IsSuccessStatusCode)
+            throw new InvalidOperationException("The isolated rclone configuration read failed.");
+        if (response.Content.Headers.ContentLength > MaximumConfigResponseBytes)
+            throw new InvalidOperationException("The isolated rclone configuration response is too large.");
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeout.CancelAfter(RequestTimeout);
+        var bytes = new byte[MaximumConfigResponseBytes + 1];
+        try
+        {
+            await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
+            var length = 0;
+            while (length < bytes.Length)
+            {
+                var read = await stream.ReadAsync(bytes.AsMemory(length), timeout.Token).ConfigureAwait(false);
+                if (read == 0) break;
+                length += read;
+            }
+            if (length > MaximumConfigResponseBytes)
+                throw new InvalidOperationException("The isolated rclone configuration response is too large.");
+            using var document = JsonDocument.Parse(bytes.AsMemory(0, length), new JsonDocumentOptions { MaxDepth = 4 });
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                throw new JsonException();
+            var result = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (result.Count >= 256 || property.Name.Length is 0 or > 128 || property.Name.Any(char.IsControl) ||
+                    property.Value.ValueKind != JsonValueKind.String || !result.TryAdd(property.Name, property.Value.GetString()!))
+                    throw new JsonException();
+            }
+            return result;
+        }
+        catch (JsonException)
+        {
+            // JSON exception paths can contain credential values or configuration keys.
+            throw new InvalidOperationException("The isolated rclone configuration response is invalid.");
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+        }
+    }
+
+    private async Task<HttpResponseMessage> PostSensitiveAsync<T>(string path, T payload, CancellationToken token)
+    {
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(payload);
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, path);
+            request.Content = new ByteArrayContent(bytes);
+            request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            return await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+        }
     }
 
     public async Task CreateWebDavRemoteAsync(RcloneWebDavRemoteCreateRequest request, CancellationToken token)

@@ -1,6 +1,6 @@
 # Nextcloud remote wipe: administrator guide
 
-This guide describes ResoDrive 0.3.10. Earlier packages do not include all recovery
+This guide describes ResoDrive 0.3.11. Earlier packages do not include all recovery
 fixes listed in the [changelog](../CHANGELOG.md). Server commands and UI below
 were checked against Nextcloud's official documentation
 and `stable32` source on 21 September 2026; live server acceptance is still required.
@@ -9,22 +9,42 @@ and `stable32` source on 21 September 2026; live server acceptance is still requ
 download copies in the affected Windows data directory.** Read the scope before
 sending a request.
 
-## Enroll a client
+## Existing connections after an update
+
+Existing Nextcloud app-password connections do not need to be re-added. On startup,
+ResoDrive reads their saved URL, username and app password from its encrypted
+rclone configuration and adds any missing entries to its protected wipe-check
+list. This is local bookkeeping; it does not create a server registration or
+change a password. It works offline, with server checks resuming when connected.
+
+The host checks for a pending wipe before starting automatic drives. It checks
+the saved connection list again during its normal minute-by-minute monitoring;
+unchanged files do not launch another configuration reader. **Remote wipe
+configured** on a drive means its local wipe-check entry exists. **Remote wipe
+setup needs attention** means the saved connection could not be safely recovered.
+
+Recovery recognizes Nextcloud WebDAV connections and generic WebDAV connections
+using standard `/remote.php/dav/files/<user>` or `/remote.php/webdav` URLs. Existing
+Nextcloud installation subdirectories are preserved. Public shares, HTTP URLs,
+bearer-token connections and ambiguous paths are excluded. This uses the existing
+app password, so a password shared across PCs retains that shared scope. Give each
+PC a separate app password when first setting it up.
+
+## Connect a new client
 
 1. In the Nextcloud account's personal **Settings → Security → Devices & sessions**,
    create an app password named for the PC, for example `ResoDrive - Test PC`.
    Give each client its own app password; never reuse a token or the account's
    ordinary login password. See [Nextcloud's device-password guide](https://docs.nextcloud.com/server/stable/user_manual/en/session_management.html).
 2. In ResoDrive connection setup, select **Nextcloud** and enter that app password.
-   Use the HTTPS server base URL, including any installation subdirectory, such
-   as `https://cloud.example/nextcloud`. A generic WebDAV or imported connection
-   does not enroll itself. Updating ResoDrive also does not enroll older accounts;
-   reconnect them through setup.
+   Use the HTTPS server address accepted by the setup profile, such as
+   `https://cloud.example`. The host also recovers compatible imported connections
+   as described above.
 3. Complete setup and confirm the connection works. The protected
    `%LOCALAPPDATA%\rdrive\remote-wipe.dpapi` file stores registrations. If using
    `RDRIVE_DATA_DIR`, look in that directory instead. Do not open or share the file.
 
-ResoDrive currently enrolls a manually created app password; it does not implement
+ResoDrive reuses a manually created app password; it does not implement
 Nextcloud Login Flow v2. The registration file's existence proves only that local
 registration data was saved. It does not validate the server's wipe support or
 prove that every connection is enrolled. Complete the disposable test below.
@@ -47,8 +67,8 @@ sync paths; each managed job must use its assigned directory and a download mode
 existing job to managed storage downloads to a different directory; old external
 copies remain outside wipe coverage. Review those copies separately before
 deploying a device. Upload-source folders, arbitrary exports and copies moved out
-of managed storage are not wiped. Generic WebDAV, SFTP and unenrolled Nextcloud
-accounts cannot enable managed local copies through this feature.
+of managed storage are not wiped. Other WebDAV services, SFTP and connections
+without a recovered Nextcloud wipe entry cannot enable managed local copies.
 
 ## Send the wipe request
 
@@ -246,6 +266,11 @@ distinguishes HTTP 200 from 404.
     then unlock it and verify completion. Repeat using a disposable directory
     junction and an outside sentinel; cleanup must refuse the redirected path
     and preserve the outside file.
+11. Repeat with an older ResoDrive connection whose app password is saved but has
+    no local wipe-check entry. Update to 0.3.11 and confirm **Remote wipe configured**
+    appears without another login. Also queue a wipe before starting the updated
+    host: cleanup must begin before automatic drives mount. Existing external
+    sync folders must remain outside the wipe scope.
 
 Record request acceptance, client cleanup, server acknowledgement and preserved
 out-of-scope files separately. Do not treat a successful API command or missing
@@ -259,6 +284,10 @@ worker, and named-pipe shutdown during recovery. HTTP responses are simulated,
 including unauthorized access, explicit authorization, errors, malformed and
 oversized bodies, timeouts, cancellation and acknowledgement failure. A local
 loopback transport test separately verifies cookie and redirect isolation.
+Existing-connection recovery was also checked against a real rclone process using
+an encrypted disposable configuration. The host startup test uses simulated
+Nextcloud responses to verify that a recovered pending request stops startup
+before automatic drives mount.
 
 No live Nextcloud wipe was run during this review. These tests do **not** establish
 live compatibility with a particular deployment or prove forensic erasure.

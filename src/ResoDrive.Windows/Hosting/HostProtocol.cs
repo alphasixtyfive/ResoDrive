@@ -19,7 +19,8 @@ public sealed record HostMountStatus(
     string Status,
     long? UploadsQueued = null,
     long? UploadsInProgress = null,
-    bool UploadStatusStale = false);
+    bool UploadStatusStale = false,
+    string? RemoteWipeStatus = null);
 
 public sealed record HostSyncStatus(
     Guid MountId,

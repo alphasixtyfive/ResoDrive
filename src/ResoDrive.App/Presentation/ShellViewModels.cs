@@ -93,6 +93,12 @@ public sealed class ShellViewModel : NotifyBase
         Refresh();
     }
 
+    public void ClearRemoteWipeStatuses()
+    {
+        foreach (var mount in Mounts)
+            mount.ClearRemoteWipeStatus();
+    }
+
     public void AddLogEntry(
         string glyph,
         string title,
@@ -219,6 +225,7 @@ public sealed class MountRow : NotifyBase
     private MountLifecycle _lifecycle = MountLifecycle.Stopped;
     private string _status = "Not mounted";
     private string _errorDetail = string.Empty;
+    private string _remoteWipeStatus = string.Empty;
 
     public MountRow(MountSettings settings, HostMountStatus? status)
     {
@@ -274,6 +281,11 @@ public sealed class MountRow : NotifyBase
     public bool ShouldStop =>
         IsMounted || _lifecycle is MountLifecycle.Starting or MountLifecycle.Degraded or MountLifecycle.WaitingToRestart;
     public string StatusText => _status;
+    public string RemoteWipeStatus => _remoteWipeStatus;
+    public System.Windows.Visibility RemoteWipeStatusVisibility =>
+        _remoteWipeStatus.Length > 0
+            ? System.Windows.Visibility.Visible
+            : System.Windows.Visibility.Collapsed;
     public string ErrorDetail => _errorDetail;
     public System.Windows.Visibility ErrorVisibility =>
         _lifecycle == MountLifecycle.Failed && _errorDetail.Length > 0
@@ -319,13 +331,15 @@ public sealed class MountRow : NotifyBase
     public bool CanOpen => IsMounted;
     public bool CanAct =>
         (Enabled || ShouldStop) && _lifecycle is not MountLifecycle.Starting and not MountLifecycle.Stopping;
-    public string DetailText => $"{StatusText}  ·  {LocationDisplay}  ·  {Source}";
+    public string DetailText => $"{StatusText}  ·  {LocationDisplay}  ·  {Source}" +
+        (_remoteWipeStatus.Length > 0 ? $"  ·  {_remoteWipeStatus}" : string.Empty);
     public string OptionsAccessibleName => $"Open settings for {Name}";
     public string OpenAccessibleName => $"Open {Name} ({DriveDisplay}) in File Explorer";
     public string ActionAccessibleName => $"{ActionText} {Name}";
 
     public void ApplyStatus(HostMountStatus? status)
     {
+        SetRemoteWipeStatus(status?.RemoteWipeStatus);
         var recognized = Enum.TryParse(status?.Lifecycle, true, out MountLifecycle lifecycle);
         var nextLifecycle = recognized ? lifecycle : MountLifecycle.Stopped;
         var previousLifecycle = _lifecycle;
@@ -350,6 +364,16 @@ public sealed class MountRow : NotifyBase
         _uploadsInProgress = status?.UploadsInProgress;
         _uploadStatusStale = status?.UploadStatusStale ?? false;
         ChangedState();
+    }
+
+    public void ClearRemoteWipeStatus() => SetRemoteWipeStatus(null);
+
+    private void SetRemoteWipeStatus(string? status)
+    {
+        if (!Set(ref _remoteWipeStatus, status?.Trim() ?? string.Empty, nameof(RemoteWipeStatus)))
+            return;
+        Changed(nameof(RemoteWipeStatusVisibility));
+        Changed(nameof(DetailText));
     }
 
     private void ChangedState()

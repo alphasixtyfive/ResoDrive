@@ -42,6 +42,8 @@ jobs:
           -AppPath "artifacts\win-x64\resodrive\resodrive.exe"
       - name: Verify installation, upgrade and removal
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: ./tests/installer-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName
       - name: Preserve installer diagnostics
         if: always()

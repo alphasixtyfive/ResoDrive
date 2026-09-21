@@ -35,6 +35,8 @@ jobs:
         run: .\build.ps1 -Configuration Release -BuildMsi $true
       - name: Verify installed application lifecycle
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: ./tests/installer-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName
       - name: Verify application tests with one available CPU
         shell: pwsh
