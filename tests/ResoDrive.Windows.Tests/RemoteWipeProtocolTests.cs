@@ -95,6 +95,7 @@ public sealed class RemoteWipeProtocolTests
         List<(string Method, Uri Uri, string? Authorization, string? ContentType, string Body)> requests = [];
         using var http = new HttpClient(new AsyncHandler(async (request, cancellationToken) =>
         {
+            Assert.Equal(ClientUserAgent.Value, request.Headers.UserAgent.ToString());
             requests.Add((request.Method.Method, request.RequestUri!, request.Headers.Authorization?.ToString(),
                 request.Content?.Headers.ContentType?.MediaType,
                 request.Content is null ? "" : await request.Content.ReadAsStringAsync(cancellationToken)));

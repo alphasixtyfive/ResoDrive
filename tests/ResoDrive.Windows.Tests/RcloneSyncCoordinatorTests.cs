@@ -169,6 +169,22 @@ public sealed class RcloneSyncCoordinatorTests
     }
 
     [Fact]
+    public async Task RunAsync_IdentifiesResoDriveUnlessUserAgentIsOverridden()
+    {
+        var runner = new RecordingRunner();
+        var (mount, job) = CreateDefinition(enabled: true);
+        using var coordinator = CreateCoordinator(mount, runner);
+
+        var result = await coordinator.RunAsync(mount.Id, job.Id);
+
+        Assert.True(result.Succeeded);
+        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("RCLONE_USER_AGENT")))
+            AssertOption(runner.Arguments, "--user-agent", ClientUserAgent.Value);
+        else
+            Assert.DoesNotContain("--user-agent", runner.Arguments);
+    }
+
+    [Fact]
     public async Task RunAsync_RequestsStructuredPeriodicStats()
     {
         var runner = new RecordingRunner();

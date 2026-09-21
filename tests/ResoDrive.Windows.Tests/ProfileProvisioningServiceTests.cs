@@ -210,6 +210,10 @@ public sealed class ProfileProvisioningServiceTests : IDisposable
     private sealed class FixedResponseHandler(HttpStatusCode statusCode) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
-            CancellationToken cancellationToken) => Task.FromResult(new HttpResponseMessage(statusCode));
+            CancellationToken cancellationToken)
+        {
+            Assert.Equal(ClientUserAgent.Value, request.Headers.UserAgent.ToString());
+            return Task.FromResult(new HttpResponseMessage(statusCode));
+        }
     }
 }

@@ -86,6 +86,24 @@ public sealed class RcloneConfigMutationServiceTests : IDisposable
     }
 
     [Fact]
+    public void ConfigurationProcess_IdentifiesResoDriveUnlessUserAgentIsOverridden()
+    {
+        var startInfo = RcloneRcSessionFactory.CreateStartInfo(
+            @"C:\rclone.exe", @"C:\stage\rclone.conf", "password-command", "ephemeral-user", "ephemeral-auth");
+
+        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("RCLONE_USER_AGENT")))
+        {
+            var optionIndex = startInfo.ArgumentList.IndexOf("--user-agent");
+            Assert.True(optionIndex >= 0);
+            Assert.Equal(ClientUserAgent.Value, startInfo.ArgumentList[optionIndex + 1]);
+        }
+        else
+        {
+            Assert.DoesNotContain("--user-agent", startInfo.ArgumentList);
+        }
+    }
+
+    [Fact]
     public async Task Collision_IsExact_AndFailedMutationDeletesStageWithoutWritingLiveFile()
     {
         var executable = Write("rclone.exe", "x");

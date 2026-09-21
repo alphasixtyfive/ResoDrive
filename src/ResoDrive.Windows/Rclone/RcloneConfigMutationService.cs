@@ -437,6 +437,8 @@ internal sealed partial class RcloneRcSessionFactory : IRcloneRcSessionFactory
             "--password-command", configPasswordCommand,
             "--rc-addr", "127.0.0.1:0", "--rc-user", user, "--rc-pass", password
         }) startInfo.ArgumentList.Add(argument);
+        foreach (var argument in RcloneUserAgentArguments.Create([]))
+            startInfo.ArgumentList.Add(argument);
         foreach (var key in startInfo.Environment.Keys
                      .Where(key => key.StartsWith("RCLONE_CONFIG_", StringComparison.OrdinalIgnoreCase))
                      .ToArray())

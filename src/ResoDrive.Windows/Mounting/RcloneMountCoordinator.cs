@@ -570,6 +570,8 @@ public sealed class RcloneMountCoordinator : IAsyncDisposable
         yield return "--config";
         yield return _configPath;
         yield return "--ask-password=false";
+        foreach (var argument in RcloneUserAgentArguments.Create(definition.Arguments))
+            yield return argument;
         if (File.Exists(_paths.ConfigSecretFile))
         {
             yield return "--password-command";

@@ -265,7 +265,7 @@ public sealed class ProfileProvisioningService
             var verification = await RunCheckedAsync(
                 installation.Value.ExecutablePath,
                 ["--config", stagedConfig, "--ask-password=false", "--password-command", configPasswordCommand,
-                    "lsf", source, "--max-depth", "1"],
+                    "lsf", source, "--max-depth", "1", .. RcloneUserAgentArguments.Create([])],
                 null, null, cancellationToken).ConfigureAwait(false);
             if (!verification.Succeeded)
                 return FailureFrom(verification, "setup.remote_check", "The configured remote could not be verified.");
@@ -388,7 +388,7 @@ public sealed class ProfileProvisioningService
     {
         using var request = new HttpRequestMessage(new HttpMethod("PROPFIND"), endpoint);
         request.Headers.Add("Depth", "0");
-        request.Headers.UserAgent.ParseAdd("ResoDrive-setup/2.0");
+        request.Headers.UserAgent.ParseAdd(ClientUserAgent.Value);
         request.Headers.Authorization = new AuthenticationHeaderValue(
             "Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}")));
         try

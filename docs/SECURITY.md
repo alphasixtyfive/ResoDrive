@@ -43,6 +43,36 @@ credentials, private service addresses, configuration files, or unredacted logs.
   endpoints with proxies and redirects disabled, a three-second deadline, and a
   bounded response size. An unavailable result is never presented as zero uploads.
 
+## Storage client identification
+
+WebDAV setup, Nextcloud access/wipe checks and managed rclone storage requests
+identify the client with a `User-Agent` such as:
+
+```text
+ResoDrive/0.3.8 (Windows 11; Edition: Professional; Release: 24H2; Build: 10.0.26100.9457; ClientArchitecture: x64; OSArchitecture: x64)
+```
+
+This is an example, not a minimum supported build. The product version comes from
+the running build. Windows details are read locally without elevation and cached
+for the process lifetime; restart ResoDrive to refresh them after OS changes.
+Missing or unreadable optional registry details are omitted. Edition identifiers
+are preserved, including LTSC variants; Windows Server is distinguished from
+Windows 10/11 when its installation type is available. No hostname, account name,
+device identifier, file path or installed-software inventory is added to the
+header. Existing authenticated requests still carry the credentials they require.
+
+The additional OS details are sent to configured storage services. GitHub update
+checks and component downloads do not use this enriched header. An inherited
+`RCLONE_USER_AGENT` override is respected by managed rclone processes. SFTP does
+not use HTTP User-Agent headers.
+
+Server or reverse-proxy access logs can record the header when configured to
+include it. It does not add version columns to Nextcloud's device list, rename
+existing app-password entries, or create automatic update warnings. This uses
+ordinary HTTP client identification; no companion app or reporting endpoint is
+required. See [Nextcloud's desktop client identification](https://github.com/nextcloud/desktop/blob/master/src/common/utility.cpp)
+and [rclone's user-agent flag](https://rclone.org/docs/#user-agent-string).
+
 ## Local file cache and account revocation
 
 Credential encryption does **not** encrypt rclone's VFS file cache. Cached file

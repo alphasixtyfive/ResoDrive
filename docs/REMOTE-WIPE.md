@@ -92,6 +92,11 @@ until it runs and can reach Nextcloud again. Each account uses its own app token
 without shared session cookies. HTTPS origin and port must match the registered
 server, redirects are not followed, and installation subdirectories are preserved.
 
+These requests include the running ResoDrive version and available Windows
+edition/release/build details in their HTTP User-Agent. See
+[storage client identification](SECURITY.md#storage-client-identification) for
+the fields and server-log visibility. This does not add a separate reporting API.
+
 The [Nextcloud client protocol](https://docs.nextcloud.com/server/stable/developer_manual/client_apis/RemoteWipe/index.html)
 is implemented in this order:
 

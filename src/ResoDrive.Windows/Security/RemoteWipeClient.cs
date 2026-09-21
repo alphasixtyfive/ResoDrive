@@ -7,7 +7,6 @@ namespace ResoDrive.Windows;
 
 public sealed class RemoteWipeClient : IDisposable
 {
-    private const string UserAgent = "ResoDrive-remote-wipe/1.0";
     private const int MaximumResponseBytes = 4096;
     private readonly HttpClient _httpClient;
     private readonly bool _ownsClient;
@@ -46,7 +45,7 @@ public sealed class RemoteWipeClient : IDisposable
 
         using var probe = new HttpRequestMessage(new HttpMethod("PROPFIND"), probeEndpoint);
         probe.Headers.Add("Depth", "0");
-        probe.Headers.UserAgent.ParseAdd(UserAgent);
+        probe.Headers.UserAgent.ParseAdd(ClientUserAgent.Value);
         AddBasicAuthentication(probe, registration.Username, registration.AppToken);
 
         try
@@ -116,7 +115,7 @@ public sealed class RemoteWipeClient : IDisposable
         {
             Content = new FormUrlEncodedContent([new KeyValuePair<string, string>("token", token)])
         };
-        request.Headers.UserAgent.ParseAdd(UserAgent);
+        request.Headers.UserAgent.ParseAdd(ClientUserAgent.Value);
         return request;
     }
 

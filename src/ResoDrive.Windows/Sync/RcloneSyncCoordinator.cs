@@ -271,6 +271,8 @@ public sealed class RcloneSyncCoordinator : IDisposable
         yield return "--config";
         yield return _configPath;
         yield return "--ask-password=false";
+        foreach (var argument in RcloneUserAgentArguments.Create(job.Arguments))
+            yield return argument;
         if (File.Exists(_paths.ConfigSecretFile))
         {
             yield return "--password-command";

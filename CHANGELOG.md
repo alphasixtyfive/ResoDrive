@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Identify storage requests with the actual ResoDrive version, Windows edition/release/build and client/OS architectures in the User-Agent header.
 - Isolate Nextcloud wipe probes from session cookies and reject ambiguous wipe responses or unexpected acknowledgement status codes.
 - Keep recovery state readable for large registrations and prevent stale recovery attempts from deleting newly connected accounts.
 - Remove the host's scheduler state and its backup/staging files during remote wipe.
