@@ -60,11 +60,13 @@ the explicit JSON value `{"wipe":true}`. An ordinary credential rejection,
 disconnected server, timeout, malformed response, or disabled account without an
 active wipe request leaves local data intact.
 
-Because older versions use one shared rclone cache for all mounts, a confirmed
+Because ResoDrive currently uses one shared rclone cache for all mounts, a confirmed
 wipe currently stops all ResoDrive mounts and sync jobs and removes the complete
 local ResoDrive account state (settings, encrypted rclone configuration, cache,
 ownership state, scheduler state and logs). The protected wipe token is retained
-only until cleanup succeeds and the client acknowledges `/index.php/core/wipe/success`.
+only until cleanup succeeds and `/index.php/core/wipe/success` returns HTTP 200,
+or returns 404 because the token can no longer be acknowledged. A 404 releases
+the token without claiming server-confirmed completion.
 The setup flow must use a dedicated Nextcloud app password created for this client;
 ordinary account passwords are not suitable for remote wipe. Existing accounts
 must be reconnected through setup to create a registration.

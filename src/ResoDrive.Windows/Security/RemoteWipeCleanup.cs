@@ -35,7 +35,7 @@ public static class RemoteWipeCleanup
     {
         var name = Path.GetFileName(path).TrimStart('.');
         string[] names = ["settings.json", "rclone.conf", "config-pass.dpapi", "ownership.json",
-            "sync-run-state.json", "welcome.complete", "remote-wipe.dpapi"];
+            "sync-run-state.json", "scheduler-state.json", "welcome.complete", "remote-wipe.dpapi"];
         // Include atomic-write backups and setup staging, but retain the durable wipe state,
         // profiles, components and installers. Never enumerate outside the managed data root.
         return names.Any(prefix => name.Equals(prefix, StringComparison.OrdinalIgnoreCase) ||

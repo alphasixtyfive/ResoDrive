@@ -439,7 +439,7 @@ public sealed partial class Worker : BackgroundService
             await _wipeCoordinator.ResumeAsync(
                 cancellation => RemoteWipeWorkStopper.StopOwnedMountsAsync(_paths, cancellation), token)
                 .ConfigureAwait(false);
-            LogRemoteWipeCompleted(_logger);
+            LogRemoteWipeCompleted(_logger, new RemoteWipeStateStore(_paths).Read()?.ServerAcknowledged == true);
             return true;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
@@ -831,8 +831,8 @@ public sealed partial class Worker : BackgroundService
     private static partial void LogStateFailure(ILogger logger, Exception exception);
     [LoggerMessage(1006, LogLevel.Warning, "Timed out while draining {TaskCount} host operations during shutdown.")]
     private static partial void LogDrainTimeout(ILogger logger, int taskCount);
-    [LoggerMessage(1007, LogLevel.Information, "Remote wipe completed and was acknowledged by the server.")]
-    private static partial void LogRemoteWipeCompleted(ILogger logger);
+    [LoggerMessage(1007, LogLevel.Information, "Remote wipe local cleanup completed. Server acknowledgement confirmed: {ServerAcknowledged}.")]
+    private static partial void LogRemoteWipeCompleted(ILogger logger, bool serverAcknowledged);
     [LoggerMessage(1008, LogLevel.Error, "Remote wipe could not be completed or acknowledged; retaining the protected wipe registration for retry.")]
     private static partial void LogRemoteWipeFailure(ILogger logger, Exception exception);
     [LoggerMessage(1009, LogLevel.Warning, "The protected remote-wipe registration could not be read.")]

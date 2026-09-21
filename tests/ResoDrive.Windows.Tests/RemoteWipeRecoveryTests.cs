@@ -1,4 +1,6 @@
 using System.Net;
+using System.Text;
+using System.Text.Json;
 using ResoDrive.Core.Settings;
 
 namespace ResoDrive.Windows.Tests;
@@ -121,7 +123,8 @@ public sealed class RemoteWipeRecoveryTests : IDisposable
         SeedData();
         string[] artifacts = ["settings.json.bak", "settings.pre-import-20260919.json", ".settings.json.abc.tmp",
             "rclone.conf.abc.setup-backup", "config-pass.dpapi.abc.setup-secret", "remote-wipe.dpapi.abc.setup-wipe",
-            "ownership.json.bak", "sync-run-state.json.bak"];
+            "ownership.json.bak", "sync-run-state.json.bak", "scheduler-state.json", "scheduler-state.json.bak",
+            "scheduler-state.json.tmp"];
         foreach (var name in artifacts) File.WriteAllText(Path.Combine(_paths.Root, name), "sensitive");
         var unrelated = Path.Combine(_paths.Root, "admin-readme.txt");
         File.WriteAllText(unrelated, "keep");
@@ -150,6 +153,112 @@ public sealed class RemoteWipeRecoveryTests : IDisposable
         var staged = await store.CreateStagedAsync(registrations);
         File.Move(staged, _paths.RemoteWipeFile);
         Assert.Equal(registrations, await store.LoadAsync());
+    }
+
+    [Fact]
+    public async Task MaximumCatalogRegistrationCanBeRecoveredAfterRestart()
+    {
+        var registration = Registration;
+        var catalogBytes = Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(new[] { registration }, JsonSerializerOptions.Web));
+        registration = registration with { AppToken = registration.AppToken + new string('x', 64 * 1024 - catalogBytes) };
+        var store = new RemoteWipeStore(_paths);
+        var staged = await store.CreateStagedAsync([registration]);
+        File.Move(staged, _paths.RemoteWipeFile);
+        Assert.Equal(registration, Assert.Single(await store.LoadAsync()));
+
+        using var http = new HttpClient(new Handler(_ => new(HttpStatusCode.OK)));
+        using var client = new RemoteWipeClient(http);
+        await new RemoteWipeCoordinator(_paths, client).AcceptAsync(registration, CancellationToken.None);
+        Assert.Equal(registration, new RemoteWipeStateStore(_paths).Read()!.Registration);
+        await new RemoteWipeCoordinator(_paths, client).ResumeAsync(_ => Task.CompletedTask, CancellationToken.None);
+        Assert.Null(new RemoteWipeStateStore(_paths).Read()!.Registration);
+    }
+
+    [Fact]
+    public async Task OverlappingRecoveryCannotDeleteDataCreatedAfterCompletion()
+    {
+        SeedData();
+        var stopping = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resumeStop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var acknowledgements = 0;
+        using var http = new HttpClient(new Handler(_ => { acknowledgements++; return new(HttpStatusCode.OK); }));
+        using var client = new RemoteWipeClient(http);
+        var coordinator = new RemoteWipeCoordinator(_paths, client);
+        await coordinator.AcceptAsync(Registration, CancellationToken.None);
+        var delayedRecovery = coordinator.ResumeAsync(async _ =>
+        {
+            stopping.SetResult();
+            await resumeStop.Task;
+        }, CancellationToken.None);
+        try
+        {
+            await stopping.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await new RemoteWipeCoordinator(_paths, client).ResumeAsync(_ => Task.CompletedTask, CancellationToken.None);
+            using (await new AccountDataGuard(_paths).AcquireAsync())
+                File.WriteAllText(_paths.ConfigFile, "new account configuration");
+        }
+        finally { resumeStop.SetResult(); }
+        await delayedRecovery;
+
+        Assert.Equal("new account configuration", File.ReadAllText(_paths.ConfigFile));
+        Assert.Equal(1, acknowledgements);
+        Assert.Equal(RemoteWipePhase.Completed, new RemoteWipeStateStore(_paths).Read()!.Phase);
+    }
+
+    [Fact]
+    public async Task DelayedAcknowledgementCannotOverwriteANewerWipeRequest()
+    {
+        var acknowledging = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var respond = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var delayedHttp = new HttpClient(new AsyncHandler(async cancellationToken =>
+        {
+            acknowledging.SetResult();
+            await respond.Task.WaitAsync(cancellationToken);
+            return new(HttpStatusCode.OK);
+        }));
+        using var delayedClient = new RemoteWipeClient(delayedHttp);
+        var coordinator = new RemoteWipeCoordinator(_paths, delayedClient);
+        await coordinator.AcceptAsync(Registration, CancellationToken.None);
+        var delayedRecovery = coordinator.ResumeAsync(_ => Task.CompletedTask, CancellationToken.None);
+        RemoteWipeState? nextState = null;
+        try
+        {
+            await acknowledging.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            using var http = new HttpClient(new Handler(_ => new(HttpStatusCode.OK)));
+            using var client = new RemoteWipeClient(http);
+            var recovery = new RemoteWipeCoordinator(_paths, client);
+            await recovery.ResumeAsync(_ => Task.CompletedTask, CancellationToken.None);
+            await recovery.AcceptAsync(Registration, CancellationToken.None);
+            nextState = new RemoteWipeStateStore(_paths).Read();
+        }
+        finally { respond.SetResult(); }
+        await delayedRecovery;
+
+        Assert.Equal(RemoteWipePhase.Requested, nextState!.Phase);
+        Assert.Equal(nextState, new RemoteWipeStateStore(_paths).Read());
+        Assert.True(new AccountDataGuard(_paths).IsBlocked);
+    }
+
+    [Fact]
+    public async Task DirectoryInPlaceOfRecoveryMarkerBlocksAccountWritesAndAcknowledgement()
+    {
+        var guard = new AccountDataGuard(_paths);
+        Directory.CreateDirectory(_paths.RemoteWipeStateFile);
+        Assert.Throws<IOException>(() => new AccountDataGuard(_paths));
+        await Assert.ThrowsAsync<IOException>(() => guard.AcquireAsync());
+        using var http = new HttpClient(new Handler(_ => throw new InvalidOperationException("Must not acknowledge")));
+        using var client = new RemoteWipeClient(http);
+        await Assert.ThrowsAsync<IOException>(() => new RemoteWipeCoordinator(_paths, client)
+            .ResumeAsync(_ => Task.CompletedTask, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task CompletedRecoveryMarkerCannotContainARevokedToken()
+    {
+        var invalid = new RemoteWipeState(Guid.NewGuid(), RemoteWipePhase.Completed, Registration);
+        await new DpapiSecretStore(_paths).SaveProtectedFileAsync(JsonSerializer.Serialize(invalid), _paths.RemoteWipeStateFile);
+        Assert.Throws<IOException>(() => new AccountDataGuard(_paths));
+        await Assert.ThrowsAsync<IOException>(() => new RemoteWipeStateStore(_paths).SaveAsync(invalid));
     }
 
     private void SeedData()
@@ -198,5 +307,10 @@ public sealed class RemoteWipeRecoveryTests : IDisposable
     private sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> handle) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => Task.FromResult(handle(request));
+    }
+
+    private sealed class AsyncHandler(Func<CancellationToken, Task<HttpResponseMessage>> handle) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => handle(cancellationToken);
     }
 }

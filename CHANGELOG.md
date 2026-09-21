@@ -1,8 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Isolate Nextcloud wipe probes from session cookies and reject ambiguous wipe responses or unexpected acknowledgement status codes.
+- Keep recovery state readable for large registrations and prevent stale recovery attempts from deleting newly connected accounts.
+- Remove the host's scheduler state and its backup/staging files during remote wipe.
+- Report local cleanup separately from server-confirmed acknowledgement and cover locked-cache recovery across host restarts.
+- Document device-specific and administrator-wide Nextcloud wipe commands, enrollment, scope, recovery and disposable acceptance testing.
+
 ## [0.3.8] - 2026-09-19
 
-- Align About with HASS Connect: a 48-pixel icon, closely grouped name/version, native keyboard-accessible links and wrapping text.
+- Refine About with a 48-pixel icon, closely grouped name/version, native keyboard-accessible links and wrapping text.
 - Persist accepted Nextcloud wipes before stopping work; resume cleanup and acknowledgement after interruption without remounting accounts.
 - Include settings backups and setup recovery files in cleanup, reject redirected cache paths, and do not acknowledge locked or partially deleted data.
 - Block stale UI/settings/setup writes after a wipe; retain only a token-free completion marker once the server acknowledges it.

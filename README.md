@@ -155,6 +155,7 @@ setup executable handles the runtime prerequisite for new installations.
 
 - [Contributing](CONTRIBUTING.md)
 - [Security](docs/SECURITY.md)
+- [Nextcloud remote wipe: enrollment, commands and recovery](docs/REMOTE-WIPE.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Release process](docs/RELEASING.md)
 

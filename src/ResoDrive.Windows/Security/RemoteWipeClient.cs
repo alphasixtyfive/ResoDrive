@@ -7,6 +7,8 @@ namespace ResoDrive.Windows;
 
 public sealed class RemoteWipeClient : IDisposable
 {
+    private const string UserAgent = "ResoDrive-remote-wipe/1.0";
+    private const int MaximumResponseBytes = 4096;
     private readonly HttpClient _httpClient;
     private readonly bool _ownsClient;
     private readonly TimeSpan _requestTimeout;
@@ -15,11 +17,21 @@ public sealed class RemoteWipeClient : IDisposable
     {
         _ownsClient = httpClient is null;
         _requestTimeout = requestTimeout ?? TimeSpan.FromSeconds(15);
-        _httpClient = httpClient ?? new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
-        {
-            Timeout = TimeSpan.FromSeconds(15)
-        };
+        // Injected clients must preserve the same redirect and cookie isolation.
+        _httpClient = httpClient ?? CreateHttpClient();
     }
+
+    internal static HttpClient CreateHttpClient() => new(new HttpClientHandler
+    {
+        AllowAutoRedirect = false,
+        // A DAV session cookie from another registration on this server can make
+        // an invalid app token appear authenticated. Probe each token independently.
+        UseCookies = false
+    })
+    {
+        // The linked deadline covers both requests and the response body.
+        Timeout = Timeout.InfiniteTimeSpan
+    };
 
     public async Task<bool> IsWipeRequestedAsync(
         RemoteWipeRegistration registration,
@@ -34,49 +46,28 @@ public sealed class RemoteWipeClient : IDisposable
 
         using var probe = new HttpRequestMessage(new HttpMethod("PROPFIND"), probeEndpoint);
         probe.Headers.Add("Depth", "0");
-        probe.Headers.UserAgent.ParseAdd("ResoDrive-remote-wipe/1.0");
+        probe.Headers.UserAgent.ParseAdd(UserAgent);
         AddBasicAuthentication(probe, registration.Username, registration.AppToken);
 
-        HttpResponseMessage response;
         try
         {
-            response = await _httpClient.SendAsync(
-                probe, HttpCompletionOption.ResponseHeadersRead, requestToken).ConfigureAwait(false);
-        }
-        catch (HttpRequestException)
-        {
-            return false;
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            return false;
-        }
+            using (var response = await _httpClient.SendAsync(
+                probe, HttpCompletionOption.ResponseHeadersRead, requestToken).ConfigureAwait(false))
+            {
+                if (response.StatusCode is not (HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden))
+                    return false;
+            }
 
-        using (response)
-        {
-            if (response.StatusCode is not (HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden))
-                return false;
-        }
-
-        var checkUri = new Uri(serverBase, "index.php/core/wipe/check");
-        using var check = new HttpRequestMessage(HttpMethod.Post, checkUri)
-        {
-            Content = new FormUrlEncodedContent([new KeyValuePair<string, string>("token", registration.AppToken)])
-        };
-        check.Headers.UserAgent.ParseAdd("ResoDrive-remote-wipe/1.0");
-        try
-        {
+            using var check = CreateTokenRequest(serverBase, "index.php/core/wipe/check", registration.AppToken);
             using var checkResponse = await _httpClient.SendAsync(
                 check, HttpCompletionOption.ResponseHeadersRead, requestToken).ConfigureAwait(false);
             if (checkResponse.StatusCode != HttpStatusCode.OK)
                 return false;
             // ResponseHeadersRead does not bound body reads. Apply the same deadline and a small size limit.
-            await checkResponse.Content.LoadIntoBufferAsync(4096, requestToken).ConfigureAwait(false);
+            await checkResponse.Content.LoadIntoBufferAsync(MaximumResponseBytes, requestToken).ConfigureAwait(false);
             using var document = JsonDocument.Parse(await checkResponse.Content.ReadAsByteArrayAsync(requestToken)
                 .ConfigureAwait(false));
-            return document.RootElement.ValueKind == JsonValueKind.Object &&
-                document.RootElement.TryGetProperty("wipe", out var wipe) &&
-                wipe.ValueKind == JsonValueKind.True;
+            return HasExplicitWipeCommand(document.RootElement);
         }
         catch (HttpRequestException)
         {
@@ -100,25 +91,51 @@ public sealed class RemoteWipeClient : IDisposable
         RemoteWipeRegistration registration,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(registration);
         if (!TryValidateRegistration(registration, out _, out var serverBase))
             throw new InvalidOperationException("The remote-wipe registration is not a valid HTTPS endpoint.");
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(_requestTimeout);
-        var successUri = new Uri(serverBase, "index.php/core/wipe/success");
-        using var request = new HttpRequestMessage(HttpMethod.Post, successUri)
-        {
-            Content = new FormUrlEncodedContent([new KeyValuePair<string, string>("token", registration.AppToken)])
-        };
-        request.Headers.UserAgent.ParseAdd("ResoDrive-remote-wipe/1.0");
+        using var request = CreateTokenRequest(serverBase, "index.php/core/wipe/success", registration.AppToken);
         using var response = await _httpClient.SendAsync(
             request, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false);
         // Nextcloud removes the token on acknowledgement. A retry after a lost response
         // can return 404; it means there is no longer a token to acknowledge, not proof
         // that this specific request reached the server. Local cleanup already finished.
         if (response.StatusCode == HttpStatusCode.NotFound) return false;
-        if (!response.IsSuccessStatusCode)
+        // Nextcloud confirms completion with 200. Other 2xx responses (for example
+        // a proxy's 202 Accepted) do not prove it finished retiring this token.
+        if (response.StatusCode != HttpStatusCode.OK)
             throw new HttpRequestException($"Nextcloud returned HTTP {(int)response.StatusCode} while acknowledging remote wipe.");
         return true;
+    }
+
+    private static HttpRequestMessage CreateTokenRequest(Uri serverBase, string path, string token)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, new Uri(serverBase, path))
+        {
+            Content = new FormUrlEncodedContent([new KeyValuePair<string, string>("token", token)])
+        };
+        request.Headers.UserAgent.ParseAdd(UserAgent);
+        return request;
+    }
+
+    private static bool HasExplicitWipeCommand(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+            return false;
+        var requested = false;
+        foreach (var property in root.EnumerateObject())
+        {
+            if (!property.NameEquals("wipe"))
+                continue;
+            // Reject duplicate/contradictory commands instead of taking the last
+            // property's value, as TryGetProperty would do.
+            if (requested || property.Value.ValueKind != JsonValueKind.True)
+                return false;
+            requested = true;
+        }
+        return requested;
     }
 
     private static void AddBasicAuthentication(HttpRequestMessage request, string username, string token)

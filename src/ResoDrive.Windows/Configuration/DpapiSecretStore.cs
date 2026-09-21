@@ -122,7 +122,7 @@ public sealed partial class DpapiSecretStore : IConfigSecretStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentOutOfRangeException.ThrowIfLessThan(maximumPlaintextBytes, 1);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumPlaintextBytes, 64 * 1024);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumPlaintextBytes, 128 * 1024);
         var info = new FileInfo(Path.GetFullPath(path));
         var maximumEncodedBytes = Math.Max(MaximumEncodedFileBytes, maximumPlaintextBytes * 2 + 4096);
         if (!info.Exists || info.Length <= 0 || info.Length > maximumEncodedBytes)
