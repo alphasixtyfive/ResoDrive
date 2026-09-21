@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [0.3.13] - 2026-09-21
+
 - Refresh the reported rclone version after the managed engine is installed, repaired or updated, including during first-time setup.
 
 ## [0.3.12] - 2026-09-21
@@ -117,6 +119,7 @@ First public preview of ResoDrive.
 - Install through a small setup bundle that downloads the .NET Desktop Runtime
   only when it is missing.
 
+[0.3.13]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.13
 [0.3.12]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.12
 [0.3.11]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.11
 [0.3.10]: https://github.com/alphasixtyfive/ResoDrive/tree/v0.3.10

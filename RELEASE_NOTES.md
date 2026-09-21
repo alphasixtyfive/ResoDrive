@@ -1,5 +1,3 @@
-ResoDrive 0.3.12 reports the bundled rclone version alongside the ResoDrive and Windows versions in storage requests. Nextcloud administrators can now see which storage engine a connected ResoDrive client is using without installing a separate reporting service.
+ResoDrive 0.3.13 fixes devices that reported the ResoDrive and Windows versions but omitted the rclone version after first-time setup, repair or an engine update.
 
-The same client identity is used by mounted drives, sync jobs, setup checks and remote-wipe traffic. ResoDrive reads the version from its verified private rclone installation once when the host starts; it does not run another version check for every request.
-
-No hostname, account name, device identifier, file path or software inventory is added. Servers only see the header when the client makes an authenticated storage or wipe request.
+Existing installations check for this release after startup and offer an Update action in Settings. ResoDrive does not download or install it until the user chooses Update and confirms the installation.

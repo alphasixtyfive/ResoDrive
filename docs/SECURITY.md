@@ -49,13 +49,13 @@ WebDAV setup, Nextcloud access/wipe checks and managed rclone storage requests
 identify the client with a `User-Agent` such as:
 
 ```text
-ResoDrive/0.3.12 (Windows 11; Edition: Professional; Release: 25H2; Build: 10.0.26200.9457; ClientArchitecture: x64; OSArchitecture: x64; Rclone: v1.75.1)
+ResoDrive/0.3.13 (Windows 11; Edition: Professional; Release: 25H2; Build: 10.0.26200.9457; ClientArchitecture: x64; OSArchitecture: x64; Rclone: v1.75.1)
 ```
 
 This is an example, not a minimum supported build. The product version comes from
 the running build. The rclone version comes from ResoDrive's verified private
-runtime and is inspected once when the background host starts or setup begins,
-not once per request. Windows details are read locally without elevation and cached
+runtime and is inspected when the background host starts and after the managed
+engine is installed, repaired or updated, not once per request. Windows details are read locally without elevation and cached
 for the process lifetime; restart ResoDrive to refresh them after OS changes.
 Missing or unreadable optional registry details are omitted. Edition identifiers
 are preserved, including LTSC variants; Windows Server is distinguished from
