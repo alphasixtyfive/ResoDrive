@@ -75,7 +75,7 @@ and [rclone's user-agent flag](https://rclone.org/docs/#user-agent-string).
 
 ## Local file cache and account revocation
 
-Credential encryption does **not** encrypt rclone's VFS file cache. Cached file
+Credential encryption does **not** encrypt rclone's VFS cache or managed download copies. Cached file
 contents remain local after disconnecting, revoking server access, upgrading or
 uninstalling. Use separate Windows accounts and disk encryption such as BitLocker
 to protect stored data. Neither protects it from someone controlling the unlocked
@@ -92,7 +92,7 @@ active wipe request leaves local data intact.
 
 Because ResoDrive currently uses one shared rclone cache for all mounts, a confirmed
 wipe currently stops all ResoDrive mounts and sync jobs and removes the complete
-local ResoDrive account state (settings, encrypted rclone configuration, cache,
+local ResoDrive account state (settings, encrypted rclone configuration, cache, managed download copies,
 ownership state, scheduler state and logs). The protected wipe token is retained
 only until cleanup succeeds and `/index.php/core/wipe/success` returns HTTP 200,
 or returns 404 because the token can no longer be acknowledged. A 404 releases
@@ -107,6 +107,16 @@ failed acknowledgement resumes without loading old accounts. A token-free
 completion marker prevents a stale UI session from restoring account state.
 See [the administrator guide and test procedure](REMOTE-WIPE.md) for the exact
 scope, recovery behavior and limits of the automated verification.
+
+Enrolled Nextcloud download jobs can use a dedicated managed local copy under
+`managed-sync/<job-id>` in the active data directory. New enrolled download jobs
+default to managed storage; existing external folders remain unchanged. Backend
+checks require the assigned path, a download direction and Nextcloud enrollment.
+Upload originals and external sync folders are never implicitly enrolled. Managed
+copies remain in wipe scope after a job is removed, because cleanup deletes the
+fixed managed tree independently of settings. Locked, inaccessible or redirected
+managed data prevents acknowledgement. Switching to managed storage does not
+remove existing external copies.
 
 Unreachable clients cannot receive remote wipe, and client-side cleanup cannot
 prevent a hostile local user from retaining previously copied data. Ordinary file

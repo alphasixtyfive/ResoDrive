@@ -1512,7 +1512,8 @@ public partial class MainWindow : WpfWindow
             SelectPage("Mounts");
             return;
         }
-        var editor = new SyncEditorWindow(_settings.Mounts, null, null) { Owner = this };
+        var registeredMountIds = await LoadRemoteWipeMountIdsAsync();
+        var editor = new SyncEditorWindow(_paths, _settings.Mounts, registeredMountIds, null, null) { Owner = this };
         if (editor.ShowDialog() != true || editor.Value is null || editor.SelectedMount is null)
             return;
         var id = editor.SelectedMount.Id;
@@ -1545,7 +1546,8 @@ public partial class MainWindow : WpfWindow
             ShowError("Job is running", "Stop this sync job before editing or deleting it.");
             return;
         }
-        var editor = new SyncEditorWindow(_settings.Mounts, row.MountId, row.Settings)
+        var registeredMountIds = await LoadRemoteWipeMountIdsAsync();
+        var editor = new SyncEditorWindow(_paths, _settings.Mounts, registeredMountIds, row.MountId, row.Settings)
         {
             Owner = this,
         };
@@ -1568,6 +1570,12 @@ public partial class MainWindow : WpfWindow
             )
             .ToArray();
         await SaveAndReloadAsync(_settings with { Mounts = mounts });
+    }
+
+    private async Task<IReadOnlySet<Guid>> LoadRemoteWipeMountIdsAsync()
+    {
+        var registrations = await new RemoteWipeStore(_paths).LoadAsync(_lifetimeCancellation.Token);
+        return registrations.Select(registration => registration.MountId).ToHashSet();
     }
 
     private async Task ExecuteUiActionAsync(

@@ -31,6 +31,8 @@ window uses the same checks and confirmation as **Exit**.
 - Use passwords or SFTP private keys without putting credentials in profiles.
 - Choose which drives mount at sign-in and how they reconnect.
 - Run one-way copy or mirror jobs with readable progress and recent results.
+- Keep enrolled Nextcloud downloads in managed folders included in
+  [remote wipe](docs/REMOTE-WIPE.md), with durable cleanup and explicit scope.
 - Keep credentials encrypted for your Windows account and rclone isolated from any
   system installation.
 - Recover from background interruptions and unreliable connections automatically.

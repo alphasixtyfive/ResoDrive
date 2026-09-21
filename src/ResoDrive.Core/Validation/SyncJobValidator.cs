@@ -17,6 +17,9 @@ public sealed class SyncJobValidator : IValidator<SyncJob>
         ValidationRules.ValidateLocalPath(value.LocalPath, "localPath", issues);
         ValidationRules.ValidateRemotePath(value.RemotePath, "remotePath", issues);
 
+        if (value.ManagedLocalCopy && !value.Mode.IsFromRemote())
+            issues.Add(new("sync.managed_direction", "Managed local copies require a remote-to-local operation.", "mode"));
+
         if (!Enum.IsDefined(value.Mode))
         {
             issues.Add(new("sync.mode", "The sync mode is invalid.", "mode"));

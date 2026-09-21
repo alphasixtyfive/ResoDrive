@@ -8,17 +8,18 @@ public static class RemoteWipeCleanup
         var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(paths.Root));
         if (root.Equals(Path.GetPathRoot(root), StringComparison.OrdinalIgnoreCase))
             throw new IOException("Remote wipe requires a dedicated ResoDrive data directory.");
-        for (var directory = new DirectoryInfo(root); directory is not null; directory = directory.Parent)
-            if (directory.Exists && directory.Attributes.HasFlag(FileAttributes.ReparsePoint))
-                throw new IOException("Remote wipe cannot follow a redirected data directory.");
+        ManagedDataPath.ValidateAncestors(root);
 
         List<Exception> failures = [];
         foreach (var file in Directory.EnumerateFiles(root).Where(IsAccountFile))
             Attempt(() => DeleteFile(file));
+        // This fixed app-owned tree remains in scope after jobs or settings are removed.
+        // Never derive deletion targets from user-selected sync paths.
+        Attempt(() => DeleteDirectory(paths.ManagedSyncRoot));
         Attempt(() => DeleteDirectory(paths.Cache));
         Attempt(() => DeleteDirectory(paths.Logs));
         if (failures.Count != 0)
-            throw new IOException("Remote wipe is incomplete. Close applications using cached files and retry.",
+            throw new IOException("Remote wipe is incomplete. Close applications using managed files and retry.",
                 new AggregateException(failures));
         Directory.CreateDirectory(paths.Cache);
         Directory.CreateDirectory(paths.Logs);
@@ -47,8 +48,10 @@ public static class RemoteWipeCleanup
     {
         try
         {
-            if (File.Exists(path))
-                File.Delete(path);
+            if (ManagedDataPath.Attributes(path) is not { } attributes) return;
+            if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                throw new IOException("Remote wipe cannot remove a redirected or non-file entry.");
+            File.Delete(path);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -60,21 +63,22 @@ public static class RemoteWipeCleanup
     {
         try
         {
-            if (!Directory.Exists(path)) return;
-            if (File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint))
-                throw new IOException("Remote wipe cannot follow a redirected cache directory.");
+            if (ManagedDataPath.Attributes(path) is not { } attributes) return;
+            if (!attributes.HasFlag(FileAttributes.Directory) || attributes.HasFlag(FileAttributes.ReparsePoint))
+                throw new IOException("Remote wipe requires an ordinary managed directory.");
             foreach (var child in Directory.EnumerateFileSystemEntries(path))
             {
-                if (File.GetAttributes(child).HasFlag(FileAttributes.ReparsePoint))
-                    throw new IOException("Remote wipe cannot follow a redirected cache entry.");
-                if (Directory.Exists(child)) DeleteDirectory(child);
+                if (ManagedDataPath.Attributes(child) is not { } childAttributes) continue;
+                if (childAttributes.HasFlag(FileAttributes.ReparsePoint))
+                    throw new IOException("Remote wipe cannot follow a redirected managed entry.");
+                if (childAttributes.HasFlag(FileAttributes.Directory)) DeleteDirectory(child);
                 else DeleteFile(child);
             }
             Directory.Delete(path);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            throw new IOException($"Remote wipe could not remove local cached data.", exception);
+            throw new IOException("Remote wipe could not remove local managed data.", exception);
         }
     }
 }

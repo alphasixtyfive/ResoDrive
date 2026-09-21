@@ -23,6 +23,10 @@ $marker = Join-Path $cache 'preserve-on-uninstall.txt'
 [IO.File]::WriteAllText($marker, 'Pending local data must survive installer operations.')
 $settingsHash = (Get-FileHash -LiteralPath $settings).Hash
 $markerHash = (Get-FileHash -LiteralPath $marker).Hash
+$managedCopy = Join-Path $env:RDRIVE_DATA_DIR 'managed-sync\00000000000000000000000000000001\preserve.txt'
+New-Item -ItemType Directory -Path (Split-Path -Parent $managedCopy) -Force | Out-Null
+[IO.File]::WriteAllText($managedCopy, 'Managed copies survive upgrades and uninstall; only an accepted remote wipe removes them.')
+$managedCopyHash = (Get-FileHash -LiteralPath $managedCopy).Hash
 
 function Invoke-Installer([string]$Executable, [string]$Arguments) {
     # Windows Installer's service does not inherit process-local RDRIVE_DATA_DIR.
@@ -38,7 +42,8 @@ function Invoke-Installer([string]$Executable, [string]$Arguments) {
 }
 function Assert-DataPreserved {
     if ((Get-FileHash -LiteralPath $settings).Hash -ne $settingsHash -or
-        (Get-FileHash -LiteralPath $marker).Hash -ne $markerHash) { throw 'Installation changed user settings or cached data.' }
+        (Get-FileHash -LiteralPath $marker).Hash -ne $markerHash -or
+        (Get-FileHash -LiteralPath $managedCopy).Hash -ne $managedCopyHash) { throw 'Installation changed user settings, cache or managed copies.' }
 }
 function Start-TestApplication {
     if (-not (Test-Path -LiteralPath $app)) { throw 'The installed app is missing.' }

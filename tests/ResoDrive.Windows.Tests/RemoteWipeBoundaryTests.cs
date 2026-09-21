@@ -12,23 +12,29 @@ public sealed class RemoteWipeBoundaryTests : IDisposable
     public async Task StopsVerifiedOwnedProcessAndLeavesUnrelatedProcessRunning()
     {
         using var owned = await StartSleeperAsync();
-        using var unrelated = await StartSleeperAsync();
         try
         {
-            using var ownership = new MountOwnershipStore(_paths);
-            await ownership.UpsertAsync(new(Guid.NewGuid(), owned.Id, owned.StartTime.ToUniversalTime(),
-                owned.MainModule!.FileName!, "fixture:", "Z:"), CancellationToken.None);
-            // A reused/mismatched PID must not grant authority to terminate another process.
-            await ownership.UpsertAsync(new(Guid.NewGuid(), unrelated.Id, unrelated.StartTime.ToUniversalTime().AddMinutes(-1),
-                unrelated.MainModule!.FileName!, "fixture:", "Y:"), CancellationToken.None);
-            await RemoteWipeWorkStopper.StopOwnedMountsAsync(_paths, CancellationToken.None);
-            Assert.True(owned.HasExited);
-            Assert.False(unrelated.HasExited);
+            using var unrelated = await StartSleeperAsync();
+            try
+            {
+                using var ownership = new MountOwnershipStore(_paths);
+                await ownership.UpsertAsync(new(Guid.NewGuid(), owned.Id, owned.StartTime.ToUniversalTime(),
+                    owned.MainModule!.FileName!, "fixture:", "Z:"), CancellationToken.None);
+                // A reused/mismatched PID must not grant authority to terminate another process.
+                await ownership.UpsertAsync(new(Guid.NewGuid(), unrelated.Id, unrelated.StartTime.ToUniversalTime().AddMinutes(-1),
+                    unrelated.MainModule!.FileName!, "fixture:", "Y:"), CancellationToken.None);
+                await RemoteWipeWorkStopper.StopOwnedMountsAsync(_paths, CancellationToken.None);
+                Assert.True(owned.HasExited);
+                Assert.False(unrelated.HasExited);
+            }
+            finally
+            {
+                await StopSleeperAsync(unrelated);
+            }
         }
         finally
         {
-            if (!owned.HasExited) { owned.Kill(); await owned.WaitForExitAsync(); }
-            if (!unrelated.HasExited) { unrelated.Kill(); await unrelated.WaitForExitAsync(); }
+            await StopSleeperAsync(owned);
         }
     }
 
@@ -66,9 +72,17 @@ public sealed class RemoteWipeBoundaryTests : IDisposable
 
     private static async Task<Process> StartSleeperAsync()
     {
-        var start = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"))
-        { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
-        foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-Command", "Write-Output 'ready'; Start-Sleep -Seconds 60" }) start.ArgumentList.Add(argument);
+        var start = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"))
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true
+        };
+        // Disable cmd AutoRun hooks. The child waits for our stdin to close,
+        // avoiding PowerShell startup costs and arbitrary sleeper lifetimes.
+        foreach (var argument in new[] { "/d", "/q", "/c", "echo ready&set /p resodriveFixtureExit=" })
+            start.ArgumentList.Add(argument);
         var process = Process.Start(start)!;
         try
         {
@@ -81,9 +95,24 @@ public sealed class RemoteWipeBoundaryTests : IDisposable
         }
         catch
         {
-            if (!process.HasExited) { process.Kill(); await process.WaitForExitAsync(); }
-            process.Dispose();
+            try { await StopSleeperAsync(process); }
+            finally { process.Dispose(); }
             throw;
+        }
+    }
+
+    private static async Task StopSleeperAsync(Process process)
+    {
+        if (process.HasExited) return;
+        process.StandardInput.Close();
+        try
+        {
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (TimeoutException)
+        {
+            if (!process.HasExited) process.Kill();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
         }
     }
 

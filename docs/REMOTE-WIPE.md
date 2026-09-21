@@ -1,12 +1,13 @@
 # Nextcloud remote wipe: administrator guide
 
-This guide describes ResoDrive 0.3.9. Earlier packages do not include all recovery
+This guide describes ResoDrive 0.3.10. Earlier packages do not include all recovery
 fixes listed in the [changelog](../CHANGELOG.md). Server commands and UI below
 were checked against Nextcloud's official documentation
 and `stable32` source on 21 September 2026; live server acceptance is still required.
 
-**A confirmed wipe removes all local ResoDrive accounts and managed cache in the
-affected Windows data directory.** Read the scope before sending a request.
+**A confirmed wipe removes all local ResoDrive accounts, managed cache and managed
+download copies in the affected Windows data directory.** Read the scope before
+sending a request.
 
 ## Enroll a client
 
@@ -27,6 +28,27 @@ ResoDrive currently enrolls a manually created app password; it does not impleme
 Nextcloud Login Flow v2. The registration file's existence proves only that local
 registration data was saved. It does not validate the server's wipe support or
 prove that every connection is enrolled. Complete the disposable test below.
+
+## Include downloaded copies
+
+For **Copy remote to local** and **Mirror remote to local** jobs on an enrolled
+Nextcloud account, choose **Managed local copy** in the sync editor. New download
+jobs on enrolled accounts use this choice by default; existing jobs keep their
+previous paths and behavior. The editor shows the exact managed destination.
+
+Managed copies live at `%LOCALAPPDATA%\rdrive\managed-sync\<job-id>` (or below the
+active `RDRIVE_DATA_DIR`). ResoDrive owns this dedicated tree. A confirmed wipe
+deletes everything inside it, including local edits or files manually placed
+there. Removing a sync job or changing its destination does not remove old managed
+copies from wipe coverage. The client never takes deletion targets from editable
+sync paths; each managed job must use its assigned directory and a download mode.
+
+**Existing external sync folders are not enrolled automatically.** Switching an
+existing job to managed storage downloads to a different directory; old external
+copies remain outside wipe coverage. Review those copies separately before
+deploying a device. Upload-source folders, arbitrary exports and copies moved out
+of managed storage are not wiped. Generic WebDAV, SFTP and unenrolled Nextcloud
+accounts cannot enable managed local copies through this feature.
 
 ## Send the wipe request
 
@@ -119,17 +141,39 @@ This version uses one shared cache and encrypted configuration. A confirmed wipe
 therefore removes **all local ResoDrive account state in the active data directory**,
 including other ResoDrive connections: configuration and its protected password,
 settings and backups, setup staging/recovery files, registration tokens, managed
-cache, logs, ownership and scheduling records. All managed mounts and sync jobs
-stop first. Setup states this scope. Unsynced data in the managed cache can be lost.
+cache, managed download copies, logs, ownership and scheduling records. All managed mounts and sync jobs
+stop first. Setup states this scope. Unsynced cache data and local changes inside
+managed download folders can be lost.
 
 Deployment profiles, installed components and update installers remain. Files on
-the server are not deleted. User-selected sync destinations, downloaded exports,
+the server are not deleted. External user-selected sync destinations, downloaded exports,
 Office temporary files and other copies outside ResoDrive's data directory are
 not covered. Removing a drive or uninstalling the app is not a remote wipe.
 
 Deletion is ordinary filesystem deletion, not forensic SSD shredding. DPAPI
 protects stored credentials, not the VFS cache. A modified client or a person
 controlling the local account can prevent enforcement or keep other copies.
+
+## Lost or stolen devices
+
+ResoDrive is an application-level cleanup mechanism. It cannot factory-reset a
+Windows PC, force an offline device to connect, or erase copies already taken by
+someone controlling the unlocked account. A pending request runs only while the
+ResoDrive host can run and reach the enrolled Nextcloud server. Enable start at
+sign-in as part of deployment, and test the actual client/server combination.
+
+Protect every volume holding application data or downloaded files with
+[BitLocker or managed device encryption](https://learn.microsoft.com/en-us/windows/security/operating-system-security/data-protection/bitlocker/index)
+before a device goes missing. This protects data at rest; it does not make an
+unlocked session safe. If the requirement is to reset the whole Windows device,
+enroll it in an appropriate device-management service and test its
+[device-wipe procedure](https://learn.microsoft.com/en-us/intune/device-management/actions/wipe).
+That is separate from Nextcloud's application-token wipe.
+
+For a lost ResoDrive client, request **Wipe device** for its dedicated token and
+retain the pending token until acknowledgement. Do not treat a queued command,
+token revocation or an absent device as proof that files were removed. Follow your
+organization's incident-response policy for other sessions and exposed credentials.
 
 ## Recovery and failure behavior
 
@@ -141,7 +185,7 @@ writes and setup rollback from a pre-wipe window cannot restore revoked data.
 
 | State | What remains | What to do |
 | --- | --- | --- |
-| Cleanup pending (`Requested`) | Durable request and any data not yet deleted | Close applications using cached files. Resolve locks, permissions, unverifiable process ownership or redirected data/cache directories, then allow retry. |
+| Cleanup pending (`Requested`) | Durable request and any data not yet deleted | Close applications using cached or managed download files. Resolve locks, permissions, unverifiable process ownership or redirected managed directories, then allow retry. |
 | Local cleanup finished (`Cleaned`) | The revoked token needed for acknowledgement | Keep the PC online and restore access to the Nextcloud endpoint. No account is remounted while acknowledgement is pending. |
 | Complete (`Completed`) | A token-free generation marker | Reopen ResoDrive. Old accounts are absent; any new connection needs a new dedicated app password. |
 
@@ -150,6 +194,14 @@ cleanup. An unreadable recovery state blocks account access. A foreground launch
 during recovery reports that cleanup is continuing and then closes the UI; the
 background host handles retries. An idle recovery host still accepts a confirmed
 installer shutdown, with recovery resuming on next launch.
+
+Recovery stops recorded mount processes only after verifying their identity. If a
+sync process survived a host crash and still runs from this data directory's
+private rclone executable, recovery waits for it to exit rather than deleting
+files it could recreate. It does not kill an unrecorded process. An inaccessible
+candidate process also blocks completion; resolve the process or restart the
+device and let recovery retry. No success acknowledgement is sent while this
+check is unresolved.
 
 HTTP 200 from `/success` records `serverAcknowledged: true`. HTTP 404 after local
 cleanup releases the token but records `serverAcknowledged: false`: the server no
@@ -186,6 +238,14 @@ distinguishes HTTP 200 from 404.
 8. Separately disable or revoke a throwaway account **without** a wipe request.
    Cached data must remain. Test the administrator-wide command only with an
    isolated target user whose every device is disposable.
+9. Create a managed download job, download dummy files and add a dummy local edit
+   inside its assigned folder. Remove the job, request wipe and verify the folder
+   is still removed. Keep a separate external sync folder and verify it survives.
+10. Hold a managed download file open without delete sharing and repeat the wipe.
+    Check that it remains pending with no success acknowledgement across restart,
+    then unlock it and verify completion. Repeat using a disposable directory
+    junction and an outside sentinel; cleanup must refuse the redirected path
+    and preserve the outside file.
 
 Record request acceptance, client cleanup, server acknowledgement and preserved
 out-of-scope files separately. Do not treat a successful API command or missing

@@ -14,6 +14,7 @@ public sealed class RcloneSyncCoordinator : IDisposable
     private readonly Func<IReadOnlyList<MountDefinition>> _definitionProvider;
     private readonly IRcloneProcessRunner _processRunner;
     private readonly SyncRunStateStore _runStateStore;
+    private readonly AccountDataGuard _accountData;
     private readonly ConcurrentDictionary<SyncJobId, CancellationTokenSource> _runs = new();
     private readonly ConcurrentDictionary<SyncJobId, SyncSnapshot> _snapshots = new();
 
@@ -39,6 +40,7 @@ public sealed class RcloneSyncCoordinator : IDisposable
         _definitionProvider = definitionProvider ?? throw new ArgumentNullException(nameof(definitionProvider));
         _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
         _runStateStore = new SyncRunStateStore(paths);
+        _accountData = new(paths);
         foreach (var snapshot in _runStateStore.Load())
         {
             _snapshots[snapshot.JobId] = snapshot;
@@ -118,13 +120,22 @@ public sealed class RcloneSyncCoordinator : IDisposable
                 "The local sync path cannot contain or be inside a drive managed by ResoDrive.");
         }
 
-        if (PathsOverlap(job.LocalPath, _paths.Root) ||
+        var managedPath = _paths.ManagedSyncFolder(job.Id.Value);
+        if (job.ManagedLocalCopy && !Path.TrimEndingDirectorySeparator(Path.GetFullPath(job.LocalPath))
+                .Equals(managedPath, StringComparison.OrdinalIgnoreCase))
+            return Result.Failure("sync.managed_path", "Managed local copies must use their dedicated ResoDrive folder.");
+
+        if ((!job.ManagedLocalCopy && PathsOverlap(job.LocalPath, _paths.Root)) ||
             PathsOverlap(job.LocalPath, AppContext.BaseDirectory))
         {
             return Result.Failure(
                 "sync.protected_path",
                 "The local sync path cannot contain or be inside ResoDrive application data or program files.");
         }
+
+        if (job.ManagedLocalCopy && definitions.Any(mount => mount.SyncJobs.Any(other =>
+                (mount.Id != mountId || other.Id != syncJobId) && PathsOverlap(other.LocalPath, job.LocalPath))))
+            return Result.Failure("sync.managed_overlap", "A managed local copy cannot overlap another sync job's folder.");
 
         var runSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         if (!_runs.TryAdd(syncJobId, runSource))
@@ -144,6 +155,21 @@ public sealed class RcloneSyncCoordinator : IDisposable
         RcloneSyncStats? latestStats = null;
         try
         {
+            if (job.ManagedLocalCopy)
+            {
+                using var lease = await _accountData.AcquireAsync(runSource.Token).ConfigureAwait(false);
+                IReadOnlyList<RemoteWipeRegistration> registrations;
+                try { registrations = await new RemoteWipeStore(_paths).LoadAsync(runSource.Token).ConfigureAwait(false); }
+                catch (Exception exception) when (exception is System.Security.Cryptography.CryptographicException or System.Text.Json.JsonException or FormatException)
+                { throw new IOException("Nextcloud remote-wipe enrollment could not be read.", exception); }
+                if (!registrations.Any(registration => registration.MountId == mountId.Value))
+                    throw new IOException("Reconnect this account through Nextcloud setup before using managed local copies.");
+                ManagedDataPath.ValidateAncestors(managedPath);
+                ManagedDataPath.ValidateTree(managedPath);
+                Directory.CreateDirectory(managedPath);
+                ManagedDataPath.ValidateAncestors(managedPath);
+                runSource.Token.ThrowIfCancellationRequested();
+            }
             using var logWriter = TryOpenStructuredLog(
                 Path.Combine(_paths.Logs, RcloneLogFileName.ForSync(definition, job)));
             var result = await _processRunner.RunAsync(

@@ -6,7 +6,7 @@
   xmlns:controls="clr-namespace:ResoDrive.App.Controls"
   Title="Sync settings"
   Width="540"
-  Height="590"
+  Height="690"
   MinWidth="500"
   MinHeight="530"
   WindowStartupLocation="CenterOwner"
@@ -52,6 +52,7 @@
           <RowDefinition Height="Auto" MinHeight="40" />
           <RowDefinition Height="Auto" />
           <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <TextBlock Text="Drive" VerticalAlignment="Center" />
@@ -60,6 +61,7 @@
           Grid.Column="1"
           Style="{StaticResource EditorComboBox}"
           DisplayMemberPath="DisplayName"
+          SelectionChanged="Mount_Changed"
           AutomationProperties.Name="Drive"
         />
 
@@ -94,6 +96,7 @@
             AutomationProperties.Name="Local folder"
           />
           <Button
+            x:Name="BrowseLocalFolderButton"
             Grid.Column="1"
             Style="{StaticResource ButtonStyle}"
             Height="32"
@@ -102,11 +105,12 @@
             Padding="10,0"
             Click="BrowseLocalFolder_Click"
             ToolTip="Choose a local folder"
+            ToolTipService.ShowOnDisabled="True"
             AutomationProperties.Name="Browse for local folder"
           >
             <StackPanel Orientation="Horizontal">
               <TextBlock Style="{StaticResource InlineButtonGlyph}" Text="&#xE838;" />
-              <TextBlock Text="Browse…" VerticalAlignment="Center" />
+              <TextBlock x:Name="LocalFolderButtonLabel" Text="Browse…" VerticalAlignment="Center" />
             </StackPanel>
           </Button>
         </Grid>
@@ -121,19 +125,35 @@
           AutomationProperties.Name="Sync operation"
         />
 
-        <TextBlock Grid.Row="5" Text="Availability" VerticalAlignment="Center" />
+        <StackPanel Grid.Row="5" Grid.Column="1" Margin="0,4,0,8">
+          <CheckBox
+            x:Name="ManagedLocalCopyBox"
+            Content="Keep a managed local copy"
+            Checked="ManagedLocalCopy_Changed"
+            Unchecked="ManagedLocalCopy_Changed"
+            AutomationProperties.Name="Keep a managed local copy"
+          />
+          <TextBlock
+            x:Name="LocalCopyNotice"
+            Foreground="{StaticResource MutedBrush}"
+            TextWrapping="Wrap"
+            Margin="0,5,0,0"
+          />
+        </StackPanel>
+
+        <TextBlock Grid.Row="6" Text="Availability" VerticalAlignment="Center" />
         <CheckBox
           x:Name="EnabledBox"
-          Grid.Row="5"
+          Grid.Row="6"
           Grid.Column="1"
           Content="Enabled"
           AutomationProperties.Name="Sync job enabled"
           VerticalAlignment="Center"
         />
 
-        <TextBlock Grid.Row="6" Text="Schedule" VerticalAlignment="Center" />
+        <TextBlock Grid.Row="7" Text="Schedule" VerticalAlignment="Center" />
         <StackPanel
-          Grid.Row="6"
+          Grid.Row="7"
           Grid.Column="1"
           Orientation="Horizontal"
           VerticalAlignment="Center"
@@ -160,10 +180,10 @@
           />
         </StackPanel>
 
-        <TextBlock Grid.Row="7" Text="Startup" VerticalAlignment="Center" />
+        <TextBlock Grid.Row="8" Text="Startup" VerticalAlignment="Center" />
         <CheckBox
           x:Name="RunOnStartBox"
-          Grid.Row="7"
+          Grid.Row="8"
           Grid.Column="1"
           Content="{x:Static local:ProductInfo.RunSyncOnStartText}"
           AutomationProperties.Name="{x:Static local:ProductInfo.RunSyncOnStartText}"
@@ -172,7 +192,7 @@
 
         <Border
           x:Name="MirrorWarning"
-          Grid.Row="8"
+          Grid.Row="9"
           Grid.ColumnSpan="2"
           Background="{DynamicResource ControlBrush}"
           CornerRadius="6"
@@ -188,7 +208,7 @@
         </Border>
 
         <Expander
-          Grid.Row="9"
+          Grid.Row="10"
           Grid.ColumnSpan="2"
           Header="Advanced"
           Margin="0,7,0,0"

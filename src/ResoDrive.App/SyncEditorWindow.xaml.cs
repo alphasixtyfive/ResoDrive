@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using Microsoft.Win32;
 using ResoDrive.Core.Domain;
 using ResoDrive.Core.Settings;
 using ResoDrive.Core.Validation;
+using ResoDrive.Windows;
 using WpfMessageBox = ResoDrive.App.ModernMessageBox;
 using WpfWindow = System.Windows.Window;
 
@@ -22,16 +24,30 @@ public partial class SyncEditorWindow : WpfWindow
     ];
 
     private readonly SyncJobSettings? _existing;
+    private readonly IReadOnlySet<Guid> _registeredMountIds;
+    private readonly Guid _jobId;
+    private readonly string _managedLocalPath;
+    private string _externalLocalPath = string.Empty;
+    private bool _initializing = true;
+    private bool _updatingLocalCopyControls;
+    private bool _managedCopyActive;
+    private bool _managedChoiceChanged;
 
     public SyncEditorWindow(
+        ApplicationPaths paths,
         IReadOnlyList<MountSettings> mounts,
+        IReadOnlySet<Guid> registeredMountIds,
         Guid? mountId,
         SyncJobSettings? existing
     )
     {
+        ArgumentNullException.ThrowIfNull(paths);
+        _existing = existing;
+        _registeredMountIds = registeredMountIds;
+        _jobId = existing?.Id ?? Guid.NewGuid();
+        _managedLocalPath = paths.ManagedSyncFolder(_jobId);
         InitializeComponent();
         WindowAppearance.PrepareDialog(this);
-        _existing = existing;
         MountBox.ItemsSource = mounts;
         ModeBox.ItemsSource = Modes;
         ModeBox.DisplayMemberPath = nameof(SyncModeOption.Label);
@@ -63,6 +79,10 @@ public partial class SyncEditorWindow : WpfWindow
             ArgumentsBox.Text = RcloneArgumentTextCodec.Format(existing.Arguments);
             MountBox.IsEnabled = false;
         }
+        ManagedLocalCopyBox.IsChecked = existing?.ManagedLocalCopy ?? CanManageLocalCopy;
+        _initializing = false;
+        UpdateLocalCopyControls();
+        UpdateMirrorWarning();
         UpdateScheduleControls();
     }
 
@@ -97,14 +117,27 @@ public partial class SyncEditorWindow : WpfWindow
             return;
         }
         var selectedMode = ModeBox.SelectedItem as SyncModeOption ?? Modes[0];
+        var managedLocalCopy = ManagedLocalCopyBox.IsChecked == true && CanManageLocalCopy;
+        if (!managedLocalCopy && IsManagedStoragePath(LocalPathBox.Text.Trim()))
+        {
+            WpfMessageBox.Show(
+                this,
+                "Choose a folder outside ResoDrive's managed copies. Files in the managed folder remain included in Nextcloud remote wipe.",
+                "Choose a different local folder",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning
+            );
+            return;
+        }
         var arguments = RcloneArgumentTextCodec.Parse(ArgumentsBox.Text);
         var job = new SyncJob
         {
-            Id = new SyncJobId(_existing?.Id ?? Guid.NewGuid()),
+            Id = new SyncJobId(_jobId),
             DisplayName = NameBox.Text.Trim(),
             Enabled = EnabledBox.IsChecked == true,
             RemotePath = RemotePathUtility.Normalize(RemotePathBox.Text),
-            LocalPath = LocalPathBox.Text.Trim(),
+            LocalPath = managedLocalCopy ? _managedLocalPath : LocalPathBox.Text.Trim(),
+            ManagedLocalCopy = managedLocalCopy,
             Mode = selectedMode.Value,
             Schedule = new SyncSchedule
             {
@@ -148,6 +181,7 @@ public partial class SyncEditorWindow : WpfWindow
             Enabled = job.Enabled,
             RemotePath = job.RemotePath,
             LocalPath = job.LocalPath,
+            ManagedLocalCopy = job.ManagedLocalCopy,
             Mode = job.Mode.ToString(),
             Schedule = new SyncScheduleSettings
             {
@@ -165,7 +199,7 @@ public partial class SyncEditorWindow : WpfWindow
         if (
             WpfMessageBox.Confirm(
                 this,
-                "Delete this sync job? No local or remote files will be deleted.",
+                "Delete this sync job? Local and remote files stay in place. Any managed copies remain included in Nextcloud remote wipe.",
                 Title,
                 "Delete sync job"
             )
@@ -176,7 +210,118 @@ public partial class SyncEditorWindow : WpfWindow
         }
     }
 
-    private void Mode_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e) =>
+    private void Mode_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (_initializing)
+            return;
+        ApplyNewJobLocalCopyDefault();
+        UpdateLocalCopyControls();
+        UpdateMirrorWarning();
+    }
+
+    private void Mount_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (_initializing)
+            return;
+        ApplyNewJobLocalCopyDefault();
+        UpdateLocalCopyControls();
+    }
+
+    private void ManagedLocalCopy_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_initializing || _updatingLocalCopyControls)
+            return;
+        _managedChoiceChanged = true;
+        UpdateLocalCopyControls();
+    }
+
+    private bool IsDownload =>
+        (ModeBox.SelectedItem as SyncModeOption)?.Value is SyncMode.CopyFromRemote or SyncMode.SyncFromRemote;
+
+    private bool IsEnrolled => SelectedMount is not null && _registeredMountIds.Contains(SelectedMount.Id);
+
+    private bool CanManageLocalCopy => IsDownload && IsEnrolled;
+
+    private void ApplyNewJobLocalCopyDefault()
+    {
+        if (_existing is not null || _managedChoiceChanged)
+            return;
+        _updatingLocalCopyControls = true;
+        ManagedLocalCopyBox.IsChecked = CanManageLocalCopy;
+        _updatingLocalCopyControls = false;
+    }
+
+    private void UpdateLocalCopyControls()
+    {
+        _updatingLocalCopyControls = true;
+        try
+        {
+            ManagedLocalCopyBox.Visibility = IsDownload ? Visibility.Visible : Visibility.Collapsed;
+            ManagedLocalCopyBox.IsEnabled = CanManageLocalCopy;
+            if (!CanManageLocalCopy)
+                ManagedLocalCopyBox.IsChecked = false;
+
+            var managed = ManagedLocalCopyBox.IsChecked == true;
+            if (managed)
+            {
+                if (!_managedCopyActive && !IsManagedStoragePath(LocalPathBox.Text.Trim()))
+                    _externalLocalPath = LocalPathBox.Text;
+                LocalPathBox.Text = _managedLocalPath;
+            }
+            else if (_managedCopyActive || IsManagedStoragePath(LocalPathBox.Text.Trim()))
+            {
+                LocalPathBox.Text = _externalLocalPath;
+            }
+            _managedCopyActive = managed;
+            LocalPathBox.IsReadOnly = managed;
+            BrowseLocalFolderButton.IsEnabled = !managed || Directory.Exists(_managedLocalPath);
+            LocalFolderButtonLabel.Text = managed ? "Open" : "Browse…";
+            BrowseLocalFolderButton.ToolTip = managed
+                ? BrowseLocalFolderButton.IsEnabled
+                    ? "Open the managed local folder"
+                    : "The managed folder is created when this job first runs."
+                : "Choose a local folder";
+            BrowseLocalFolderButton.SetValue(
+                System.Windows.Automation.AutomationProperties.NameProperty,
+                managed ? "Open managed local folder" : "Browse for local folder");
+
+            LocalCopyNotice.Text = managed
+                ? "Stored in ResoDrive's folder and included in Nextcloud remote wipe. External copies and upload originals are not covered."
+                : IsDownload && !IsEnrolled
+                    ? "Reconnect this drive through Nextcloud setup to use managed copies. External folders are not included in remote wipe."
+                    : "External folders and upload originals are not included in Nextcloud remote wipe.";
+            if (managed && _existing is { ManagedLocalCopy: false })
+                LocalCopyNotice.Text += " Existing files stay in the old folder; new downloads use the managed folder.";
+            else if (managed && _existing is not null
+                && !_existing.LocalPath.Equals(_managedLocalPath, StringComparison.OrdinalIgnoreCase))
+                LocalCopyNotice.Text += " Files at the previous location stay there; this job uses the managed folder shown above.";
+            else if (!managed && _existing is { ManagedLocalCopy: true })
+                LocalCopyNotice.Text += " Choose a different folder. Previous managed copies stay in place and remain covered.";
+        }
+        finally
+        {
+            _updatingLocalCopyControls = false;
+        }
+    }
+
+    private bool IsManagedStoragePath(string path)
+    {
+        if (!Path.IsPathFullyQualified(path))
+            return false;
+        try
+        {
+            var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+            var managedRoot = Path.GetDirectoryName(_managedLocalPath)!;
+            return fullPath.Equals(managedRoot, StringComparison.OrdinalIgnoreCase)
+                || fullPath.StartsWith(managedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private void UpdateMirrorWarning() =>
         MirrorWarning.Visibility =
             (ModeBox.SelectedItem as SyncModeOption)?.Value.IsMirror() == true
                 ? Visibility.Visible
@@ -186,6 +331,27 @@ public partial class SyncEditorWindow : WpfWindow
 
     private void BrowseLocalFolder_Click(object sender, RoutedEventArgs e)
     {
+        if (_managedCopyActive)
+        {
+            try
+            {
+                if (!Directory.Exists(_managedLocalPath))
+                    throw new DirectoryNotFoundException("Run this job once to create its managed folder.");
+                using var process = Process.Start(new ProcessStartInfo(_managedLocalPath)
+                {
+                    UseShellExecute = true,
+                });
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+                or InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                WpfMessageBox.Show(this, exception.Message, "Could not open managed folder",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                UpdateLocalCopyControls();
+            }
+            return;
+        }
+
         var dialog = new OpenFolderDialog
         {
             Title = "Choose a local folder",

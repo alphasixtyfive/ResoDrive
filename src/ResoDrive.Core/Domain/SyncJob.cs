@@ -6,6 +6,7 @@ public sealed record SyncJob
     public required string DisplayName { get; init; }
     public bool Enabled { get; init; } = true;
     public required string LocalPath { get; init; }
+    public bool ManagedLocalCopy { get; init; }
     public string RemotePath { get; init; } = string.Empty;
     public SyncMode Mode { get; init; } = SyncMode.CopyToRemote;
     public SyncSchedule Schedule { get; init; } = SyncSchedule.Manual;

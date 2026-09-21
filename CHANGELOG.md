@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## [0.3.10] - 2026-09-21
+
+- Keep enrolled Nextcloud download jobs in dedicated managed folders that are included in remote wipe, even after their jobs or settings are removed.
+- Default new enrolled download jobs to managed copies and clearly identify existing external folders and upload originals as outside wipe coverage.
+- Reject managed upload sources, redirected folders, overlapping jobs and paths outside each job's assigned folder; require Nextcloud enrollment before downloading.
+- Keep wipe pending across locked, inaccessible or redirected managed files and acknowledge only after all managed copies and account data are removed.
+- Block cleanup and acknowledgement while an unverified process still uses the private rclone runtime after a host crash; never terminate unrelated processes.
+- Replace the process-ownership test's PowerShell sleeper with a lightweight readiness-controlled child and clean up both children after partial startup failure.
+
 ## [0.3.9] - 2026-09-21
 
 - Identify storage requests with the actual ResoDrive version, Windows edition/release/build and client/OS architectures in the User-Agent header.
@@ -97,6 +106,7 @@ First public preview of the cleaned ResoDrive codebase.
 - Install through a small setup bundle that downloads the .NET Desktop Runtime
   only when it is missing.
 
+[0.3.10]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.10
 [0.3.9]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.9
 [0.3.8]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.8
 [0.3.7]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.7

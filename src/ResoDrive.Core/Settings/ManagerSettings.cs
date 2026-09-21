@@ -53,6 +53,7 @@ public sealed record SyncJobSettings
     public required string DisplayName { get; init; }
     public bool Enabled { get; init; } = true;
     public required string LocalPath { get; init; }
+    public bool ManagedLocalCopy { get; init; }
     public string RemotePath { get; init; } = string.Empty;
     public string Mode { get; init; } = "copyToRemote";
     public SyncScheduleSettings Schedule { get; init; } = new();

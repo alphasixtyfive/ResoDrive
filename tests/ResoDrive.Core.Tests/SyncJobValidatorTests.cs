@@ -116,4 +116,33 @@ public sealed class SyncJobValidatorTests
 
         Assert.Contains(result.Issues, issue => issue.Code == "sync.mode.bisync");
     }
+
+    [Theory]
+    [InlineData(SyncMode.CopyFromRemote)]
+    [InlineData(SyncMode.SyncFromRemote)]
+    public void Validate_AcceptsManagedDownloadModes(SyncMode mode)
+    {
+        var result = _validator.Validate(ValidationTestData.ValidSync() with
+        {
+            ManagedLocalCopy = true,
+            Mode = mode
+        });
+
+        Assert.True(result.IsValid);
+    }
+
+    [Theory]
+    [InlineData(SyncMode.CopyToRemote)]
+    [InlineData(SyncMode.SyncToRemote)]
+    [InlineData(SyncMode.Bisync)]
+    public void Validate_RejectsManagedModesThatCanWriteToRemote(SyncMode mode)
+    {
+        var result = _validator.Validate(ValidationTestData.ValidSync() with
+        {
+            ManagedLocalCopy = true,
+            Mode = mode
+        });
+
+        Assert.Contains(result.Issues, issue => issue.Code == "sync.managed_direction");
+    }
 }

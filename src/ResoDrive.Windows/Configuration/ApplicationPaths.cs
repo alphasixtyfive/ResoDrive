@@ -25,6 +25,7 @@ public sealed class ApplicationPaths
         Logs = Path.Combine(Root, "logs");
         UiLogFile = Path.Combine(Logs, "resodrive-ui.log");
         Cache = Path.Combine(Root, "cache");
+        ManagedSyncRoot = Path.Combine(Root, "managed-sync");
         Components = Path.Combine(Root, "components");
         Updates = Path.Combine(Root, "updates");
         Rclone = Path.Combine(Components, "rclone");
@@ -44,10 +45,17 @@ public sealed class ApplicationPaths
     public string Logs { get; }
     public string UiLogFile { get; }
     public string Cache { get; }
+    public string ManagedSyncRoot { get; }
     public string Components { get; }
     public string Updates { get; }
     public string Rclone { get; }
     public string RcloneExecutable { get; }
+
+    public string ManagedSyncFolder(Guid jobId)
+    {
+        if (jobId == Guid.Empty) throw new ArgumentException("A sync job ID is required.", nameof(jobId));
+        return Path.Combine(ManagedSyncRoot, jobId.ToString("N"));
+    }
 
     public void EnsureCreated()
     {
