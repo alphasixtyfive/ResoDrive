@@ -18,6 +18,7 @@ public sealed class RcloneMountCoordinator : IAsyncDisposable
     private readonly string _rclonePath;
     private readonly string _configPath;
     private readonly ApplicationPaths _paths;
+    private readonly string _clientUserAgent;
     private readonly IMountTargetInventory _inventory;
     private readonly MountOwnershipStore _ownership;
     private readonly ConcurrentDictionary<MountId, MountDefinition> _definitions = new();
@@ -30,11 +31,20 @@ public sealed class RcloneMountCoordinator : IAsyncDisposable
     private bool _recovered;
 
     public RcloneMountCoordinator(string rclonePath, string configPath, ApplicationPaths paths, IMountTargetInventory targetInventory)
+        : this(rclonePath, configPath, paths, targetInventory, ClientUserAgent.Value)
+    {
+    }
+
+    public RcloneMountCoordinator(string rclonePath, string configPath, ApplicationPaths paths,
+        IMountTargetInventory targetInventory, string clientUserAgent)
     {
         _rclonePath = Path.GetFullPath(rclonePath);
         _configPath = Path.GetFullPath(configPath);
         _paths = paths ?? throw new ArgumentNullException(nameof(paths));
         _inventory = targetInventory ?? throw new ArgumentNullException(nameof(targetInventory));
+        _clientUserAgent = string.IsNullOrWhiteSpace(clientUserAgent)
+            ? throw new ArgumentException("A client User-Agent is required.", nameof(clientUserAgent))
+            : clientUserAgent;
         _paths.EnsureCreated();
         _ownership = new(paths);
     }
@@ -570,7 +580,8 @@ public sealed class RcloneMountCoordinator : IAsyncDisposable
         yield return "--config";
         yield return _configPath;
         yield return "--ask-password=false";
-        foreach (var argument in RcloneUserAgentArguments.Create(definition.Arguments))
+        foreach (var argument in RcloneUserAgentArguments.Create(
+                     definition.Arguments, Environment.GetEnvironmentVariable("RCLONE_USER_AGENT"), _clientUserAgent))
             yield return argument;
         if (File.Exists(_paths.ConfigSecretFile))
         {

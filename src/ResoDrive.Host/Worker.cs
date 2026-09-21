@@ -41,18 +41,20 @@ public sealed partial class Worker : BackgroundService
     internal bool CanResumeRemoteWipe { get; private set; } = true;
     internal bool RestartForRemoteWipe { get; private set; }
     private bool _recoveringRemoteWipe;
+    private string _clientUserAgent = ClientUserAgent.Value;
+    private readonly bool _inspectRuntimeUserAgent;
 
     public Worker(
         ApplicationPaths paths,
         ILogger<Worker> logger,
         IHostApplicationLifetime applicationLifetime)
-        : this(paths, logger, applicationLifetime, new RemoteWipeClient())
+        : this(paths, logger, applicationLifetime, new RemoteWipeClient(), inspectRuntimeUserAgent: true)
     {
     }
 
     internal Worker(ApplicationPaths paths, ILogger<Worker> logger,
         IHostApplicationLifetime applicationLifetime, RemoteWipeClient remoteWipeClient,
-        RemoteWipeEnrollmentService? wipeEnrollment = null)
+        RemoteWipeEnrollmentService? wipeEnrollment = null, bool inspectRuntimeUserAgent = false)
     {
         _paths = paths;
         _logger = logger;
@@ -61,10 +63,18 @@ public sealed partial class Worker : BackgroundService
         _remoteWipe = new RemoteWipeStore(paths);
         _wipeCoordinator = new(paths, _remoteWipeClient);
         _wipeEnrollment = wipeEnrollment ?? new(paths);
+        _inspectRuntimeUserAgent = inspectRuntimeUserAgent;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        if (_inspectRuntimeUserAgent)
+        {
+            var runtime = await new RcloneRuntimeLocator(_paths).InspectAsync(stoppingToken).ConfigureAwait(false);
+            if (runtime.Succeeded)
+                _clientUserAgent = ClientUserAgent.WithRcloneVersion(runtime.Value?.Version);
+        }
+        _remoteWipeClient.SetClientUserAgent(_clientUserAgent);
         // Resume accepted commands before loading settings or starting any automatic work.
         if (new RemoteWipeStateStore(_paths).Read() is { Phase: not RemoteWipePhase.Completed })
         {
@@ -691,7 +701,7 @@ public sealed partial class Worker : BackgroundService
             _syncs?.Dispose();
             _syncs = null;
         }
-        _mounts ??= new(rclone, config, _paths, new MountTargetInventory());
+        _mounts ??= new(rclone, config, _paths, new MountTargetInventory(), _clientUserAgent);
         var mountCoordinator = _mounts;
         var reconciled = await mountCoordinator.ReconcileAsync(definitions, token).ConfigureAwait(false);
         if (!reconciled.Succeeded)
@@ -723,7 +733,7 @@ public sealed partial class Worker : BackgroundService
         {
             _lastRuns.TryRemove(obsoleteId, out _);
         }
-        _syncs ??= new(rclone, config, _paths, () => _definitions);
+        _syncs ??= new(rclone, config, _paths, () => _definitions, _clientUserAgent);
         _rclonePath = rclone;
         _configPath = config;
         var isFirstLoad = _settings is null;

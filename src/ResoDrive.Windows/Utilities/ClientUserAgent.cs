@@ -7,11 +7,11 @@ using Microsoft.Win32;
 namespace ResoDrive.Windows;
 
 /// <summary>Non-identifying client and operating-system versions for storage requests.</summary>
-internal static class ClientUserAgent
+public static class ClientUserAgent
 {
     private static readonly Lazy<string> Current = new(Create);
 
-    internal static string Value => Current.Value;
+    public static string Value => Current.Value;
 
     private static string Create()
     {
@@ -46,7 +46,8 @@ internal static class ClientUserAgent
     }
 
     internal static string Format(string? applicationVersion, Version osVersion, string? installationType,
-        string? edition, string? release, int? updateRevision, Architecture clientArchitecture, Architecture osArchitecture)
+        string? edition, string? release, int? updateRevision, Architecture clientArchitecture,
+        Architecture osArchitecture, string? rcloneVersion = null)
     {
         var version = SafeValue(applicationVersion?.Split('+', 2)[0], allowSpaces: false) ?? "unknown";
         var platform = installationType switch
@@ -63,7 +64,17 @@ internal static class ClientUserAgent
         details.Add($"Build: {build}");
         details.Add($"ClientArchitecture: {clientArchitecture.ToString().ToLowerInvariant()}");
         details.Add($"OSArchitecture: {osArchitecture.ToString().ToLowerInvariant()}");
+        if (SafeValue(rcloneVersion, allowSpaces: false) is { } safeRcloneVersion)
+            details.Add($"Rclone: {safeRcloneVersion}");
         return $"ResoDrive/{version} ({string.Join("; ", details)})";
+    }
+
+    public static string WithRcloneVersion(string? rcloneVersion)
+    {
+        var safeVersion = SafeValue(rcloneVersion, allowSpaces: false);
+        return safeVersion is null || !Value.EndsWith(')')
+            ? Value
+            : $"{Value[..^1]}; Rclone: {safeVersion})";
     }
 
     private static string? SafeValue(string? value, bool allowSpaces = true)

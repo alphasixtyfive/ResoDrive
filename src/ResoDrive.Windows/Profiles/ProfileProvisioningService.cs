@@ -147,12 +147,13 @@ public sealed class ProfileProvisioningService
                 installation.Error?.Code ?? "rclone.bundled_invalid",
                 installation.Error?.Message ?? "The managed rclone component is not installed.",
                 installation.Error?.IsTransient ?? false);
+        var clientUserAgent = ClientUserAgent.WithRcloneVersion(installation.Value.Version);
 
         if (profile.Connection is WebDavConnectionDefinition)
         {
             progress?.Report("Checking account");
             var credentialCheck = await CheckWebDavCredentialsAsync(
-                endpoint, request.Username, normalizedPassword, cancellationToken).ConfigureAwait(false);
+                endpoint, request.Username, normalizedPassword, clientUserAgent, cancellationToken).ConfigureAwait(false);
             if (!credentialCheck.Succeeded)
                 return Failure(
                     credentialCheck.Error?.Code ?? "setup.credentials",
@@ -265,7 +266,9 @@ public sealed class ProfileProvisioningService
             var verification = await RunCheckedAsync(
                 installation.Value.ExecutablePath,
                 ["--config", stagedConfig, "--ask-password=false", "--password-command", configPasswordCommand,
-                    "lsf", source, "--max-depth", "1", .. RcloneUserAgentArguments.Create([])],
+                    "lsf", source, "--max-depth", "1",
+                    .. RcloneUserAgentArguments.Create([], Environment.GetEnvironmentVariable("RCLONE_USER_AGENT"),
+                        clientUserAgent)],
                 null, null, cancellationToken).ConfigureAwait(false);
             if (!verification.Succeeded)
                 return FailureFrom(verification, "setup.remote_check", "The configured remote could not be verified.");
@@ -384,11 +387,12 @@ public sealed class ProfileProvisioningService
     }
 
     private async Task<OperationResult> CheckWebDavCredentialsAsync(
-        Uri endpoint, string username, string password, CancellationToken cancellationToken)
+        Uri endpoint, string username, string password, string clientUserAgent,
+        CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(new HttpMethod("PROPFIND"), endpoint);
         request.Headers.Add("Depth", "0");
-        request.Headers.UserAgent.ParseAdd(ClientUserAgent.Value);
+        request.Headers.UserAgent.ParseAdd(clientUserAgent);
         request.Headers.Authorization = new AuthenticationHeaderValue(
             "Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}")));
         try

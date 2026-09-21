@@ -34,4 +34,9 @@ public sealed class RcloneUserAgentArgumentsTests
     public void OtherBackendUserAgentOption_DoesNotSuppressDefault() =>
         Assert.Equal(["--user-agent", ClientUserAgent.Value],
             RcloneUserAgentArguments.Create(["--pikpak-user-agent=ProviderSpecific/1.0"], null));
+
+    [Fact]
+    public void VerifiedRuntimeIdentityIsPassedWithoutReformatting() =>
+        Assert.Equal(["--user-agent", "ResoDrive/0.3.12 (Windows; Rclone: v1.75.0)"],
+            RcloneUserAgentArguments.Create([], null, "ResoDrive/0.3.12 (Windows; Rclone: v1.75.0)"));
 }

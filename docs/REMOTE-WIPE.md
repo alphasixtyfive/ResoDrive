@@ -1,6 +1,6 @@
 # Nextcloud remote wipe: administrator guide
 
-This guide describes ResoDrive 0.3.11. Earlier packages do not include all recovery
+This guide describes ResoDrive 0.3.12. Earlier packages do not include all recovery
 fixes listed in the [changelog](../CHANGELOG.md). Server commands and UI below
 were checked against Nextcloud's official documentation
 and `stable32` source on 21 September 2026; live server acceptance is still required.
@@ -134,8 +134,8 @@ until it runs and can reach Nextcloud again. Each account uses its own app token
 without shared session cookies. HTTPS origin and port must match the registered
 server, redirects are not followed, and installation subdirectories are preserved.
 
-These requests include the running ResoDrive version and available Windows
-edition/release/build details in their HTTP User-Agent. See
+These requests include the running ResoDrive version, verified private rclone version and available
+Windows edition/release/build details in their HTTP User-Agent. See
 [storage client identification](SECURITY.md#storage-client-identification) for
 the fields and server-log visibility. This does not add a separate reporting API.
 
@@ -267,7 +267,7 @@ distinguishes HTTP 200 from 404.
     junction and an outside sentinel; cleanup must refuse the redirected path
     and preserve the outside file.
 11. Repeat with an older ResoDrive connection whose app password is saved but has
-    no local wipe-check entry. Update to 0.3.11 and confirm **Remote wipe configured**
+    no local wipe-check entry. Update to 0.3.12 and confirm **Remote wipe configured**
     appears without another login. Also queue a wipe before starting the updated
     host: cleanup must begin before automatic drives mount. Existing external
     sync folders must remain outside the wipe scope.

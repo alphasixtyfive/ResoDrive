@@ -11,11 +11,13 @@ public sealed class RemoteWipeClient : IDisposable
     private readonly HttpClient _httpClient;
     private readonly bool _ownsClient;
     private readonly TimeSpan _requestTimeout;
+    private string _clientUserAgent;
 
     public RemoteWipeClient(HttpClient? httpClient = null, TimeSpan? requestTimeout = null)
     {
         _ownsClient = httpClient is null;
         _requestTimeout = requestTimeout ?? TimeSpan.FromSeconds(15);
+        _clientUserAgent = ClientUserAgent.Value;
         // Injected clients must preserve the same redirect and cookie isolation.
         _httpClient = httpClient ?? CreateHttpClient();
     }
@@ -32,6 +34,12 @@ public sealed class RemoteWipeClient : IDisposable
         Timeout = Timeout.InfiniteTimeSpan
     };
 
+    public void SetClientUserAgent(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        Volatile.Write(ref _clientUserAgent, value);
+    }
+
     public async Task<bool> IsWipeRequestedAsync(
         RemoteWipeRegistration registration,
         CancellationToken cancellationToken = default)
@@ -45,7 +53,7 @@ public sealed class RemoteWipeClient : IDisposable
 
         using var probe = new HttpRequestMessage(new HttpMethod("PROPFIND"), probeEndpoint);
         probe.Headers.Add("Depth", "0");
-        probe.Headers.UserAgent.ParseAdd(ClientUserAgent.Value);
+        probe.Headers.UserAgent.ParseAdd(Volatile.Read(ref _clientUserAgent));
         AddBasicAuthentication(probe, registration.Username, registration.AppToken);
 
         try
@@ -57,7 +65,8 @@ public sealed class RemoteWipeClient : IDisposable
                     return false;
             }
 
-            using var check = CreateTokenRequest(serverBase, "index.php/core/wipe/check", registration.AppToken);
+            using var check = CreateTokenRequest(
+                serverBase, "index.php/core/wipe/check", registration.AppToken, Volatile.Read(ref _clientUserAgent));
             using var checkResponse = await _httpClient.SendAsync(
                 check, HttpCompletionOption.ResponseHeadersRead, requestToken).ConfigureAwait(false);
             if (checkResponse.StatusCode != HttpStatusCode.OK)
@@ -95,7 +104,8 @@ public sealed class RemoteWipeClient : IDisposable
             throw new InvalidOperationException("The remote-wipe registration is not a valid HTTPS endpoint.");
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(_requestTimeout);
-        using var request = CreateTokenRequest(serverBase, "index.php/core/wipe/success", registration.AppToken);
+        using var request = CreateTokenRequest(
+            serverBase, "index.php/core/wipe/success", registration.AppToken, Volatile.Read(ref _clientUserAgent));
         using var response = await _httpClient.SendAsync(
             request, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false);
         // Nextcloud removes the token on acknowledgement. A retry after a lost response
@@ -109,13 +119,14 @@ public sealed class RemoteWipeClient : IDisposable
         return true;
     }
 
-    private static HttpRequestMessage CreateTokenRequest(Uri serverBase, string path, string token)
+    private static HttpRequestMessage CreateTokenRequest(
+        Uri serverBase, string path, string token, string clientUserAgent)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, new Uri(serverBase, path))
         {
             Content = new FormUrlEncodedContent([new KeyValuePair<string, string>("token", token)])
         };
-        request.Headers.UserAgent.ParseAdd(ClientUserAgent.Value);
+        request.Headers.UserAgent.ParseAdd(clientUserAgent);
         return request;
     }
 

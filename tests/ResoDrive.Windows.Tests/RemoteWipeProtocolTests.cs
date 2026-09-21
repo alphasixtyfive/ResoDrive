@@ -92,10 +92,11 @@ public sealed class RemoteWipeProtocolTests
     [InlineData("dedicated+token&name=ä/?#", "token=dedicated%2Btoken%26name%3D%C3%A4%2F%3F%23")]
     public async Task RequestsPreserveSubdirectoryAndEncodeTokenOnlyInTheBody(string token, string encodedBody)
     {
+        var clientUserAgent = ClientUserAgent.WithRcloneVersion("v1.75.0");
         List<(string Method, Uri Uri, string? Authorization, string? ContentType, string Body)> requests = [];
         using var http = new HttpClient(new AsyncHandler(async (request, cancellationToken) =>
         {
-            Assert.Equal(ClientUserAgent.Value, request.Headers.UserAgent.ToString());
+            Assert.Equal(clientUserAgent, request.Headers.UserAgent.ToString());
             requests.Add((request.Method.Method, request.RequestUri!, request.Headers.Authorization?.ToString(),
                 request.Content?.Headers.ContentType?.MediaType,
                 request.Content is null ? "" : await request.Content.ReadAsStringAsync(cancellationToken)));
@@ -103,6 +104,7 @@ public sealed class RemoteWipeProtocolTests
                 new(HttpStatusCode.OK) { Content = new StringContent("{\"wipe\":true}") };
         }));
         using var client = new RemoteWipeClient(http);
+        client.SetClientUserAgent(clientUserAgent);
         var registration = Registration with { AppToken = token };
         Assert.True(await client.IsWipeRequestedAsync(registration));
         Assert.True(await client.SignalSuccessAsync(registration));

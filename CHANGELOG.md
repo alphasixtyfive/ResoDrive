@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## [0.3.12] - 2026-09-21
+
+- Include the verified bundled rclone version in ResoDrive's storage User-Agent so administrators can distinguish the client and storage engine versions.
+- Use the same client identity for mounts, sync jobs, setup checks and Nextcloud remote-wipe requests.
+
 ## [0.3.11] - 2026-09-21
 
 - Enable remote wipe for existing Nextcloud app-password connections after updating, without asking users to reconnect.
@@ -110,6 +115,7 @@ First public preview of ResoDrive.
 - Install through a small setup bundle that downloads the .NET Desktop Runtime
   only when it is missing.
 
+[0.3.12]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.12
 [0.3.11]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.11
 [0.3.10]: https://github.com/alphasixtyfive/ResoDrive/tree/v0.3.10
 [0.3.9]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.9

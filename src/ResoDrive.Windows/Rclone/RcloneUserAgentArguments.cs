@@ -3,9 +3,12 @@ namespace ResoDrive.Windows;
 internal static class RcloneUserAgentArguments
 {
     public static IReadOnlyList<string> Create(IEnumerable<string> arguments) =>
-        Create(arguments, Environment.GetEnvironmentVariable("RCLONE_USER_AGENT"));
+        Create(arguments, Environment.GetEnvironmentVariable("RCLONE_USER_AGENT"), ClientUserAgent.Value);
 
-    internal static IReadOnlyList<string> Create(IEnumerable<string> arguments, string? inheritedUserAgent)
+    internal static IReadOnlyList<string> Create(
+        IEnumerable<string> arguments,
+        string? inheritedUserAgent,
+        string? defaultUserAgent = null)
     {
         // Keep explicit rclone overrides. The manager's default is only for
         // requests that would otherwise use rclone's generic identification.
@@ -14,6 +17,6 @@ internal static class RcloneUserAgentArguments
                 argument.StartsWith("--user-agent=", StringComparison.OrdinalIgnoreCase)))
             return [];
 
-        return ["--user-agent", ClientUserAgent.Value];
+        return ["--user-agent", defaultUserAgent ?? ClientUserAgent.Value];
     }
 }

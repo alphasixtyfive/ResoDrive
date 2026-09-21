@@ -82,6 +82,29 @@ public sealed class ClientUserAgentTests
         AssertValidHeader(ClientUserAgent.Value);
     }
 
+    [Fact]
+    public void VerifiedRcloneVersionIsIncludedWithoutChangingTheProductToken()
+    {
+        var value = ClientUserAgent.Format("0.3.12", new Version(10, 0, 26200),
+            "Client", "Professional", "25H2", 9457, Architecture.X64, Architecture.X64, "v1.75.0");
+
+        Assert.Equal("ResoDrive/0.3.12 (Windows 11; Edition: Professional; Release: 25H2; " +
+            "Build: 10.0.26200.9457; ClientArchitecture: x64; OSArchitecture: x64; Rclone: v1.75.0)", value);
+        AssertValidHeader(value);
+    }
+
+    [Theory]
+    [InlineData("v1.75.0\r\nInjected: true")]
+    [InlineData("rclone v1.75.0")]
+    [InlineData("")]
+    public void InvalidRcloneVersionIsOmitted(string version)
+    {
+        var value = ClientUserAgent.WithRcloneVersion(version);
+
+        Assert.Equal(ClientUserAgent.Value, value);
+        AssertValidHeader(value);
+    }
+
     private static void AssertValidHeader(string value)
     {
         using var request = new HttpRequestMessage();

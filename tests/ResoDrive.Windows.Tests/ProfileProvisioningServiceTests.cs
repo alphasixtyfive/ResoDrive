@@ -212,7 +212,7 @@ public sealed class ProfileProvisioningServiceTests : IDisposable
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
-            Assert.Equal(ClientUserAgent.Value, request.Headers.UserAgent.ToString());
+            Assert.Equal(ClientUserAgent.WithRcloneVersion("v1.75.0"), request.Headers.UserAgent.ToString());
             return Task.FromResult(new HttpResponseMessage(statusCode));
         }
     }

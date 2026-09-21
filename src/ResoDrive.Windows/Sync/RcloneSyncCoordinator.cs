@@ -11,6 +11,7 @@ public sealed class RcloneSyncCoordinator : IDisposable
     private readonly string _rclonePath;
     private readonly string _configPath;
     private readonly ApplicationPaths _paths;
+    private readonly string _clientUserAgent;
     private readonly Func<IReadOnlyList<MountDefinition>> _definitionProvider;
     private readonly IRcloneProcessRunner _processRunner;
     private readonly SyncRunStateStore _runStateStore;
@@ -23,7 +24,17 @@ public sealed class RcloneSyncCoordinator : IDisposable
         string configPath,
         ApplicationPaths paths,
         Func<IReadOnlyList<MountDefinition>> definitionProvider)
-        : this(rclonePath, configPath, paths, definitionProvider, new RcloneProcessRunner())
+        : this(rclonePath, configPath, paths, definitionProvider, new RcloneProcessRunner(), ClientUserAgent.Value)
+    {
+    }
+
+    public RcloneSyncCoordinator(
+        string rclonePath,
+        string configPath,
+        ApplicationPaths paths,
+        Func<IReadOnlyList<MountDefinition>> definitionProvider,
+        string clientUserAgent)
+        : this(rclonePath, configPath, paths, definitionProvider, new RcloneProcessRunner(), clientUserAgent)
     {
     }
 
@@ -32,13 +43,15 @@ public sealed class RcloneSyncCoordinator : IDisposable
         string configPath,
         ApplicationPaths paths,
         Func<IReadOnlyList<MountDefinition>> definitionProvider,
-        IRcloneProcessRunner processRunner)
+        IRcloneProcessRunner processRunner,
+        string? clientUserAgent = null)
     {
         _rclonePath = Path.GetFullPath(rclonePath);
         _configPath = Path.GetFullPath(configPath);
         _paths = paths ?? throw new ArgumentNullException(nameof(paths));
         _definitionProvider = definitionProvider ?? throw new ArgumentNullException(nameof(definitionProvider));
         _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
+        _clientUserAgent = clientUserAgent ?? ClientUserAgent.Value;
         _runStateStore = new SyncRunStateStore(paths);
         _accountData = new(paths);
         foreach (var snapshot in _runStateStore.Load())
@@ -297,7 +310,8 @@ public sealed class RcloneSyncCoordinator : IDisposable
         yield return "--config";
         yield return _configPath;
         yield return "--ask-password=false";
-        foreach (var argument in RcloneUserAgentArguments.Create(job.Arguments))
+        foreach (var argument in RcloneUserAgentArguments.Create(
+                     job.Arguments, Environment.GetEnvironmentVariable("RCLONE_USER_AGENT"), _clientUserAgent))
             yield return argument;
         if (File.Exists(_paths.ConfigSecretFile))
         {
