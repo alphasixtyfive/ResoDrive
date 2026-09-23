@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## [0.3.14] - 2026-09-23
+
+- Remove remote-wipe setup labels from drive cards and clarify managed-copy guidance.
+- Keep the upload-status warning visible when statistics are unavailable, including when previous counts were zero or unknown.
+- Apply the same sync action availability rules in the tray and main window.
+
 ## [0.3.13] - 2026-09-21
 
 - Refresh the reported rclone version after the managed engine is installed, repaired or updated, including during first-time setup.
@@ -119,6 +125,7 @@ First public preview of ResoDrive.
 - Install through a small setup bundle that downloads the .NET Desktop Runtime
   only when it is missing.
 
+[0.3.14]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.14
 [0.3.13]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.13
 [0.3.12]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.12
 [0.3.11]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.11

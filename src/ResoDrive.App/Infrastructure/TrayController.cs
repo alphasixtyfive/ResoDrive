@@ -159,7 +159,7 @@ internal sealed class TrayController : IDisposable
             menu.Add(
                 $"{sync.ActionText} {sync.Name}\t{sync.MountName}",
                 () => _ = RunActionAsync(() => _syncAction(sync), result => ShowSyncResult(sync, result)),
-                sync.Enabled || sync.IsBusy);
+                sync.CanAct);
         }
 
         if (mounts.Count == 0 && syncJobs.Count == 0)

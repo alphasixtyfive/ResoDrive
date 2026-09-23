@@ -1,6 +1,6 @@
 # Nextcloud remote wipe: administrator guide
 
-This guide describes ResoDrive 0.3.13. Earlier packages do not include all recovery
+This guide describes ResoDrive 0.3.14. Earlier packages do not include all recovery
 fixes listed in the [changelog](../CHANGELOG.md). Server commands and UI below
 were checked against Nextcloud's official documentation
 and `stable32` source on 21 September 2026; live server acceptance is still required.
@@ -19,9 +19,9 @@ change a password. It works offline, with server checks resuming when connected.
 
 The host checks for a pending wipe before starting automatic drives. It checks
 the saved connection list again during its normal minute-by-minute monitoring;
-unchanged files do not launch another configuration reader. **Remote wipe
-configured** on a drive means its local wipe-check entry exists. **Remote wipe
-setup needs attention** means the saved connection could not be safely recovered.
+unchanged files do not launch another configuration reader. The protected local
+store and **Managed local copy** availability can be checked as described below;
+neither proves that the server will accept or complete a wipe.
 
 Recovery recognizes Nextcloud WebDAV connections and generic WebDAV connections
 using standard `/remote.php/dav/files/<user>` or `/remote.php/webdav` URLs. Existing
@@ -267,10 +267,14 @@ distinguishes HTTP 200 from 404.
     junction and an outside sentinel; cleanup must refuse the redirected path
     and preserve the outside file.
 11. Repeat with an older ResoDrive connection whose app password is saved but has
-    no local wipe-check entry. Update to 0.3.12 and confirm **Remote wipe configured**
-    appears without another login. Also queue a wipe before starting the updated
-    host: cleanup must begin before automatic drives mount. Existing external
-    sync folders must remain outside the wipe scope.
+    no local wipe-check entry. Update to the version under test and confirm
+    `remote-wipe.dpapi` exists without exposing its contents. Open a new download
+    job for that connection and confirm **Managed local copy** is available
+    without another login; cancel the editor if no job is needed. These checks
+    establish local recovery only. Also queue a wipe before starting the updated
+    host: cleanup must begin before automatic drives mount. Verify client cleanup
+    and server acknowledgement as above. Existing external sync folders must
+    remain outside the wipe scope.
 
 Record request acceptance, client cleanup, server acknowledgement and preserved
 out-of-scope files separately. Do not treat a successful API command or missing

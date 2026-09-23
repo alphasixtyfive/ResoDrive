@@ -1,4 +1,3 @@
-using System.Windows;
 using ResoDrive.Core.Settings;
 using ResoDrive.Windows;
 
@@ -7,7 +6,7 @@ namespace ResoDrive.App.Tests;
 public sealed class RemoteWipeStatusPresentationTests
 {
     [Fact]
-    public void EnrollmentChangesUpdateAnIdleDriveWithoutAChangeToItsMountState()
+    public void EnrollmentChangesDoNotAppearInDriveDetailsOrRefreshTheCard()
     {
         var mount = Mount();
         var status = new HostMountStatus(mount.Id, "Stopped", "Not mounted");
@@ -25,25 +24,22 @@ public sealed class RemoteWipeStatusPresentationTests
             changed.Clear();
             row.ApplyStatus(status with { RemoteWipeStatus = text });
 
-            Assert.Equal(text, row.RemoteWipeStatus);
-            Assert.Equal(Visibility.Visible, row.RemoteWipeStatusVisibility);
-            Assert.Contains(text, row.DetailText, StringComparison.Ordinal);
-            Assert.Contains(nameof(MountRow.RemoteWipeStatus), changed);
-            Assert.Contains(nameof(MountRow.DetailText), changed);
+            Assert.DoesNotContain("Remote wipe", row.DetailText, StringComparison.OrdinalIgnoreCase);
+            Assert.Empty(changed);
             Assert.Equal("Not mounted", row.StatusText);
             Assert.Equal("Mount", row.ActionText);
         }
     }
 
     [Fact]
-    public async Task AnOlderHostWithoutEnrollmentStatusClearsThePreviousLabel()
+    public async Task AnOlderHostWithoutEnrollmentStatusStillUpdatesTheDrive()
     {
         var mount = Mount();
         var row = new MountRow(mount, new HostMountStatus(
             mount.Id, "Mounted", "Mounted", RemoteWipeStatus: "Remote wipe configured"));
         await using var message = new MemoryStream();
         await HostProtocol.WriteAsync(message,
-            new { mountId = mount.Id, lifecycle = "Mounted", status = "Mounted" },
+            new { mountId = mount.Id, lifecycle = "Stopped", status = "Not mounted" },
             CancellationToken.None);
         message.Position = 0;
         var oldStatus = await HostProtocol.ReadAsync<HostMountStatus>(message, CancellationToken.None);
@@ -52,14 +48,13 @@ public sealed class RemoteWipeStatusPresentationTests
 
         Assert.NotNull(oldStatus);
         Assert.Null(oldStatus.RemoteWipeStatus);
-        Assert.Empty(row.RemoteWipeStatus);
-        Assert.Equal(Visibility.Collapsed, row.RemoteWipeStatusVisibility);
         Assert.DoesNotContain("Remote wipe", row.DetailText, StringComparison.Ordinal);
-        Assert.True(row.IsMounted);
+        Assert.False(row.IsMounted);
+        Assert.Equal("Not mounted", row.StatusText);
     }
 
     [Fact]
-    public void InterruptedHostHidesEnrollmentWithoutDiscardingTransfersAndRefreshRestoresIt()
+    public void EnrollmentDoesNotAppearWhenLoadingOrRefreshingActiveTransfers()
     {
         var mount = Mount();
         var status = new HostMountStatus(mount.Id, "Mounted", "Mounted",
@@ -69,9 +64,6 @@ public sealed class RemoteWipeStatusPresentationTests
         var row = Assert.Single(model.Mounts);
         var uploads = row.UploadActivityText;
 
-        model.ClearRemoteWipeStatuses();
-
-        Assert.Equal(Visibility.Collapsed, row.RemoteWipeStatusVisibility);
         Assert.DoesNotContain("Remote wipe configured", row.DetailText, StringComparison.Ordinal);
         Assert.True(row.IsMounted);
         Assert.Equal("Unmount", row.ActionText);
@@ -79,8 +71,7 @@ public sealed class RemoteWipeStatusPresentationTests
 
         model.ApplyStatus([status]);
 
-        Assert.Equal("Remote wipe configured", row.RemoteWipeStatus);
-        Assert.Equal(Visibility.Visible, row.RemoteWipeStatusVisibility);
+        Assert.DoesNotContain("Remote wipe", row.DetailText, StringComparison.Ordinal);
         Assert.Equal(uploads, row.UploadActivityText);
     }
 

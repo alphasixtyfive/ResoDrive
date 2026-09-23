@@ -288,7 +288,7 @@ public partial class SyncEditorWindow : WpfWindow
             LocalCopyNotice.Text = managed
                 ? "Stored in ResoDrive's folder and included in Nextcloud remote wipe. External copies and upload originals are not covered."
                 : IsDownload && !IsEnrolled
-                    ? "Remote wipe must be configured before using managed copies. Check the drive's remote-wipe status. External folders are not included in remote wipe."
+                    ? "Managed copies are unavailable for this connection. Use a Nextcloud app-password connection or choose an external folder. External folders are not included in Nextcloud remote wipe."
                     : "External folders and upload originals are not included in Nextcloud remote wipe.";
             if (managed && _existing is { ManagedLocalCopy: false })
                 LocalCopyNotice.Text += " Existing files stay in the old folder; new downloads use the managed folder.";

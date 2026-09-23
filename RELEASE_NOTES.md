@@ -1,3 +1,7 @@
-ResoDrive 0.3.13 fixes devices that reported the ResoDrive and Windows versions but omitted the rclone version after first-time setup, repair or an engine update.
+The drive list is cleaner, with the extra setup status line removed.
 
-Existing installations check for this release after startup and offer an Update action in Settings. ResoDrive does not download or install it until the user chooses Update and confirms the installation.
+- Fixed an upload warning that could disappear when transfer statistics were unavailable.
+- Fixed tray sync actions that were enabled when they couldn't run.
+- Made the instructions for managed local copies clearer.
+
+Download **ResoDrive-Setup.exe** below, or update from Settings in ResoDrive.
