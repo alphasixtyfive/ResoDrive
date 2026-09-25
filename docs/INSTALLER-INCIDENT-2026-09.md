@@ -194,4 +194,16 @@ orphaned-UI tests passed against that downloaded draft executable and preserved
 disposable settings and cache. These checks do not simulate the old user's
 in-app Update click and credential prompt. The owner requested public GitHub
 publication to run that final check on the affected standard-user desktop;
-the result remains to be recorded.
+the first live result is recorded below.
+
+The first live attempt on a standard-user desktop still reported a different
+Windows account after the administrator password was accepted. The user could
+not provide the preparation files, so the exact remaining process is unknown.
+The public 0.3.16 updater, which controls that first hop, can proceed after
+`host.unavailable` without proving that an installed host exited. It also
+starts MSI as soon as its parent window exits after an accepted shutdown;
+in-flight host recovery can start another host before that window closes.
+The 0.3.17 installer can only wait for a different-account process to exit;
+it correctly cannot terminate a host that may still own uploads. The release
+notes now give an explicit tray Exit and manual Setup recovery for this case.
+Do not count the first live attempt as successful in-app acceptance.
