@@ -17,7 +17,6 @@ public partial class MainWindow
             return;
         StatusVisuals.ApplyPending(RcloneStatusIcon);
         SetLiveText(RcloneStatusText, "Checking…");
-        RcloneHostIdentityStatusText.Visibility = Visibility.Collapsed;
         _rcloneRuntimeReady = false;
         AddMountButton.IsEnabled = false;
         var generation = ++_componentStatusGeneration;
@@ -42,7 +41,6 @@ public partial class MainWindow
             {
                 StatusVisuals.Apply(RcloneStatusIcon, success: false, error: true);
                 SetLiveText(RcloneStatusText, "Could not inspect");
-                RcloneHostIdentityStatusText.Visibility = Visibility.Collapsed;
             }
             else
             {
@@ -94,7 +92,6 @@ public partial class MainWindow
         {
             StatusVisuals.Apply(RcloneStatusIcon, success: false, error: true);
             _rcloneInstalledVersion = null;
-            RcloneHostIdentityStatusText.Visibility = Visibility.Collapsed;
             _rcloneRepairRequested = result.Error?.Code == "rclone.invalid";
             _rcloneRuntimeReady = false;
             var missing = result.Error?.Code == "rclone.not_installed";
@@ -117,7 +114,6 @@ public partial class MainWindow
         _rcloneRepairRequested = false;
         _rcloneRuntimeReady = true;
         _rcloneInstalledVersion = result.Value.Version;
-        RcloneHostIdentityStatusText.Visibility = Visibility.Visible;
         AddMountButton.IsEnabled = !_rcloneMutationBusy;
         UpdateRcloneButtonText.Text = "Update";
         SetRcloneStatusDetail(_rcloneUpdate is null
@@ -155,7 +151,6 @@ public partial class MainWindow
             _rcloneRuntimeReady = !string.IsNullOrEmpty(result.Value.CurrentVersion);
             var missing = string.IsNullOrEmpty(result.Value.CurrentVersion);
             _rcloneInstalledVersion = missing ? null : result.Value.CurrentVersion;
-            RcloneHostIdentityStatusText.Visibility = missing ? Visibility.Collapsed : Visibility.Visible;
             UpdateRcloneButtonText.Text = missing ? "Download" : "Update";
             SetRcloneStatusDetail(missing
                 ? $"Download {result.Value.AvailableVersion}"

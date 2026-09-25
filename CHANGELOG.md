@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.16] - 2026-09-25
+
+- Show a pending drive action while automatic mounts are being prepared at startup, then use the background host's reported state.
+- Remove the misleading “detected” label from the right side of the rclone row in Settings. Host version checks remain in diagnostics.
+
 ## [0.3.15] - 2026-09-25
 
 - Let Setup close a verified leftover ResoDrive window when the background host is absent, and retry a slow host before stopping an upgrade.
@@ -132,6 +137,7 @@ First public preview of ResoDrive.
 - Install through a small setup bundle that downloads the .NET Desktop Runtime
   only when it is missing.
 
+[0.3.16]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.16
 [0.3.15]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.15
 [0.3.14]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.14
 [0.3.13]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.13

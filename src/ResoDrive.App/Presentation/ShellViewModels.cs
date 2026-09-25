@@ -9,6 +9,12 @@ using MediaBrush = System.Windows.Media.Brush;
 
 namespace ResoDrive.App;
 
+internal static class HostStatusPresentation
+{
+    public static bool HasUsableMountStatus(HostResponse response) =>
+        response.Succeeded && response.InitializationErrorCode is null;
+}
+
 public sealed class ShellViewModel : NotifyBase
 {
     private readonly HashSet<(Guid JobId, DateTimeOffset CompletedAt)> _loggedSyncRuns = [];
@@ -38,7 +44,8 @@ public sealed class ShellViewModel : NotifyBase
     public void Load(
         ManagerSettings settings,
         IReadOnlyList<HostMountStatus>? statuses,
-        IReadOnlyList<HostSyncStatus>? syncStatuses = null
+        IReadOnlyList<HostSyncStatus>? syncStatuses = null,
+        bool hostUnavailable = false
     )
     {
         var statusMap = (statuses ?? []).ToDictionary(status => status.MountId);
@@ -50,7 +57,7 @@ public sealed class ShellViewModel : NotifyBase
         foreach (var mount in settings.Mounts)
         {
             statusMap.TryGetValue(mount.Id, out var status);
-            Mounts.Add(new MountRow(mount, status));
+            Mounts.Add(new MountRow(mount, status, hostUnavailable));
             foreach (var job in mount.SyncJobs)
             {
                 syncMap.TryGetValue((mount.Id, job.Id), out var syncStatus);
@@ -75,6 +82,13 @@ public sealed class ShellViewModel : NotifyBase
             map.TryGetValue(mount.Id, out var status);
             mount.ApplyStatus(status);
         }
+        Refresh();
+    }
+
+    public void ApplyHostUnavailable()
+    {
+        foreach (var mount in Mounts)
+            mount.MarkHostUnavailable();
         Refresh();
     }
 
@@ -219,11 +233,15 @@ public sealed class MountRow : NotifyBase
     private MountLifecycle _lifecycle = MountLifecycle.Stopped;
     private string _status = "Not mounted";
     private string _errorDetail = string.Empty;
+    private bool _hasStatus;
+    private bool _hostUnavailable;
 
-    public MountRow(MountSettings settings, HostMountStatus? status)
+    public MountRow(MountSettings settings, HostMountStatus? status, bool hostUnavailable = false)
     {
         Settings = settings;
         ApplyStatus(status);
+        if (hostUnavailable)
+            MarkHostUnavailable();
     }
 
     public MountSettings Settings { get; }
@@ -271,7 +289,9 @@ public sealed class MountRow : NotifyBase
             : $"{DriveDisplay}  ·  {ConnectionHostDisplay}  ·  {ConnectionTypeDisplay}";
     public bool IsMounted => _lifecycle == MountLifecycle.Mounted;
     public bool IsTransient =>
+        (Enabled && IsAutomaticMount && !_hasStatus && !_hostUnavailable) ||
         _lifecycle is MountLifecycle.Starting or MountLifecycle.Stopping or MountLifecycle.WaitingToRestart;
+    public bool NeedsHostRecovery => Enabled && !_hasStatus && _hostUnavailable;
     public bool ShouldStop =>
         IsMounted || _lifecycle is MountLifecycle.Starting or MountLifecycle.Degraded or MountLifecycle.WaitingToRestart;
     public string StatusText => _status;
@@ -281,12 +301,15 @@ public sealed class MountRow : NotifyBase
             ? System.Windows.Visibility.Visible
             : System.Windows.Visibility.Collapsed;
     public System.Windows.Visibility StatusVisibility =>
+        (!_hasStatus && Enabled) ||
         _lifecycle is MountLifecycle.Failed or MountLifecycle.Degraded or MountLifecycle.WaitingToRestart
         || (!Enabled && !ShouldStop)
             ? System.Windows.Visibility.Visible
             : System.Windows.Visibility.Collapsed;
     public MediaBrush StatusBrush =>
-        _lifecycle switch
+        !_hasStatus && Enabled
+            ? _hostUnavailable ? StatusPalette.Warning : StatusPalette.Info
+            : _lifecycle switch
         {
             MountLifecycle.Mounted => StatusPalette.Success,
             MountLifecycle.Starting or MountLifecycle.Stopping => StatusPalette.Info,
@@ -297,6 +320,8 @@ public sealed class MountRow : NotifyBase
     public string ActionText =>
         !Enabled && !ShouldStop
             ? "Disabled"
+            : !_hasStatus
+                ? _hostUnavailable ? "Retry" : IsAutomaticMount ? "Starting…" : "Waiting…"
             : _lifecycle switch
             {
                 MountLifecycle.Mounted => "Unmount",
@@ -309,6 +334,8 @@ public sealed class MountRow : NotifyBase
     public string ActionGlyph =>
         !Enabled && !ShouldStop
             ? "\uE711" // Cancel
+            : !_hasStatus
+                ? _hostUnavailable ? "\uE72C" : "\uE71A" // Refresh or pending
             : _lifecycle switch
             {
                 MountLifecycle.Mounted => "\uE8CD", // DisconnectDrive
@@ -319,14 +346,22 @@ public sealed class MountRow : NotifyBase
             };
     public bool CanOpen => IsMounted;
     public bool CanAct =>
-        (Enabled || ShouldStop) && _lifecycle is not MountLifecycle.Starting and not MountLifecycle.Stopping;
+        NeedsHostRecovery ||
+        (_hasStatus && (Enabled || ShouldStop) &&
+            _lifecycle is not MountLifecycle.Starting and not MountLifecycle.Stopping);
     public string DetailText => $"{StatusText}  ·  {LocationDisplay}  ·  {Source}";
     public string OptionsAccessibleName => $"Open settings for {Name}";
     public string OpenAccessibleName => $"Open {Name} ({DriveDisplay}) in File Explorer";
     public string ActionAccessibleName => $"{ActionText} {Name}";
+    private bool IsAutomaticMount => Settings.AutoMount.Equals(
+        "OnApplicationStart", StringComparison.OrdinalIgnoreCase);
 
     public void ApplyStatus(HostMountStatus? status)
     {
+        var hadStatus = _hasStatus;
+        var hostWasUnavailable = _hostUnavailable;
+        _hasStatus = status is not null;
+        _hostUnavailable = false;
         var recognized = Enum.TryParse(status?.Lifecycle, true, out MountLifecycle lifecycle);
         var nextLifecycle = recognized ? lifecycle : MountLifecycle.Stopped;
         var previousLifecycle = _lifecycle;
@@ -336,12 +371,13 @@ public sealed class MountRow : NotifyBase
             !Enabled && !ShouldStop
                 ? "Disabled. Enable it in drive settings."
                 : status is null
-                    ? "Not mounted"
+                    ? IsAutomaticMount ? "Preparing automatic mount" : "Waiting for background host"
                     : recognized
                         ? nextLifecycle == MountLifecycle.Failed ? "Mount failed" : detail
                         : "Unknown mount state";
         var nextErrorDetail = nextLifecycle == MountLifecycle.Failed ? detail : string.Empty;
-        if (previousLifecycle == nextLifecycle && _status == nextStatus &&
+        if (hadStatus == _hasStatus && hostWasUnavailable == _hostUnavailable &&
+            previousLifecycle == nextLifecycle && _status == nextStatus &&
             _errorDetail == nextErrorDetail && _uploadsQueued == status?.UploadsQueued &&
             _uploadsInProgress == status?.UploadsInProgress && _uploadStatusStale == (status?.UploadStatusStale ?? false))
             return;
@@ -350,6 +386,15 @@ public sealed class MountRow : NotifyBase
         _uploadsQueued = status?.UploadsQueued;
         _uploadsInProgress = status?.UploadsInProgress;
         _uploadStatusStale = status?.UploadStatusStale ?? false;
+        ChangedState();
+    }
+
+    public void MarkHostUnavailable()
+    {
+        if (_hasStatus || _hostUnavailable)
+            return;
+        _hostUnavailable = true;
+        _status = "Background host unavailable";
         ChangedState();
     }
 
@@ -370,6 +415,7 @@ public sealed class MountRow : NotifyBase
         Changed(nameof(CanAct));
         Changed(nameof(IsMounted));
         Changed(nameof(IsTransient));
+        Changed(nameof(NeedsHostRecovery));
         Changed(nameof(ActionAccessibleName));
     }
 }

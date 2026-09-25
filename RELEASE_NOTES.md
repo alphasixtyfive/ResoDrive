@@ -1,5 +1,5 @@
-ResoDrive 0.3.15 makes updates more reliable when an old ResoDrive window is still open after its background host has stopped. Setup checks for active storage work before closing that window. If uploads are still running or the process cannot be verified, it asks you to try again once the work is finished. Your settings and cache stay in place.
+ResoDrive 0.3.16 makes the drive controls clearer just after the app opens. Drives set to mount automatically now show that startup is in progress while ResoDrive prepares them. The action becomes available when the background host reports the drive's state, so it no longer briefly invites you to mount a drive that is already on its way.
 
-ResoDrive also retries the rclone version check after a temporary startup failure. Settings shows the version detected by the background host, and the rclone status now fits on one line. A drive that was already mounted before detection recovered may need a safe reconnect before its server sees the version.
+The rclone row in Settings now keeps its version and update status together. We removed the stray “detected” label on the far right. The background host's version-check result is still available in diagnostic exports.
 
 Download **ResoDrive-Setup.exe** below, or check for updates in ResoDrive Settings.

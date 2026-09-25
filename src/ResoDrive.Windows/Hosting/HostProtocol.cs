@@ -49,7 +49,9 @@ public sealed record HostResponse(
     string? HostBaseDirectory = null,
     int? HostProcessId = null,
     string? ReportedRcloneVersion = null,
-    string? RcloneIdentityErrorCode = null);
+    string? RcloneIdentityErrorCode = null,
+    string? InitializationErrorCode = null,
+    string? InitializationErrorMessage = null);
 
 public static class HostProtocol
 {

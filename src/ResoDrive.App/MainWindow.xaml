@@ -645,7 +645,6 @@
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="Auto" />
                       <ColumnDefinition Width="*" />
-                      <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <TextBlock Text="rclone" FontWeight="SemiBold" Margin="0,0,10,0" VerticalAlignment="Center" />
                     <TextBlock
@@ -657,17 +656,6 @@
                       TextWrapping="NoWrap"
                       VerticalAlignment="Center"
                       ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
-                      AutomationProperties.LiveSetting="Polite"
-                    />
-                    <TextBlock
-                      x:Name="RcloneHostIdentityStatusText"
-                      Grid.Column="2"
-                      Text="· checking"
-                      Style="{StaticResource ComponentStatusText}"
-                      Margin="0,0,8,0"
-                      TextWrapping="NoWrap"
-                      VerticalAlignment="Center"
-                      Visibility="Collapsed"
                       AutomationProperties.LiveSetting="Polite"
                     />
                   </Grid>

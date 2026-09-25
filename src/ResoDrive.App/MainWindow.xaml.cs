@@ -260,21 +260,24 @@ public partial class MainWindow : WpfWindow
                 return false;
             response = takeover;
         }
+        var hostReady = HostStatusPresentation.HasUsableMountStatus(response);
         _model.Load(
             _settings,
-            response.Succeeded ? response.Mounts : null,
-            response.Succeeded ? response.SyncJobs : null
+            hostReady ? response.Mounts : null,
+            hostReady ? response.SyncJobs : null,
+            hostUnavailable: !hostReady
         );
         UpdateTrayStatus();
         LoadSettingsControls();
         UpdateConnectionStatus();
-        if (!response.Succeeded)
+        if (!hostReady)
         {
-            ShowHostInterrupted(response.ErrorMessage, recoveryExhausted: false);
+            var detail = response.InitializationErrorMessage ?? response.ErrorMessage;
+            ShowHostInterrupted(detail, recoveryExhausted: false);
             _model.AddLogEntry(
                 "\uE783",
                 "Background host unavailable",
-                response.ErrorMessage ?? "The host did not respond.",
+                detail ?? "The host did not respond.",
                 true
             );
         }
@@ -484,10 +487,12 @@ public partial class MainWindow : WpfWindow
                 return;
 
             var status = await HostClient.SendAsync(new HostRequest("status"));
+            var hostReady = HostStatusPresentation.HasUsableMountStatus(status);
             _model.Load(
                 _settings,
-                status.Succeeded ? status.Mounts : null,
-                status.Succeeded ? status.SyncJobs : null);
+                hostReady ? status.Mounts : null,
+                hostReady ? status.SyncJobs : null,
+                hostUnavailable: !hostReady);
             UpdateTrayStatus();
         }
         catch (Exception exception)
@@ -548,7 +553,7 @@ public partial class MainWindow : WpfWindow
         try
         {
             var response = await HostClient.SendAsync(new HostRequest("status"));
-            if (response.Succeeded)
+            if (HostStatusPresentation.HasUsableMountStatus(response))
             {
                 if (_hostUnavailableReported)
                 {
@@ -556,37 +561,28 @@ public partial class MainWindow : WpfWindow
                     _hostUnavailableReported = false;
                 }
                 ShowHostConnected();
-                SetLiveText(RcloneHostIdentityStatusText,
-                    response.ReportedRcloneVersion is { Length: > 0 }
-                        ? "· detected"
-                        : response.RcloneIdentityErrorCode is not null
-                            ? "· retrying"
-                            : "· unknown");
-                RcloneHostIdentityStatusText.ToolTip = response.ReportedRcloneVersion is { Length: > 0 } reportedVersion
-                    ? $"Background host detected rclone {reportedVersion} locally; server receipt is not confirmed."
-                    : response.RcloneIdentityErrorCode is not null
-                        ? "Background host identity: retrying rclone version check"
-                        : "Background host identity: rclone version not available";
                 _model.ApplyStatus(response.Mounts);
                 _model.ApplySyncStatus(response.SyncJobs);
                 UpdateTrayStatus();
             }
             else
             {
+                _model.ApplyHostUnavailable();
+                UpdateTrayStatus();
+                var detail = response.InitializationErrorMessage ?? response.ErrorMessage;
                 if (!_hostUnavailableReported)
                 {
                     _model.AddLogEntry(
                         "\uE783",
                         "Status delayed",
-                        response.ErrorMessage ?? "Host unavailable",
+                        detail ?? "Host unavailable",
                         true
                     );
                     _hostUnavailableReported = true;
                 }
-                ShowHostInterrupted(response.ErrorMessage, recoveryExhausted: false);
-                SetLiveText(RcloneHostIdentityStatusText, "· host offline");
-                RcloneHostIdentityStatusText.ToolTip = "Background host identity: host unavailable";
-                if (response.ErrorCode?.Equals("host.unavailable", StringComparison.OrdinalIgnoreCase) == true)
+                ShowHostInterrupted(detail, recoveryExhausted: false);
+                if (response.InitializationErrorCode is not null ||
+                    response.ErrorCode?.Equals("host.unavailable", StringComparison.OrdinalIgnoreCase) == true)
                     await TryRecoverHostAsync();
             }
         }
@@ -616,7 +612,18 @@ public partial class MainWindow : WpfWindow
             if (attempt > 1)
                 await Task.Delay(TimeSpan.FromSeconds(attempt - 1), _lifetimeCancellation.Token);
             var response = await EnsureHostAsync();
-            if (response.Succeeded)
+            if (response.InitializationErrorCode is not null)
+            {
+                // The pipe is alive, but its first settings load failed. Retry that
+                // load instead of launching a second host or sending a mount request.
+                var reload = await HostClient.SendAsync(
+                    new HostRequest("reload"), _lifetimeCancellation.Token);
+                response = reload.Succeeded
+                    ? await HostClient.SendAsync(
+                        new HostRequest("status"), _lifetimeCancellation.Token)
+                    : reload;
+            }
+            if (HostStatusPresentation.HasUsableMountStatus(response))
             {
                 _model.ApplyStatus(response.Mounts);
                 _model.ApplySyncStatus(response.SyncJobs);
@@ -629,7 +636,7 @@ public partial class MainWindow : WpfWindow
             }
 
             ShowHostInterrupted(
-                response.ErrorMessage,
+                response.InitializationErrorMessage ?? response.ErrorMessage,
                 recoveryExhausted: attempt >= MaximumAutomaticHostRecoveryAttempts);
         }
         catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
@@ -770,10 +777,12 @@ public partial class MainWindow : WpfWindow
         // A failed reload response contains no mount or sync snapshots. Query the host
         // again after rollback so the UI does not briefly present every drive as stopped.
         var status = await HostClient.SendAsync(new HostRequest("status"));
+        var hostReady = HostStatusPresentation.HasUsableMountStatus(status);
         _model.Load(
             _settings,
-            status.Succeeded ? status.Mounts : null,
-            status.Succeeded ? status.SyncJobs : null
+            hostReady ? status.Mounts : null,
+            hostReady ? status.SyncJobs : null,
+            hostUnavailable: !hostReady
         );
         UpdateTrayStatus();
         LoadSettingsControls();
@@ -1316,10 +1325,13 @@ public partial class MainWindow : WpfWindow
                         _lifetimeCancellation.Token)
                     : rollbackReload;
                 LoadSettingsControls();
+                var hostReady = rollbackStatus is not null &&
+                    HostStatusPresentation.HasUsableMountStatus(rollbackStatus);
                 _model.Load(
                     _settings,
-                    rollbackStatus?.Succeeded == true ? rollbackStatus.Mounts : null,
-                    rollbackStatus?.Succeeded == true ? rollbackStatus.SyncJobs : null);
+                    hostReady ? rollbackStatus!.Mounts : null,
+                    hostReady ? rollbackStatus!.SyncJobs : null,
+                    hostUnavailable: !hostReady);
                 UpdateTrayStatus();
                 ShowError(
                     "Settings were not activated",
@@ -1376,6 +1388,13 @@ public partial class MainWindow : WpfWindow
     {
         if ((sender as WpfFrameworkElement)?.DataContext is not MountRow row)
             return;
+        if (row.NeedsHostRecovery)
+        {
+            await ExecuteUiActionAsync(
+                "Host recovery failed",
+                () => TryRecoverHostAsync(userInitiated: true));
+            return;
+        }
         var command = row.ShouldStop ? "stop" : "start";
         await ExecuteUiActionAsync(
             "Mount action failed",
@@ -1689,6 +1708,11 @@ public partial class MainWindow : WpfWindow
 
     private async Task<TrayActionResult> RunTrayMountAsync(MountRow row)
     {
+        if (row.NeedsHostRecovery)
+        {
+            await TryRecoverHostAsync(userInitiated: true);
+            return TrayActionResult.SilentSuccess();
+        }
         var command = row.ShouldStop ? "stop" : "start";
         if (command == "start" && _rcloneMutationBusy)
             return TrayActionResult.Failure("rclone is being updated", "Try again when the component operation finishes.");
@@ -1739,11 +1763,14 @@ public partial class MainWindow : WpfWindow
     private async Task<TrayActionResult> RefreshTrayAsync()
     {
         var response = await HostClient.SendAsync(new HostRequest("status"));
-        if (!response.Succeeded)
+        if (!HostStatusPresentation.HasUsableMountStatus(response))
         {
+            _model.ApplyHostUnavailable();
+            UpdateTrayStatus();
             return TrayActionResult.Failure(
                 "Refresh failed",
-                response.ErrorMessage ?? "The background host is unavailable.");
+                response.InitializationErrorMessage ?? response.ErrorMessage ??
+                "The background host is unavailable.");
         }
 
         _model.ApplyStatus(response.Mounts);

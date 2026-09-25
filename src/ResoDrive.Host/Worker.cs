@@ -32,6 +32,7 @@ public sealed partial class Worker : BackgroundService
     private RcloneMountCoordinator? _mounts;
     private RcloneSyncCoordinator? _syncs;
     private ManagerSettings? _settings;
+    private ResoDrive.Core.Results.OperationError? _initializationFailure;
     private IReadOnlyList<MountDefinition> _definitions = [];
     private string? _rclonePath;
     private string? _configPath;
@@ -45,6 +46,7 @@ public sealed partial class Worker : BackgroundService
     private readonly bool _inspectRuntimeUserAgent;
     private readonly RcloneRuntimeLocator _runtimeLocator;
     private readonly TimeSpan _runtimeIdentityRetryInterval;
+    private readonly Func<CancellationToken, Task>? _beforeFirstAutoMountQueue;
     private RuntimeIdentity _runtimeIdentity = new(null, null);
 
     private sealed record RuntimeIdentity(string? Version, string? ErrorCode);
@@ -60,7 +62,8 @@ public sealed partial class Worker : BackgroundService
     internal Worker(ApplicationPaths paths, ILogger<Worker> logger,
         IHostApplicationLifetime applicationLifetime, RemoteWipeClient remoteWipeClient,
         RemoteWipeEnrollmentService? wipeEnrollment = null, bool inspectRuntimeUserAgent = false,
-        RcloneRuntimeLocator? runtimeLocator = null, TimeSpan? runtimeIdentityRetryInterval = null)
+        RcloneRuntimeLocator? runtimeLocator = null, TimeSpan? runtimeIdentityRetryInterval = null,
+        Func<CancellationToken, Task>? beforeFirstAutoMountQueue = null)
     {
         _paths = paths;
         _logger = logger;
@@ -72,6 +75,7 @@ public sealed partial class Worker : BackgroundService
         _inspectRuntimeUserAgent = inspectRuntimeUserAgent;
         _runtimeLocator = runtimeLocator ?? new(paths);
         _runtimeIdentityRetryInterval = runtimeIdentityRetryInterval ?? TimeSpan.FromMinutes(1);
+        _beforeFirstAutoMountQueue = beforeFirstAutoMountQueue;
         if (_runtimeIdentityRetryInterval <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(runtimeIdentityRetryInterval));
     }
@@ -102,6 +106,9 @@ public sealed partial class Worker : BackgroundService
         var result = await ReloadAsync(stoppingToken).ConfigureAwait(false);
         if (!result.Succeeded)
         {
+            Volatile.Write(ref _initializationFailure, result.Error ??
+                new ResoDrive.Core.Results.OperationError(
+                    "host.initialization_failed", "The background host could not load its settings."));
             LogInitializationFailure(_logger, result.Error?.Code, result.Error?.Message);
         }
         if (_shutdownRequested) return;
@@ -297,6 +304,8 @@ public sealed partial class Worker : BackgroundService
                         return Response(refreshed);
                 }
                 var reloaded = await ReloadCoreAsync(token, request.Confirmed).ConfigureAwait(false);
+                if (!reloaded.Succeeded && Volatile.Read(ref _settings) is null)
+                    Volatile.Write(ref _initializationFailure, reloaded.Error);
                 if (!reloaded.Succeeded || command == "reload")
                     return Response(reloaded);
 
@@ -774,11 +783,17 @@ public sealed partial class Worker : BackgroundService
         _rclonePath = rclone;
         _configPath = config;
         var isFirstLoad = _settings is null;
-        _settings = loaded.Value;
         if (isFirstLoad)
         {
+            if (_beforeFirstAutoMountQueue is not null)
+                await _beforeFirstAutoMountQueue(token).ConfigureAwait(false);
             QueueEligibleAutoMounts(token);
         }
+        // Status is served concurrently with initialization. Publish the first settings
+        // only after automatic starts have been marked pending, so the UI cannot briefly
+        // present their reconciled Stopped snapshots as manual Mount actions.
+        Volatile.Write(ref _settings, loaded.Value);
+        Volatile.Write(ref _initializationFailure, null);
         return Result.Success();
     }
 
@@ -930,6 +945,20 @@ public sealed partial class Worker : BackgroundService
     private HostResponse Status()
     {
         var identity = Volatile.Read(ref _runtimeIdentity);
+        if (Volatile.Read(ref _settings) is null)
+        {
+            var failure = Volatile.Read(ref _initializationFailure);
+            // The pipe deliberately stays available during the remote-wipe safety check.
+            // Its partial mount snapshots are not a completed startup state. A failed
+            // first load remains a successful status response so authenticated shutdown,
+            // exit, and installer checks can still inspect this live host safely.
+            return new(true, Mounts: [], SyncJobs: [],
+                HostBaseDirectory: AppContext.BaseDirectory,
+                ReportedRcloneVersion: identity.Version,
+                RcloneIdentityErrorCode: identity.ErrorCode,
+                InitializationErrorCode: failure?.Code,
+                InitializationErrorMessage: failure?.Message);
+        }
         return new(
             true,
             Mounts: _mounts?.GetSnapshots().Select(snapshot => HostProtocol.ToStatus(snapshot) with
