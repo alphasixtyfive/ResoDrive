@@ -5,6 +5,7 @@ internal interface IInstallationPreparationRuntime
     Task<HostResponse> ShutdownAsync(string directory, CancellationToken token);
     Task StopWindowsAsync(string directory, int? hostProcessId, CancellationToken token);
     Task WaitForHostExitAsync(int? processId, CancellationToken token);
+    Task WaitForOtherAccountProcessesExitAsync(string directory, CancellationToken token);
     Task StopOrphanedUiAsync(string directory, CancellationToken token);
     Task VerifyStoppedAsync(string directory, CancellationToken token);
 }
@@ -31,6 +32,14 @@ public sealed class InstallationPreparationService
             var response = await _runtime.ShutdownAsync(directory, timeout.Token).ConfigureAwait(false);
             if (response.ErrorCode == "host.unavailable")
             {
+                // An in-app update can have requested shutdown as the signed-in user,
+                // then elevated Windows Installer with a different administrator account.
+                // That installer cannot contact the user's account-scoped host pipe.
+                // Give the already-requested shutdown time to finish without touching
+                // a process owned by another account.
+                progress?.Report("Waiting for ResoDrive to finish closing…");
+                await _runtime.WaitForOtherAccountProcessesExitAsync(directory, timeout.Token)
+                    .ConfigureAwait(false);
                 progress?.Report("Checking whether only a ResoDrive window remains…");
                 await _runtime.StopOrphanedUiAsync(directory, timeout.Token).ConfigureAwait(false);
                 progress?.Report("ResoDrive is ready. Windows Installer will now continue.");
@@ -75,6 +84,9 @@ public sealed class InstallationPreparationService
 
         public Task StopOrphanedUiAsync(string directory, CancellationToken token) =>
             InstallerProcessInspection.StopOrphanedUiAsync(directory, token);
+
+        public Task WaitForOtherAccountProcessesExitAsync(string directory, CancellationToken token) =>
+            InstallerProcessInspection.WaitForOtherAccountProcessesExitAsync(directory, token);
 
         public Task VerifyStoppedAsync(string directory, CancellationToken token) =>
             InstallerProcessInspection.VerifyStoppedAsync(directory, token);

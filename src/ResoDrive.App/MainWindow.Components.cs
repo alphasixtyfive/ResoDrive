@@ -301,7 +301,7 @@ public partial class MainWindow
             : $" Installing it will stop {string.Join(" and ", activeItems)}.";
         if (!WpfMessageBox.Confirm(
                 this,
-                $"Download and install ResoDrive {update.AvailableVersion}?{activeWork} Close open documents first. Upload status may be unavailable for some drives. ResoDrive will close and Windows will ask for permission.",
+                $"Download and install ResoDrive {update.AvailableVersion}?{activeWork} Close open documents first. Upload status may be unavailable for some drives. ResoDrive will close and Windows will ask for administrator approval or a password.",
                 "Install ResoDrive update?",
                 "Install update"))
         {
@@ -349,7 +349,8 @@ public partial class MainWindow
             ApplicationDownloadProgress.IsIndeterminate = true;
             SetLiveText(ApplicationUpdateStatusText, "Checking pending uploads…");
             var uploads = await HostClient.SendAsync(new HostRequest("check-uploads"), _lifetimeCancellation.Token);
-            if (!uploads.Succeeded && uploads.ErrorCode != "host.unavailable")
+            if (!uploads.Succeeded &&
+                (uploads.ErrorCode != "host.unavailable" || IsInstalledHostProcessRunning()))
             {
                 SetLiveText(ApplicationUpdateStatusText, uploads.ErrorMessage ?? "Could not check uploads. Try again.");
                 return;
@@ -359,7 +360,8 @@ public partial class MainWindow
                 new HostRequest("shutdown", Confirmed: true),
                 TimeSpan.FromSeconds(15),
                 _lifetimeCancellation.Token);
-            if (!shutdown.Succeeded && shutdown.ErrorCode != "host.unavailable")
+            if (!shutdown.Succeeded &&
+                (shutdown.ErrorCode != "host.unavailable" || IsInstalledHostProcessRunning()))
             {
                 SetLiveText(
                     ApplicationUpdateStatusText,

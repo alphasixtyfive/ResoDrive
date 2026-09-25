@@ -121,6 +121,63 @@ public sealed class ApplicationUpdateHandoffTests
     }
 
     [Fact]
+    public async Task CompleteAsync_PreparesSourceAndInstalledLocationsBeforeStartingInstaller()
+    {
+        using var directory = new TemporaryDirectory();
+        var request = Request(directory.Path);
+        var runtime = new FakeRuntime { ReadyAcknowledged = true };
+
+        var exitCode = await ApplicationUpdateHandoff.CompleteAsync(request, runtime);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(["wait-parent", "prepare", "prepare", "installer", "relaunch"], runtime.Events);
+        Assert.Equal(
+            [Path.GetDirectoryName(request.SourceExecutablePath)!,
+                Path.GetDirectoryName(request.InstalledExecutablePath)!],
+            runtime.PreparedDirectories);
+    }
+
+    [Fact]
+    public async Task CompleteAsync_PreparationFailureNeverStartsElevatedInstaller()
+    {
+        using var directory = new TemporaryDirectory();
+        var request = Request(directory.Path);
+        var runtime = new FakeRuntime
+        {
+            PreparationException = new IOException("Pending uploads could not be verified."),
+            ReadyAcknowledged = true,
+        };
+
+        var exitCode = await ApplicationUpdateHandoff.CompleteAsync(request, runtime);
+        var outcome = ReadOutcome(request.OutcomePath);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal("failed", outcome.Status);
+        Assert.Null(outcome.InstallerExitCode);
+        Assert.Contains("Pending uploads", outcome.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(["wait-parent", "prepare", "relaunch"], runtime.Events);
+        Assert.Equal(request.SourceExecutablePath, runtime.StartedPath);
+    }
+
+    [Fact]
+    public async Task CompleteAsync_PreparationTimeoutRestoresApplicationWithoutStartingInstaller()
+    {
+        using var directory = new TemporaryDirectory();
+        var request = Request(directory.Path);
+        var runtime = new FakeRuntime
+        {
+            PreparationException = new TimeoutException("The host did not stop in time."),
+            ReadyAcknowledged = true,
+        };
+
+        var exitCode = await ApplicationUpdateHandoff.CompleteAsync(request, runtime);
+
+        Assert.Equal(1, exitCode);
+        Assert.Null(ReadOutcome(request.OutcomePath).InstallerExitCode);
+        Assert.Equal(["wait-parent", "prepare", "relaunch"], runtime.Events);
+    }
+
+    [Fact]
     public void TryParseCompletionRequest_RejectsMalformedOrUnsafeArguments()
     {
         using var directory = new TemporaryDirectory();
@@ -232,25 +289,44 @@ public sealed class ApplicationUpdateHandoffTests
     {
         public int InstallerExitCode { get; init; }
         public Exception? InstallerException { get; init; }
+        public Exception? PreparationException { get; init; }
         public bool ReadyAcknowledged { get; init; }
         public Exception? FirstStartException { get; init; }
         public bool ApplicationStarted { get; private set; }
         public string? StartedPath { get; private set; }
+        public List<string> PreparedDirectories { get; } = [];
         public List<string> StartedPaths { get; } = [];
+        public List<string> Events { get; } = [];
 
-        public Task WaitForParentExitAsync(int processId, CancellationToken cancellationToken) =>
-            Task.CompletedTask;
+        public Task WaitForParentExitAsync(int processId, CancellationToken cancellationToken)
+        {
+            Events.Add("wait-parent");
+            return Task.CompletedTask;
+        }
+
+        public Task PrepareForInstallerAsync(string installationDirectory, CancellationToken cancellationToken)
+        {
+            Events.Add("prepare");
+            PreparedDirectories.Add(installationDirectory);
+            return PreparationException is null
+                ? Task.CompletedTask
+                : Task.FromException(PreparationException);
+        }
 
         public Task<int> RunInstallerAsync(
             string installerPath,
             string expectedSha256,
-            CancellationToken cancellationToken) =>
-            InstallerException is null
+            CancellationToken cancellationToken)
+        {
+            Events.Add("installer");
+            return InstallerException is null
                 ? Task.FromResult(InstallerExitCode)
                 : Task.FromException<int>(InstallerException);
+        }
 
         public bool StartApplication(string executablePath)
         {
+            Events.Add("relaunch");
             ApplicationStarted = true;
             StartedPath = executablePath;
             StartedPaths.Add(executablePath);

@@ -30,6 +30,7 @@ internal sealed record ApplicationUpdateOutcome(
 internal interface IApplicationUpdateRuntime
 {
     Task WaitForParentExitAsync(int processId, CancellationToken cancellationToken);
+    Task PrepareForInstallerAsync(string installationDirectory, CancellationToken cancellationToken);
     Task<int> RunInstallerAsync(
         string installerPath,
         string expectedSha256,
@@ -227,8 +228,23 @@ internal static class ApplicationUpdateHandoff
         var installStartedAtUtc = DateTimeOffset.UtcNow;
         int? installerExitCode = null;
         var message = "Windows Installer did not complete the ResoDrive update.";
+        var prepared = false;
         try
         {
+            // The helper still runs as the original Windows user. Finish the authenticated
+            // shutdown here before UAC can run MSI under a different administrator account.
+            // A portable source may have its host outside the MSI installation directory.
+            var sourceDirectory = Path.GetDirectoryName(request.SourceExecutablePath)
+                ?? throw new InvalidOperationException("The application path is invalid.");
+            var installedDirectory = Path.GetDirectoryName(request.InstalledExecutablePath)
+                ?? throw new InvalidOperationException("The installed application path is invalid.");
+            await runtime.PrepareForInstallerAsync(sourceDirectory, cancellationToken)
+                .ConfigureAwait(false);
+            if (!sourceDirectory.Equals(installedDirectory, StringComparison.OrdinalIgnoreCase))
+                await runtime.PrepareForInstallerAsync(installedDirectory, cancellationToken)
+                    .ConfigureAwait(false);
+            prepared = true;
+            installStartedAtUtc = DateTimeOffset.UtcNow;
             installerExitCode = await runtime.RunInstallerAsync(
                     request.InstallerPath,
                     request.ExpectedSha256,
@@ -251,9 +267,11 @@ internal static class ApplicationUpdateHandoff
         }
         catch (Exception exception) when (
             exception is Win32Exception or InvalidOperationException or IOException or InvalidDataException or
-                UnauthorizedAccessException)
+                UnauthorizedAccessException or TimeoutException)
         {
-            message = "Windows Installer could not complete the update: " + exception.Message;
+            message = prepared
+                ? "Windows Installer could not complete the update: " + exception.Message
+                : "ResoDrive could not safely stop background work before installation: " + exception.Message;
         }
 
         var outcome = new ApplicationUpdateOutcome(
@@ -468,6 +486,10 @@ internal static class ApplicationUpdateHandoff
                 // The installer can still perform the coordinated shutdown itself.
             }
         }
+
+        public Task PrepareForInstallerAsync(string installationDirectory, CancellationToken cancellationToken) =>
+            new InstallationPreparationService().PrepareAsync(installationDirectory,
+                cancellationToken: cancellationToken);
 
         public async Task<int> RunInstallerAsync(
             string installerPath,

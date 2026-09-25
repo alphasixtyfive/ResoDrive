@@ -37,7 +37,20 @@ public sealed class InstallationPreparationTests
     {
         var runtime = new FakeRuntime(new(false, "host.unavailable"));
         await new InstallationPreparationService(runtime).PrepareAsync(@"C:\Program Files\rdrive");
-        Assert.Equal(["shutdown", "orphan-ui"], runtime.Calls);
+        Assert.Equal(["shutdown", "wait-other-account", "orphan-ui"], runtime.Calls);
+    }
+
+    [Fact]
+    public async Task OtherAccountStillRunningDoesNotInspectOrCloseItsUi()
+    {
+        var runtime = new FakeRuntime(new(false, "host.unavailable"))
+        {
+            OtherAccountFailure = new IOException("Close ResoDrive from the signed-in account."),
+        };
+        var error = await Assert.ThrowsAsync<IOException>(() =>
+            new InstallationPreparationService(runtime).PrepareAsync(@"C:\Program Files\rdrive"));
+        Assert.Contains("signed-in account", error.Message, StringComparison.Ordinal);
+        Assert.Equal(["shutdown", "wait-other-account"], runtime.Calls);
     }
 
     [Theory]
@@ -50,7 +63,7 @@ public sealed class InstallationPreparationTests
         var error = await Assert.ThrowsAsync<IOException>(() =>
             new InstallationPreparationService(runtime).PrepareAsync(@"C:\Program Files\rdrive"));
         Assert.Equal(reason, error.Message);
-        Assert.Equal(["shutdown", "orphan-ui"], runtime.Calls);
+        Assert.Equal(["shutdown", "wait-other-account", "orphan-ui"], runtime.Calls);
     }
 
     [Fact]
@@ -66,6 +79,7 @@ public sealed class InstallationPreparationTests
     {
         public List<string> Calls { get; } = [];
         public IOException? OrphanFailure { get; init; }
+        public IOException? OtherAccountFailure { get; init; }
         public Task<HostResponse> ShutdownAsync(string directory, CancellationToken token)
         {
             Calls.Add("shutdown");
@@ -85,6 +99,11 @@ public sealed class InstallationPreparationTests
         {
             Calls.Add("orphan-ui");
             return OrphanFailure is null ? Task.CompletedTask : Task.FromException(OrphanFailure);
+        }
+        public Task WaitForOtherAccountProcessesExitAsync(string directory, CancellationToken token)
+        {
+            Calls.Add("wait-other-account");
+            return OtherAccountFailure is null ? Task.CompletedTask : Task.FromException(OtherAccountFailure);
         }
         public Task VerifyStoppedAsync(string directory, CancellationToken token)
         {

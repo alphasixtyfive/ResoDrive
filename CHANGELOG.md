@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.17] - 2026-09-25
+
+- Finish closing the signed-in user's ResoDrive background work before the in-app updater asks for administrator credentials.
+- Let Setup wait for a previous update's ResoDrive process to exit when Windows runs it under a different administrator account; keep installation blocked if work remains or the account cannot be verified.
+- Explain the administrator-password requirement and make cross-account setup errors more specific.
+
 ## [0.3.16] - 2026-09-25
 
 - Show a pending drive action while automatic mounts are being prepared at startup, then use the background host's reported state.

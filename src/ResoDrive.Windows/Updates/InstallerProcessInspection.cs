@@ -19,11 +19,17 @@ internal static partial class InstallerProcessInspection
         }
     }
     private const string BusyMessage = "ResoDrive background work is still running or cannot be verified. Close ResoDrive from its tray menu, let uploads finish, and retry. Your settings and cache have been preserved.";
-    private const string OtherAccountMessage = "ResoDrive is running under another Windows account. Sign in as that user, exit ResoDrive from its tray menu, and retry the installation. Your settings and cache have been preserved.";
+    private const string OtherAccountMessage = "ResoDrive is running under a different Windows account. Exit it from that account's tray menu after uploads finish, then retry setup. If Windows asked for a different administrator account, exit ResoDrive before approving that prompt. Your settings and cache have been preserved.";
+    private const string AccountUnknownMessage = "Setup could not verify which Windows account owns a running ResoDrive process. Exit ResoDrive from its tray menu, let uploads finish, and retry. If it is running in another account, sign in there to exit it. Your settings and cache have been preserved.";
+    private sealed class OtherAccountException() : IOException(OtherAccountMessage);
+
+    internal static Task WaitForOtherAccountProcessesExitAsync(string directory, CancellationToken token) =>
+        Task.Run(() => WaitForOtherAccountProcessesExit(directory, token), token);
 
     internal static Task StopOrphanedUiAsync(string directory, CancellationToken token) =>
         Task.Run(() => WithNoHostMutex(() =>
         {
+            EnsureInstalledProcessAccounts(directory, token);
             EnsureNoRcloneWork(directory, includeOtherManagedRuntimes: true, token);
             StopVerifiedUi(directory, hostProcessId: null, token);
             EnsureNoRcloneWork(directory, includeOtherManagedRuntimes: true, token);
@@ -70,6 +76,70 @@ internal static partial class InstallerProcessInspection
         catch (UnauthorizedAccessException)
         {
             return true;
+        }
+    }
+
+    private static void WaitForOtherAccountProcessesExit(string directory, CancellationToken token)
+    {
+        var candidates = GetInstalledProcesses(directory, token, requireTermination: false);
+        try
+        {
+            var deadline = Stopwatch.GetTimestamp() + TimeSpan.FromSeconds(42).Ticks *
+                Stopwatch.Frequency / TimeSpan.TicksPerSecond;
+            foreach (var candidate in candidates)
+            {
+                token.ThrowIfCancellationRequested();
+                if (HasConfirmedExit(candidate.Process))
+                    continue;
+                try
+                {
+                    VerifySameAccount(candidate);
+                }
+                catch (IOException) when (HasConfirmedExit(candidate.Process))
+                {
+                    // The process closed between enumeration and token inspection.
+                    continue;
+                }
+                catch (OtherAccountException)
+                {
+                    // A prior-version updater may already be closing its UI while
+                    // setup starts under a second administrator account.
+                    while (true)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var wait = WaitForSingleObject(candidate.Handle, 200);
+                        if (wait == 0) break; // This exact process exited.
+                        if (wait != 0x00000102)
+                            throw new IOException(AccountUnknownMessage,
+                                new Win32Exception(Marshal.GetLastPInvokeError()));
+                        if (Stopwatch.GetTimestamp() >= deadline)
+                            throw new OtherAccountException();
+                    }
+                }
+            }
+        }
+        finally
+        {
+            foreach (var candidate in candidates) candidate.Dispose();
+        }
+    }
+
+    private static void EnsureInstalledProcessAccounts(string directory, CancellationToken token)
+    {
+        var candidates = GetInstalledProcesses(directory, token, requireTermination: false);
+        try
+        {
+            foreach (var candidate in candidates)
+            {
+                token.ThrowIfCancellationRequested();
+                if (HasConfirmedExit(candidate.Process)) continue;
+                try { VerifySameAccount(candidate); }
+                catch (IOException) when (HasConfirmedExit(candidate.Process)) { }
+            }
+        }
+        finally
+        {
+            foreach (var candidate in candidates) candidate.Dispose();
         }
     }
 
@@ -124,7 +194,9 @@ internal static partial class InstallerProcessInspection
     private static void VerifyUiCandidate(Candidate candidate, string directory)
     {
         var process = candidate.Process;
-        VerifySameAccount(candidate);
+        if (HasConfirmedExit(process)) return;
+        try { VerifySameAccount(candidate); }
+        catch (IOException) when (HasConfirmedExit(process)) { return; }
         if (!IsVerifiedUi(process) || HasConfirmedExit(process))
             throw new IOException(BusyMessage);
         try
@@ -157,7 +229,8 @@ internal static partial class InstallerProcessInspection
         }
     }
 
-    private static List<Candidate> GetInstalledProcesses(string directory, CancellationToken token)
+    private static List<Candidate> GetInstalledProcesses(string directory, CancellationToken token,
+        bool requireTermination = true)
     {
         var executable = Path.GetFullPath(Path.Combine(directory, "resodrive.exe"));
         var processes = Process.GetProcessesByName("resodrive");
@@ -185,11 +258,14 @@ internal static partial class InstallerProcessInspection
                     throw new IOException("ResoDrive is running in another Windows session. Sign out of that session and retry the installation.");
                 // Keep this process object alive until the decision and termination.
                 // Windows cannot recycle its PID while this kernel handle remains open.
-                var handle = OpenProcess(0x00101001, false, process.Id); // QUERY_LIMITED | TERMINATE | SYNCHRONIZE
+                var access = requireTermination ? 0x00101001u : 0x00101000u;
+                var handle = OpenProcess(access, false, process.Id); // QUERY_LIMITED | [TERMINATE] | SYNCHRONIZE
                 if (handle.IsInvalid)
                 {
+                    var error = Marshal.GetLastPInvokeError();
                     handle.Dispose();
-                    throw new IOException(BusyMessage);
+                    throw new IOException(requireTermination ? BusyMessage : AccountUnknownMessage,
+                        new Win32Exception(error));
                 }
                 try { matches.Add(new Candidate(process, handle, process.StartTime.ToUniversalTime())); }
                 catch { handle.Dispose(); throw; }
@@ -211,12 +287,27 @@ internal static partial class InstallerProcessInspection
     private static void VerifySameAccount(Candidate candidate)
     {
         using var current = WindowsIdentity.GetCurrent();
+        if (current.User is not { } currentSid)
+            throw new IOException(AccountUnknownMessage);
         if (!OpenProcessToken(candidate.Handle, 0x0008, out var token)) // TOKEN_QUERY
-            throw new IOException(OtherAccountMessage);
+            throw new IOException(AccountUnknownMessage,
+                new Win32Exception(Marshal.GetLastPInvokeError()));
         using (token)
-        using (var owner = new WindowsIdentity(token.DangerousGetHandle()))
-        if (current.User is null || owner.User is null || !current.User.Equals(owner.User))
-            throw new IOException(OtherAccountMessage);
+        {
+            try
+            {
+                using var owner = new WindowsIdentity(token.DangerousGetHandle());
+                if (owner.User is not { } ownerSid)
+                    throw new IOException(AccountUnknownMessage);
+                if (!currentSid.Equals(ownerSid))
+                    throw new OtherAccountException();
+            }
+            catch (Exception exception) when (exception is Win32Exception or UnauthorizedAccessException or
+                System.Security.SecurityException or ArgumentException)
+            {
+                throw new IOException(AccountUnknownMessage, exception);
+            }
+        }
     }
 
     private static bool IsVerifiedUi(Process process)
@@ -352,6 +443,9 @@ internal static partial class InstallerProcessInspection
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool TerminateProcess(SafeProcessHandle process, int exitCode);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial uint WaitForSingleObject(SafeProcessHandle process, uint milliseconds);
 
     [LibraryImport("shell32.dll", EntryPoint = "CommandLineToArgvW", SetLastError = true,
         StringMarshalling = StringMarshalling.Utf16)]

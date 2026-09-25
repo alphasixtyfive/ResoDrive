@@ -45,10 +45,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./tests/installer-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName
+      - name: Verify different-account preparation on disposable user
+        shell: pwsh
+        timeout-minutes: 4
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./tests/cross-account-smoke.ps1 -NewAppPath artifacts/win-x64/resodrive/resodrive.exe
       - name: Preserve installer diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: installer-smoke-logs
-          path: ${{ runner.temp }}/resodrive-installer-smoke/*.log
+          path: |
+            ${{ runner.temp }}/resodrive-installer-smoke/*.log
+            ${{ runner.temp }}/resodrive-cross-account-smoke/*
           if-no-files-found: ignore

@@ -156,3 +156,27 @@ passed: the old UI exited and disposable settings and cache hashes were
 unchanged. Production rclone processes were left running. The separate
 unelevated-host-to-elevated-helper test also passed with disposable data.
 These helper tests do not replace actual MSI and in-app updater acceptance.
+
+## Standard-user update with separate administrator credentials
+
+An in-app update on a standard Windows account reported that ResoDrive was
+running under another account after the user entered an administrator password.
+That account difference is expected for over-the-shoulder UAC: Windows runs the
+elevated installer as the supplied administrator while the old app and host still
+belong to the signed-in user. The 0.3.16 handoff waited for its window to exit,
+but did not wait for the accepted host shutdown to finish before starting MSI.
+The new MSI then looked for the signed-in user's host under its own administrator
+account-scoped pipe name and could encounter the old process before it exited.
+
+The next handoff prepares the installation as the signed-in user before invoking
+UAC, including upload checks, verified UI closure and waiting for the host to
+exit. For the first upgrade from an older release, the new MSI waits up to 42
+seconds for a confirmed different-account installed process to exit naturally.
+It never terminates that process; a remaining process still blocks installation.
+Unreadable process identity is reported separately from a confirmed account
+mismatch. The update confirmation now says that Windows may require an
+administrator password.
+
+Unit and process tests cover ordering and fail-closed behavior. The exact
+standard-user / separate-admin UAC path still needs a live acceptance test;
+same-account elevation cannot establish it.

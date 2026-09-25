@@ -24,6 +24,18 @@ public sealed class InstallerProcessInspectionTests
     }
 
     [Fact]
+    public async Task OtherAccountWaitLeavesSameAccountUiRunning()
+    {
+        using var fixture = new Fixture();
+        using var ui = fixture.StartProcess("resodrive.exe");
+
+        await InstallerProcessInspection.WaitForOtherAccountProcessesExitAsync(
+            fixture.Binaries, CancellationToken.None);
+
+        Assert.False(ui.HasExited);
+    }
+
+    [Fact]
     public async Task ExistingHostMutexBlocksUiClosure()
     {
         using var fixture = new Fixture();
