@@ -180,3 +180,18 @@ administrator password.
 Unit and process tests cover ordering and fail-closed behavior. The exact
 standard-user / separate-admin UAC path still needs a live acceptance test;
 same-account elevation cannot establish it.
+
+For v0.3.17, [CI run 36145684243](https://github.com/alphasixtyfive/ResoDrive/actions/runs/36145684243)
+and [tagged release run 36146421965](https://github.com/alphasixtyfive/ResoDrive/actions/runs/36146421965)
+passed the installer lifecycle and disposable different-account smoke checks.
+The latter started the public 0.3.16 host as a separate standard user in the
+same session, confirmed that the new helper left it running while active,
+stopped it under its own account, and then confirmed preparation success with
+unchanged settings and cache. The exact draft executable hash was
+`2C6946B3EE9B5365213514D02788E4A169ACD3BF3D5896E0DFF59FF533B4DF5E`;
+its ProductVersion includes commit `202233e`. Local same-account UAC host and
+orphaned-UI tests passed against that downloaded draft executable and preserved
+disposable settings and cache. These checks do not simulate the old user's
+in-app Update click and credential prompt. The owner requested public GitHub
+publication to run that final check on the affected standard-user desktop;
+the result remains to be recorded.
