@@ -24,6 +24,10 @@ public static partial class DiagnosticReport
         report.AppendLine(CultureInfo.InvariantCulture, $"Created (UTC): {DateTimeOffset.UtcNow:O}");
         report.AppendLine(CultureInfo.InvariantCulture, $"ResoDrive: {VersionText(applicationVersion)}");
         report.AppendLine(CultureInfo.InvariantCulture, $"rclone: {VersionText(rcloneVersion)}");
+        report.AppendLine(CultureInfo.InvariantCulture,
+            $"rclone in host identity: {(status.Succeeded ? VersionText(status.ReportedRcloneVersion) : "Unknown")}");
+        report.AppendLine(CultureInfo.InvariantCulture,
+            $"Host rclone identity check: {IdentityCheckText(status)}");
         report.AppendLine(CultureInfo.InvariantCulture, $"WinFsp: {VersionText(winFspVersion)}");
         report.AppendLine(CultureInfo.InvariantCulture, $"Windows: {Environment.OSVersion.Version}");
         report.AppendLine(CultureInfo.InvariantCulture, $"Host responded: {status.Succeeded}");
@@ -60,6 +64,15 @@ public static partial class DiagnosticReport
     private static string VersionText(string? value) =>
         value is not null && VersionPattern().IsMatch(value) ? value : "Unknown";
 
+    private static string IdentityCheckText(HostResponse status) =>
+        !status.Succeeded ? "Unavailable" : status.RcloneIdentityErrorCode switch
+        {
+            "rclone.not_installed" or "rclone.version_timeout" or "rclone.invalid" or
+                "rclone.version_format" => status.RcloneIdentityErrorCode,
+            null when status.ReportedRcloneVersion is not null => "Verified",
+            _ => "Unknown"
+        };
+
     private static readonly string[] NumericOptions = [
         "--vfs-cache-max-size", "--vfs-cache-max-age", "--buffer-size", "--vfs-read-ahead",
         "--vfs-read-chunk-size", "--vfs-read-chunk-size-limit", "--vfs-read-chunk-streams",
@@ -69,7 +82,7 @@ public static partial class DiagnosticReport
 
     [GeneratedRegex(@"\A(?:off|\d+(?:\.\d+)?(?:[kKmMgGtTpP](?:i?[bB])?|ms|s|m|h|d)?)\z", RegexOptions.CultureInvariant)]
     private static partial Regex NumericValue();
-    [GeneratedRegex(@"\Av?\d+\.\d+(?:\.\d+){0,2}\z", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\Av?\d+\.\d+(?:\.\d+){0,2}(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?\z", RegexOptions.CultureInvariant)]
     private static partial Regex VersionPattern();
     [GeneratedRegex(@"\A(\d{4}-\d{2}-\d{2}T[\d:.+Z-]+) level=ERROR event=[a-z._]+ errorId=([A-F0-9]{8})(?: |$)", RegexOptions.CultureInvariant)]
     private static partial Regex ErrorReference();

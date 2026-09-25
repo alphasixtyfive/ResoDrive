@@ -16,7 +16,8 @@ public partial class MainWindow
         if (!IsInitialized || _rcloneMutationBusy)
             return;
         StatusVisuals.ApplyPending(RcloneStatusIcon);
-        SetLiveText(RcloneStatusText, "Checking rclone…");
+        SetLiveText(RcloneStatusText, "Checking…");
+        RcloneHostIdentityStatusText.Visibility = Visibility.Collapsed;
         _rcloneRuntimeReady = false;
         AddMountButton.IsEnabled = false;
         var generation = ++_componentStatusGeneration;
@@ -40,7 +41,8 @@ public partial class MainWindow
             if (rclone)
             {
                 StatusVisuals.Apply(RcloneStatusIcon, success: false, error: true);
-                SetLiveText(RcloneStatusText, "rclone could not be inspected");
+                SetLiveText(RcloneStatusText, "Could not inspect");
+                RcloneHostIdentityStatusText.Visibility = Visibility.Collapsed;
             }
             else
             {
@@ -92,6 +94,7 @@ public partial class MainWindow
         {
             StatusVisuals.Apply(RcloneStatusIcon, success: false, error: true);
             _rcloneInstalledVersion = null;
+            RcloneHostIdentityStatusText.Visibility = Visibility.Collapsed;
             _rcloneRepairRequested = result.Error?.Code == "rclone.invalid";
             _rcloneRuntimeReady = false;
             var missing = result.Error?.Code == "rclone.not_installed";
@@ -102,7 +105,7 @@ public partial class MainWindow
             SetLiveText(RcloneStatusText, _rcloneRepairRequested
                 ? "The managed runtime is invalid and can be repaired"
                 : missing
-                    ? $"Download {RcloneBootstrapService.ReleaseVersion} to continue"
+                    ? $"Download {RcloneBootstrapService.ReleaseVersion}"
                     : $"{result.Error?.Message ?? "rclone is unavailable"} · Retry the component check");
             UpdateRcloneButtonText.Text = _rcloneRepairRequested ? "Repair" : missing ? "Download" : "Update";
             RefreshRcloneUpdateAction();
@@ -114,6 +117,7 @@ public partial class MainWindow
         _rcloneRepairRequested = false;
         _rcloneRuntimeReady = true;
         _rcloneInstalledVersion = result.Value.Version;
+        RcloneHostIdentityStatusText.Visibility = Visibility.Visible;
         AddMountButton.IsEnabled = !_rcloneMutationBusy;
         UpdateRcloneButtonText.Text = "Update";
         SetRcloneStatusDetail(_rcloneUpdate is null
@@ -151,9 +155,10 @@ public partial class MainWindow
             _rcloneRuntimeReady = !string.IsNullOrEmpty(result.Value.CurrentVersion);
             var missing = string.IsNullOrEmpty(result.Value.CurrentVersion);
             _rcloneInstalledVersion = missing ? null : result.Value.CurrentVersion;
+            RcloneHostIdentityStatusText.Visibility = missing ? Visibility.Collapsed : Visibility.Visible;
             UpdateRcloneButtonText.Text = missing ? "Download" : "Update";
             SetRcloneStatusDetail(missing
-                ? $"Download {result.Value.AvailableVersion} to continue"
+                ? $"Download {result.Value.AvailableVersion}"
                 : result.Value.UpdateAvailable
                     ? $"{result.Value.AvailableVersion} available"
                     : "Up to date");
@@ -634,7 +639,7 @@ public partial class MainWindow
     {
         var text = string.IsNullOrWhiteSpace(_rcloneInstalledVersion)
             ? detail
-            : $"{_rcloneInstalledVersion} · Managed by {ProductInfo.Name} · {detail}";
+            : $"{_rcloneInstalledVersion} · {detail}";
         if (announce)
             SetLiveText(RcloneStatusText, text);
         else

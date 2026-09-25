@@ -627,7 +627,7 @@
                     </Button>
                   </StackPanel>
                 </Grid>
-                <Grid Grid.Row="2" MinHeight="50" Margin="0,10,0,0">
+                <Grid Grid.Row="2" MinHeight="42" Margin="0,10,0,0">
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="22" />
                     <ColumnDefinition Width="*" />
@@ -636,25 +636,44 @@
                   <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
                   </Grid.RowDefinitions>
                   <Path
                     x:Name="RcloneStatusIcon"
                     Style="{StaticResource StatusIcon}"
                   />
-                  <TextBlock Grid.Column="1" Text="rclone" FontWeight="SemiBold" Margin="0,0,16,0" />
-                  <TextBlock
-                    x:Name="RcloneStatusText"
-                    Grid.Row="1"
-                    Grid.Column="1"
-                    Text="Checking rclone…"
-                    Style="{StaticResource ComponentStatusText}"
-                    ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
-                    AutomationProperties.LiveSetting="Polite"
-                  />
+                  <Grid Grid.Column="1" VerticalAlignment="Center">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto" />
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="rclone" FontWeight="SemiBold" Margin="0,0,10,0" VerticalAlignment="Center" />
+                    <TextBlock
+                      x:Name="RcloneStatusText"
+                      Grid.Column="1"
+                      Text="Checking…"
+                      Style="{StaticResource ComponentStatusText}"
+                      Margin="0,0,8,0"
+                      TextWrapping="NoWrap"
+                      VerticalAlignment="Center"
+                      ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
+                      AutomationProperties.LiveSetting="Polite"
+                    />
+                    <TextBlock
+                      x:Name="RcloneHostIdentityStatusText"
+                      Grid.Column="2"
+                      Text="· checking"
+                      Style="{StaticResource ComponentStatusText}"
+                      Margin="0,0,8,0"
+                      TextWrapping="NoWrap"
+                      VerticalAlignment="Center"
+                      Visibility="Collapsed"
+                      AutomationProperties.LiveSetting="Polite"
+                    />
+                  </Grid>
                   <ProgressBar
                     x:Name="RcloneDownloadProgress"
-                    Grid.Row="2"
+                    Grid.Row="1"
                     Grid.Column="1"
                     Grid.ColumnSpan="2"
                     Style="{StaticResource SlimProgressBar}"
@@ -662,7 +681,7 @@
                     Visibility="Collapsed"
                     Value="0"
                   />
-                  <StackPanel Grid.RowSpan="2" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                  <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button
                       x:Name="UpdateRcloneButton"
                       Style="{StaticResource IconOnlyButton}"

@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ResoDrive.Core\ResoDrive.Core.csproj" />
+    <PackageReference Include="System.Management" />
   </ItemGroup>
 
   <PropertyGroup>

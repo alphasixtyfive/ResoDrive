@@ -80,7 +80,7 @@ public static partial class RemoteWipeWorkStopper
         { return false; }
     }
 
-    private static unsafe string CanonicalExecutablePath(string path)
+    internal static unsafe string CanonicalExecutablePath(string path)
     {
         var fullPath = Path.GetFullPath(path);
         var buffer = new char[32_768];

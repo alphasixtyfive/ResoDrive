@@ -303,6 +303,11 @@
           "Microsoft.TestPlatform.ObjectModel": "18.9.0"
         }
       },
+      "System.CodeDom": {
+        "type": "Transitive",
+        "resolved": "10.0.11",
+        "contentHash": "v40pNeBoZTYsiVxz+PzyZmmIr2JIhpK4VsFpQqZSZCXa51PDlNXIN2ESm8kDU0voZYVfLhxF9HvmBsxCJmkiRg=="
+      },
       "System.Diagnostics.EventLog": {
         "type": "Transitive",
         "resolved": "10.0.11",
@@ -351,9 +356,9 @@
       "resodrive": {
         "type": "Project",
         "dependencies": {
-          "ResoDrive.Core": "[0.3.0, )",
-          "ResoDrive.Host": "[0.3.0, )",
-          "ResoDrive.Windows": "[0.3.0, )"
+          "ResoDrive.Core": "[0.3.15, )",
+          "ResoDrive.Host": "[0.3.15, )",
+          "ResoDrive.Windows": "[0.3.15, )"
         }
       },
       "resodrive.core": {
@@ -363,14 +368,15 @@
         "type": "Project",
         "dependencies": {
           "Microsoft.Extensions.Hosting": "[10.0.11, )",
-          "ResoDrive.Core": "[0.3.0, )",
-          "ResoDrive.Windows": "[0.3.0, )"
+          "ResoDrive.Core": "[0.3.15, )",
+          "ResoDrive.Windows": "[0.3.15, )"
         }
       },
       "resodrive.windows": {
         "type": "Project",
         "dependencies": {
-          "ResoDrive.Core": "[0.3.0, )"
+          "ResoDrive.Core": "[0.3.15, )",
+          "System.Management": "[10.0.11, )"
         }
       },
       "Microsoft.Extensions.Hosting": {
@@ -401,6 +407,15 @@
           "Microsoft.Extensions.Logging.EventLog": "10.0.11",
           "Microsoft.Extensions.Logging.EventSource": "10.0.11",
           "Microsoft.Extensions.Options": "10.0.11"
+        }
+      },
+      "System.Management": {
+        "type": "CentralTransitive",
+        "requested": "[10.0.11, )",
+        "resolved": "10.0.11",
+        "contentHash": "xyNn8KGbWI88LoUwg3rB8qcpFFST6dr8Ro/qS8GBu2GOwR0v7J82kVFHTiiPtvEKS79VbMTxs/sIKQ+Cq1Zs1g==",
+        "dependencies": {
+          "System.CodeDom": "10.0.11"
         }
       }
     }

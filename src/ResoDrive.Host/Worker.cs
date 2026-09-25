@@ -43,6 +43,11 @@ public sealed partial class Worker : BackgroundService
     private bool _recoveringRemoteWipe;
     private string _clientUserAgent = ClientUserAgent.Value;
     private readonly bool _inspectRuntimeUserAgent;
+    private readonly RcloneRuntimeLocator _runtimeLocator;
+    private readonly TimeSpan _runtimeIdentityRetryInterval;
+    private RuntimeIdentity _runtimeIdentity = new(null, null);
+
+    private sealed record RuntimeIdentity(string? Version, string? ErrorCode);
 
     public Worker(
         ApplicationPaths paths,
@@ -54,7 +59,8 @@ public sealed partial class Worker : BackgroundService
 
     internal Worker(ApplicationPaths paths, ILogger<Worker> logger,
         IHostApplicationLifetime applicationLifetime, RemoteWipeClient remoteWipeClient,
-        RemoteWipeEnrollmentService? wipeEnrollment = null, bool inspectRuntimeUserAgent = false)
+        RemoteWipeEnrollmentService? wipeEnrollment = null, bool inspectRuntimeUserAgent = false,
+        RcloneRuntimeLocator? runtimeLocator = null, TimeSpan? runtimeIdentityRetryInterval = null)
     {
         _paths = paths;
         _logger = logger;
@@ -64,6 +70,10 @@ public sealed partial class Worker : BackgroundService
         _wipeCoordinator = new(paths, _remoteWipeClient);
         _wipeEnrollment = wipeEnrollment ?? new(paths);
         _inspectRuntimeUserAgent = inspectRuntimeUserAgent;
+        _runtimeLocator = runtimeLocator ?? new(paths);
+        _runtimeIdentityRetryInterval = runtimeIdentityRetryInterval ?? TimeSpan.FromMinutes(1);
+        if (_runtimeIdentityRetryInterval <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(runtimeIdentityRetryInterval));
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -98,7 +108,10 @@ public sealed partial class Worker : BackgroundService
         await Task.WhenAll(
             ScheduleAsync(stoppingToken),
             MonitorMountsAsync(stoppingToken),
-            MonitorRemoteWipeAsync(stoppingToken)).ConfigureAwait(false);
+            MonitorRemoteWipeAsync(stoppingToken),
+            _inspectRuntimeUserAgent
+                ? MonitorRuntimeIdentityAsync(stoppingToken)
+                : Task.CompletedTask).ConfigureAwait(false);
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)
@@ -433,6 +446,24 @@ public sealed partial class Worker : BackgroundService
             }
             finally { _reloadGate.Release(); }
         } while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false));
+    }
+
+    private async Task MonitorRuntimeIdentityAsync(CancellationToken token)
+    {
+        using var timer = new PeriodicTimer(_runtimeIdentityRetryInterval);
+        while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
+        {
+            if (Volatile.Read(ref _runtimeIdentity).Version is not null || _shutdownRequested)
+                continue;
+            await _reloadGate.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                if (Volatile.Read(ref _runtimeIdentity).Version is null && !_shutdownRequested &&
+                    (await RefreshRuntimeUserAgentAsync(token).ConfigureAwait(false)).Succeeded)
+                    LogRuntimeInspectionRecovered(_logger);
+            }
+            finally { _reloadGate.Release(); }
+        }
     }
 
     private async Task<bool> CheckForRemoteWipeAsync(CancellationToken token)
@@ -775,18 +806,35 @@ public sealed partial class Worker : BackgroundService
 
     private async Task<OperationResult> RefreshRuntimeUserAgentAsync(CancellationToken token)
     {
-        var runtime = await new RcloneRuntimeLocator(_paths).InspectAsync(token).ConfigureAwait(false);
+        var runtime = await _runtimeLocator.InspectAsync(token).ConfigureAwait(false);
         if (!runtime.Succeeded || runtime.Value is null)
-            return Result.Failure(
-                runtime.Error?.Code ?? "rclone.invalid",
+        {
+            var code = runtime.Error?.Code ?? "rclone.invalid";
+            SetClientUserAgent(ClientUserAgent.Value);
+            Volatile.Write(ref _runtimeIdentity, new(null, code));
+            return Result.Failure(code,
                 runtime.Error?.Message ?? "The managed rclone installation could not be verified.",
                 runtime.Error?.IsTransient ?? false);
+        }
 
-        _clientUserAgent = ClientUserAgent.WithRcloneVersion(runtime.Value.Version);
+        var userAgent = ClientUserAgent.WithRcloneVersion(runtime.Value.Version);
+        if (userAgent == ClientUserAgent.Value)
+        {
+            SetClientUserAgent(ClientUserAgent.Value);
+            Volatile.Write(ref _runtimeIdentity, new(null, "rclone.version_format"));
+            return Result.Failure("rclone.version_format", "The managed rclone installation reported an unrecognized version.");
+        }
+        SetClientUserAgent(userAgent);
+        Volatile.Write(ref _runtimeIdentity, new(runtime.Value.Version, null));
+        return Result.Success();
+    }
+
+    private void SetClientUserAgent(string value)
+    {
+        _clientUserAgent = value;
         _remoteWipeClient.SetClientUserAgent(_clientUserAgent);
         _mounts?.SetClientUserAgent(_clientUserAgent);
         _syncs?.SetClientUserAgent(_clientUserAgent);
-        return Result.Success();
     }
 
     private bool HasWork() =>
@@ -879,14 +927,20 @@ public sealed partial class Worker : BackgroundService
         }, (_tasks, id), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
-    private HostResponse Status() => new(
-        true,
-        Mounts: _mounts?.GetSnapshots().Select(snapshot => HostProtocol.ToStatus(snapshot) with
-        {
-            RemoteWipeStatus = _wipeEnrollmentStatuses.GetValueOrDefault(snapshot.MountId.Value)
-        }).ToArray() ?? [],
-        SyncJobs: _syncs?.GetSnapshots().Select(HostProtocol.ToStatus).ToArray() ?? [],
-        HostBaseDirectory: AppContext.BaseDirectory);
+    private HostResponse Status()
+    {
+        var identity = Volatile.Read(ref _runtimeIdentity);
+        return new(
+            true,
+            Mounts: _mounts?.GetSnapshots().Select(snapshot => HostProtocol.ToStatus(snapshot) with
+            {
+                RemoteWipeStatus = _wipeEnrollmentStatuses.GetValueOrDefault(snapshot.MountId.Value)
+            }).ToArray() ?? [],
+            SyncJobs: _syncs?.GetSnapshots().Select(HostProtocol.ToStatus).ToArray() ?? [],
+            HostBaseDirectory: AppContext.BaseDirectory,
+            ReportedRcloneVersion: identity.Version,
+            RcloneIdentityErrorCode: identity.ErrorCode);
+    }
     private static HostResponse Response(OperationResult result) => new(
         result.Succeeded,
         result.Error?.Code,
@@ -921,4 +975,6 @@ public sealed partial class Worker : BackgroundService
     private static partial void LogRemoteWipeEnrollmentFailure(ILogger logger);
     [LoggerMessage(1013, LogLevel.Warning, "The managed rclone version could not be added to the client identity: {Code} {Message}")]
     private static partial void LogRuntimeInspectionFailure(ILogger logger, string? code, string? message);
+    [LoggerMessage(1014, LogLevel.Information, "The managed rclone version is now included in the client identity.")]
+    private static partial void LogRuntimeInspectionRecovered(ILogger logger);
 }

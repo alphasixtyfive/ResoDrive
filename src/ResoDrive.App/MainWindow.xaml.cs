@@ -556,6 +556,17 @@ public partial class MainWindow : WpfWindow
                     _hostUnavailableReported = false;
                 }
                 ShowHostConnected();
+                SetLiveText(RcloneHostIdentityStatusText,
+                    response.ReportedRcloneVersion is { Length: > 0 }
+                        ? "· detected"
+                        : response.RcloneIdentityErrorCode is not null
+                            ? "· retrying"
+                            : "· unknown");
+                RcloneHostIdentityStatusText.ToolTip = response.ReportedRcloneVersion is { Length: > 0 } reportedVersion
+                    ? $"Background host detected rclone {reportedVersion} locally; server receipt is not confirmed."
+                    : response.RcloneIdentityErrorCode is not null
+                        ? "Background host identity: retrying rclone version check"
+                        : "Background host identity: rclone version not available";
                 _model.ApplyStatus(response.Mounts);
                 _model.ApplySyncStatus(response.SyncJobs);
                 UpdateTrayStatus();
@@ -573,6 +584,8 @@ public partial class MainWindow : WpfWindow
                     _hostUnavailableReported = true;
                 }
                 ShowHostInterrupted(response.ErrorMessage, recoveryExhausted: false);
+                SetLiveText(RcloneHostIdentityStatusText, "· host offline");
+                RcloneHostIdentityStatusText.ToolTip = "Background host identity: host unavailable";
                 if (response.ErrorCode?.Equals("host.unavailable", StringComparison.OrdinalIgnoreCase) == true)
                     await TryRecoverHostAsync();
             }

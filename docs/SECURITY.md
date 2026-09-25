@@ -55,8 +55,13 @@ ResoDrive/0.3.13 (Windows 11; Edition: Professional; Release: 25H2; Build: 10.0.
 This is an example, not a minimum supported build. The product version comes from
 the running build. The rclone version comes from ResoDrive's verified private
 runtime and is inspected when the background host starts and after the managed
-engine is installed, repaired or updated, not once per request. Windows details are read locally without elevation and cached
-for the process lifetime; restart ResoDrive to refresh them after OS changes.
+engine is installed, repaired or updated. A failed host inspection is retried once
+per minute until it succeeds; it does not block storage access or restart an active
+mount. The diagnostic export distinguishes the UI's component version from the
+version in the host's request identity. A mount already running with an older
+identity keeps it until that mount reconnects. Windows details are read locally
+without elevation and cached for the process lifetime; restart ResoDrive to
+refresh them after OS changes.
 Missing or unreadable optional registry details are omitted. Edition identifiers
 are preserved, including LTSC variants; Windows Server is distinguished from
 Windows 10/11 when its installation type is available. No hostname, account name,

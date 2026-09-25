@@ -29,20 +29,43 @@ public sealed class InstallationPreparationTests
     {
         var runtime = new FakeRuntime(new(true, HostProcessId: 123));
         await new InstallationPreparationService(runtime).PrepareAsync(@"C:\Program Files\rdrive");
-        Assert.Equal(["shutdown", "windows:123", "wait:123"], runtime.Calls);
+        Assert.Equal(["shutdown", "windows:123", "wait:123", "verify"], runtime.Calls);
     }
 
     [Fact]
-    public async Task ForeignInstallationIsNeverStopped()
+    public async Task MissingHostClosesOnlyVerifiedOrphanedUi()
+    {
+        var runtime = new FakeRuntime(new(false, "host.unavailable"));
+        await new InstallationPreparationService(runtime).PrepareAsync(@"C:\Program Files\rdrive");
+        Assert.Equal(["shutdown", "orphan-ui"], runtime.Calls);
+    }
+
+    [Theory]
+    [InlineData("A host mutex is still held.")]
+    [InlineData("A rclone transfer is still running.")]
+    [InlineData("A process belongs to another Windows account.")]
+    public async Task UnverifiableOrphanDoesNotContinueInstallation(string reason)
+    {
+        var runtime = new FakeRuntime(new(false, "host.unavailable")) { OrphanFailure = new IOException(reason) };
+        var error = await Assert.ThrowsAsync<IOException>(() =>
+            new InstallationPreparationService(runtime).PrepareAsync(@"C:\Program Files\rdrive"));
+        Assert.Equal(reason, error.Message);
+        Assert.Equal(["shutdown", "orphan-ui"], runtime.Calls);
+    }
+
+    [Fact]
+    public async Task ForeignInstallationDoesNotStopItsHostOrUi()
     {
         var runtime = new FakeRuntime(new(false, "host.different_installation", HostProcessId: 456));
-        await new InstallationPreparationService(runtime).PrepareAsync(@"C:\Program Files\rdrive");
-        Assert.Equal(["shutdown", "windows:456"], runtime.Calls);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new InstallationPreparationService(runtime).PrepareAsync(@"C:\Program Files\rdrive"));
+        Assert.Equal(["shutdown"], runtime.Calls);
     }
 
     private sealed class FakeRuntime(HostResponse response) : IInstallationPreparationRuntime
     {
         public List<string> Calls { get; } = [];
+        public IOException? OrphanFailure { get; init; }
         public Task<HostResponse> ShutdownAsync(string directory, CancellationToken token)
         {
             Calls.Add("shutdown");
@@ -56,6 +79,16 @@ public sealed class InstallationPreparationTests
         public Task WaitForHostExitAsync(int? processId, CancellationToken token)
         {
             Calls.Add($"wait:{processId}");
+            return Task.CompletedTask;
+        }
+        public Task StopOrphanedUiAsync(string directory, CancellationToken token)
+        {
+            Calls.Add("orphan-ui");
+            return OrphanFailure is null ? Task.CompletedTask : Task.FromException(OrphanFailure);
+        }
+        public Task VerifyStoppedAsync(string directory, CancellationToken token)
+        {
+            Calls.Add("verify");
             return Task.CompletedTask;
         }
     }

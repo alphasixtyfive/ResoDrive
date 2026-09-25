@@ -93,9 +93,19 @@ public sealed class ClientUserAgentTests
         AssertValidHeader(value);
     }
 
+    [Fact]
+    public void DevelopmentRcloneVersionIsIncludedInTheHeader()
+    {
+        var value = ClientUserAgent.WithRcloneVersion("v1.75.1-DEV");
+
+        Assert.EndsWith("; Rclone: v1.75.1-DEV)", value, StringComparison.Ordinal);
+        AssertValidHeader(value);
+    }
+
     [Theory]
     [InlineData("v1.75.0\r\nInjected: true")]
     [InlineData("rclone v1.75.0")]
+    [InlineData("v1.75.0-")]
     [InlineData("")]
     public void InvalidRcloneVersionIsOmitted(string version)
     {

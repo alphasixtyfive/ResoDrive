@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## [0.3.15] - 2026-09-25
+
+- Let Setup close a verified leftover ResoDrive window when the background host is absent, and retry a slow host before stopping an upgrade.
+- Keep installation blocked when a running host, rclone work, or process identity cannot be verified.
+- Allow an unrelated rclone process to keep running during an upgrade only when its own live ResoDrive host can be verified; other unverified work still blocks setup.
+- Retry the background host's rclone version check after a startup failure so later storage requests can report the engine without restarting ResoDrive.
+- Keep the rclone status on one line in Settings, and record the host's detected version and inspection error code in diagnostic exports alongside the UI component version.
+- Recognize safe development and beta rclone version suffixes in the storage identity.
 
 ## [0.3.14] - 2026-09-23
 
@@ -125,6 +132,7 @@ First public preview of ResoDrive.
 - Install through a small setup bundle that downloads the .NET Desktop Runtime
   only when it is missing.
 
+[0.3.15]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.15
 [0.3.14]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.14
 [0.3.13]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.13
 [0.3.12]: https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.12

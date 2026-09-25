@@ -64,17 +64,16 @@ public static class ClientUserAgent
         details.Add($"Build: {build}");
         details.Add($"ClientArchitecture: {clientArchitecture.ToString().ToLowerInvariant()}");
         details.Add($"OSArchitecture: {osArchitecture.ToString().ToLowerInvariant()}");
-        if (SafeValue(rcloneVersion, allowSpaces: false) is { } safeRcloneVersion)
-            details.Add($"Rclone: {safeRcloneVersion}");
+        if (RcloneVersion.IsReportable(rcloneVersion))
+            details.Add($"Rclone: {rcloneVersion}");
         return $"ResoDrive/{version} ({string.Join("; ", details)})";
     }
 
     public static string WithRcloneVersion(string? rcloneVersion)
     {
-        var safeVersion = SafeValue(rcloneVersion, allowSpaces: false);
-        return safeVersion is null || !Value.EndsWith(')')
+        return !RcloneVersion.IsReportable(rcloneVersion) || !Value.EndsWith(')')
             ? Value
-            : $"{Value[..^1]}; Rclone: {safeVersion})";
+            : $"{Value[..^1]}; Rclone: {rcloneVersion})";
     }
 
     private static string? SafeValue(string? value, bool allowSpaces = true)

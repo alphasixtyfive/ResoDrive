@@ -123,3 +123,36 @@ defaults to two-way binding, which cannot target read-only view-model properties
 Display runs must use `Mode=OneWay`. The process smoke test now includes a disabled
 drive fixture and fails on dispatcher/startup exceptions, rather than testing
 only an empty window. Both CI and the release workflow run that populated test.
+
+## Later unavailable-host upgrade report
+
+An installer dialog reported that a running ResoDrive process was not responding.
+The displayed eight-character error ID is a random log correlation ID, not an
+installer failure code. The message comes from the new package's preparation
+helper when its pipe request returns `host.unavailable` and it finds a
+`resodrive.exe` at the installed path. The process may be the tray UI alone;
+the screenshot and ID do not establish why the remote machine's host was absent.
+
+The helper now retries the authenticated pipe request while the legacy host
+mutex exists, since older hosts can hold that mutex before opening the pipe.
+With no host mutex, it can close a verified tray UI only after checking readable
+mount ownership records and remaining managed rclone processes. It verifies the
+process path, session, Windows account SID and command line, and checks the full
+process set before closing any UI. It never force-stops a host or rclone child.
+Unverifiable identity, active background work, a foreign installation or a
+different Windows account still stops the upgrade with an actionable message.
+
+The orphaned-UI check scans managed rclone processes across Windows sessions.
+It permits an outside-root process only when its live parent is a ResoDrive host
+at another executable path and the authenticated status pipe confirms that
+host's process ID and data root. Process ancestry, account, command line,
+config path and physical executable identity must all agree. An orphaned or
+unverifiable process still blocks the upgrade.
+
+On 25 September, an isolated 0.3.14 window-only UAC test first stopped safely
+because a live production rclone process was present under another data root.
+After adding the verified live-host check, the same isolated elevated test
+passed: the old UI exited and disposable settings and cache hashes were
+unchanged. Production rclone processes were left running. The separate
+unelevated-host-to-elevated-helper test also passed with disposable data.
+These helper tests do not replace actual MSI and in-app updater acceptance.

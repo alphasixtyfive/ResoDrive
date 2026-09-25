@@ -50,11 +50,14 @@ public sealed class RcloneRuntimeLocator
             var version = result.StandardOutput
                 .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .FirstOrDefault(line => line.StartsWith("rclone v", StringComparison.OrdinalIgnoreCase));
-            return result.ExitCode == 0 && version is not null
-                ? Result.Success(new InstallationStatus(version["rclone ".Length..], ExecutablePath))
-                : Result.Failure<InstallationStatus>(
+            if (result.ExitCode != 0 || version is null)
+                return Result.Failure<InstallationStatus>(
                     "rclone.invalid",
                     "The managed rclone installation could not be verified.");
+            var reportedVersion = "v" + version["rclone v".Length..];
+            // A valid engine remains usable even when its version cannot fit in the
+            // storage identity; the host checks reportability separately.
+            return Result.Success(new InstallationStatus(reportedVersion, ExecutablePath));
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or InvalidOperationException)

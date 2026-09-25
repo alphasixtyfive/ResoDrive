@@ -103,7 +103,8 @@ Readiness checks run periodically, including after resume, but do not prove serv
 connectivity when files can be served from cache.
 
 Use **Settings → Export diagnostics** to create a report with component versions,
-numeric performance options, mount states and recent UI error references. Names,
+the rclone version reported by the background host, numeric performance options,
+mount states and recent UI error references. Names,
 addresses, paths, credentials and raw log messages are omitted. Review the report
 before sharing it.
 

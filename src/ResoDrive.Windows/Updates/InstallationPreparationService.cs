@@ -1,6 +1,3 @@
-using System.ComponentModel;
-using System.Diagnostics;
-
 namespace ResoDrive.Windows;
 
 internal interface IInstallationPreparationRuntime
@@ -8,6 +5,8 @@ internal interface IInstallationPreparationRuntime
     Task<HostResponse> ShutdownAsync(string directory, CancellationToken token);
     Task StopWindowsAsync(string directory, int? hostProcessId, CancellationToken token);
     Task WaitForHostExitAsync(int? processId, CancellationToken token);
+    Task StopOrphanedUiAsync(string directory, CancellationToken token);
+    Task VerifyStoppedAsync(string directory, CancellationToken token);
 }
 
 public sealed class InstallationPreparationService
@@ -30,7 +29,14 @@ public sealed class InstallationPreparationService
         {
             progress?.Report("Checking uploads and stopping background work…");
             var response = await _runtime.ShutdownAsync(directory, timeout.Token).ConfigureAwait(false);
-            if (!response.Succeeded && response.ErrorCode is not ("host.unavailable" or "host.different_installation"))
+            if (response.ErrorCode == "host.unavailable")
+            {
+                progress?.Report("Checking whether only a ResoDrive window remains…");
+                await _runtime.StopOrphanedUiAsync(directory, timeout.Token).ConfigureAwait(false);
+                progress?.Report("ResoDrive is ready. Windows Installer will now continue.");
+                return;
+            }
+            if (!response.Succeeded)
                 throw new InvalidOperationException(response.ErrorMessage ?? "ResoDrive could not safely stop its background work.");
 
             // Close the UI as soon as shutdown is accepted, before its recovery loop can restart the host.
@@ -39,6 +45,7 @@ public sealed class InstallationPreparationService
             progress?.Report("Waiting for mounted drives and sync jobs to stop…");
             if (response.Succeeded)
                 await _runtime.WaitForHostExitAsync(response.HostProcessId, timeout.Token).ConfigureAwait(false);
+            await _runtime.VerifyStoppedAsync(directory, timeout.Token).ConfigureAwait(false);
             progress?.Report("ResoDrive is ready. Windows Installer will now continue.");
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -51,54 +58,26 @@ public sealed class InstallationPreparationService
     {
         public async Task<HostResponse> ShutdownAsync(string directory, CancellationToken token)
         {
-            var response = await HostClient.SendToInstallationAsync(new HostRequest("shutdown", Confirmed: true),
-                directory, TimeSpan.FromSeconds(15), token).ConfigureAwait(false);
-            if (response.ErrorCode == "host.unavailable")
+            HostResponse response;
+            for (var attempt = 0; ; attempt++)
             {
-                foreach (var process in Process.GetProcessesByName("resodrive"))
-                {
-                    using (process)
-                    {
-                        if (process.Id == Environment.ProcessId || process.SessionId != Process.GetCurrentProcess().SessionId)
-                            continue;
-                        try
-                        {
-                            if (string.Equals(process.MainModule?.FileName, Path.Combine(directory, "resodrive.exe"), StringComparison.OrdinalIgnoreCase))
-                                throw new IOException("A running ResoDrive process is not responding. Exit ResoDrive from its tray menu and retry the installation. Your settings and cache have been preserved.");
-                        }
-                        catch (InvalidOperationException) { /* Already exited. */ }
-                        catch (Win32Exception) { /* Cannot inspect a process owned by another account. */ }
-                    }
-                }
+                response = await HostClient.SendToInstallationAsync(new HostRequest("shutdown", Confirmed: true),
+                    directory, TimeSpan.FromSeconds(15), token).ConfigureAwait(false);
+                if (response.ErrorCode != "host.unavailable" || attempt == 2 ||
+                    !InstallerProcessInspection.IsHostMutexPresent())
+                    return response;
+                await Task.Delay(500, token).ConfigureAwait(false);
             }
-            return response;
         }
 
-        public async Task StopWindowsAsync(string directory, int? hostProcessId, CancellationToken token)
-        {
-            var executable = Path.Combine(directory, "resodrive.exe");
-            foreach (var process in Process.GetProcessesByName("resodrive"))
-            {
-                using (process)
-                {
-                    if (process.Id == Environment.ProcessId || process.Id == hostProcessId ||
-                        process.SessionId != Process.GetCurrentProcess().SessionId)
-                        continue;
-                    string? path;
-                    try { path = process.MainModule?.FileName; }
-                    catch (InvalidOperationException) { continue; }
-                    catch (Win32Exception) { continue; } // Another account's installation is outside this operation.
-                    if (!string.Equals(path, executable, StringComparison.OrdinalIgnoreCase))
-                        continue;
-                    try
-                    {
-                        process.Kill(entireProcessTree: false);
-                        await process.WaitForExitAsync(token).ConfigureAwait(false);
-                    }
-                    catch (InvalidOperationException) { /* Already exited. */ }
-                }
-            }
-        }
+        public Task StopWindowsAsync(string directory, int? hostProcessId, CancellationToken token) =>
+            InstallerProcessInspection.StopVerifiedUiAsync(directory, hostProcessId, token);
+
+        public Task StopOrphanedUiAsync(string directory, CancellationToken token) =>
+            InstallerProcessInspection.StopOrphanedUiAsync(directory, token);
+
+        public Task VerifyStoppedAsync(string directory, CancellationToken token) =>
+            InstallerProcessInspection.VerifyStoppedAsync(directory, token);
 
         public async Task WaitForHostExitAsync(int? processId, CancellationToken token)
         {
@@ -106,7 +85,7 @@ public sealed class InstallationPreparationService
                 throw new InvalidOperationException("The background host did not provide a verifiable process identity.");
             try
             {
-                using var process = Process.GetProcessById(id);
+                using var process = System.Diagnostics.Process.GetProcessById(id);
                 await process.WaitForExitAsync(token).ConfigureAwait(false);
             }
             catch (ArgumentException) { /* Already exited. */ }

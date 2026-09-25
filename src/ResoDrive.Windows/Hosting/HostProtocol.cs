@@ -47,7 +47,9 @@ public sealed record HostResponse(
     IReadOnlyList<HostMountStatus>? Mounts = null,
     IReadOnlyList<HostSyncStatus>? SyncJobs = null,
     string? HostBaseDirectory = null,
-    int? HostProcessId = null);
+    int? HostProcessId = null,
+    string? ReportedRcloneVersion = null,
+    string? RcloneIdentityErrorCode = null);
 
 public static class HostProtocol
 {
@@ -151,6 +153,11 @@ public static class HostClient
             timeout, enforceInstallation: false, cancellationToken);
     }
 
+    internal static Task<HostResponse> SendToDataRootAsync(
+        HostRequest request, ApplicationPaths paths, TimeSpan timeout,
+        CancellationToken cancellationToken = default) =>
+        SendCoreAsync(request, timeout, enforceInstallation: false, cancellationToken, paths);
+
     public static Task<HostResponse> SendAsync(
         HostRequest request,
         CancellationToken cancellationToken = default)
@@ -200,14 +207,15 @@ public static class HostClient
         HostRequest request,
         TimeSpan responseTimeout,
         bool enforceInstallation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ApplicationPaths? dataPaths = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(responseTimeout, TimeSpan.Zero);
         var effectiveRequest = enforceInstallation
             ? request with { ExpectedHostBaseDirectory = AppContext.BaseDirectory }
             : request;
-        var paths = new ApplicationPaths();
+        var paths = dataPaths ?? new ApplicationPaths();
         using var pipe = CurrentUserPipe.CreateClient(HostProtocol.GetPipeName(paths));
         using var timeout = new CancellationTokenSource(responseTimeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
