@@ -75,14 +75,20 @@
         />
 
         <TextBlock Grid.Row="2" Text="Remote folder" VerticalAlignment="Center" />
-        <TextBox
-          x:Name="RemotePathBox"
-          Grid.Row="2"
-          Grid.Column="1"
-          Style="{StaticResource EditorTextBox}"
-          ToolTip="Optional folder on the selected remote."
-          AutomationProperties.Name="Remote folder"
-        />
+        <StackPanel Grid.Row="2" Grid.Column="1" Margin="0,0,0,5">
+          <TextBox
+            x:Name="RemotePathBox"
+            Style="{StaticResource EditorTextBox}"
+            ToolTip="For example, /Documents from the storage root."
+            AutomationProperties.Name="Remote folder"
+          />
+          <TextBlock
+            Text="Start with / for an absolute path. Drive folder is not added."
+            Foreground="{StaticResource MutedBrush}"
+            FontSize="11"
+            Margin="0,3,0,0"
+          />
+        </StackPanel>
 
         <TextBlock Grid.Row="3" Text="Local folder" VerticalAlignment="Center" />
         <Grid Grid.Row="3" Grid.Column="1">
@@ -128,10 +134,10 @@
         <StackPanel Grid.Row="5" Grid.Column="1" Margin="0,4,0,8">
           <CheckBox
             x:Name="ManagedLocalCopyBox"
-            Content="Keep a managed local copy"
+            Content="Store downloads in ResoDrive"
             Checked="ManagedLocalCopy_Changed"
             Unchecked="ManagedLocalCopy_Changed"
-            AutomationProperties.Name="Keep a managed local copy"
+            AutomationProperties.Name="Store downloads in ResoDrive"
           />
           <TextBlock
             x:Name="LocalCopyNotice"

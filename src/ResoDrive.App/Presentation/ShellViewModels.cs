@@ -423,7 +423,6 @@ public sealed class MountRow : NotifyBase
 public sealed class SyncRow : NotifyBase
 {
     private readonly SyncMode? _mode;
-    private readonly string _mountRemotePath;
     private SyncLifecycle _lifecycle = SyncLifecycle.Idle;
     private string _statusPrimary = string.Empty;
     private string _statusSecondary = string.Empty;
@@ -433,7 +432,7 @@ public sealed class SyncRow : NotifyBase
         MountId = mount.Id;
         Settings = settings;
         MountName = mount.DisplayName;
-        _mountRemotePath = mount.RemotePath;
+        RemoteName = mount.RemoteName;
         _mode = Enum.TryParse<SyncMode>(settings.Mode, true, out var mode) && mode.IsSupported()
             ? mode
             : null;
@@ -444,13 +443,14 @@ public sealed class SyncRow : NotifyBase
     public SyncJobSettings Settings { get; }
     public Guid Id => Settings.Id;
     public string MountName { get; }
+    public string RemoteName { get; }
     public string Name => Settings.DisplayName;
     public bool Enabled => Settings.Enabled;
     public string Route
     {
         get
         {
-            var remote = RemotePathUtility.Display(MountName, _mountRemotePath, Settings.RemotePath);
+            var remote = RemotePathUtility.Display(RemoteName, Settings.RemotePath);
             return _mode?.IsFromRemote() == true
                 ? $"{remote}  →  {Settings.LocalPath}"
                 : $"{Settings.LocalPath}  →  {remote}";

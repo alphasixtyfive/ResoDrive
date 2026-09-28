@@ -132,6 +132,13 @@ public sealed class RcloneSyncCoordinator : IDisposable
             return Result.Failure("sync.invalid", validation.Issues[0].Message);
         }
 
+        if (RemotePathUtility.Normalize(definition.RemotePath).Length > 0 &&
+            (RemotePathUtility.Normalize(job.RemotePath).Length == 0 || !job.RemotePath.StartsWith('/')))
+        {
+            return Result.Failure("sync.remote_path_absolute",
+                "Set Remote folder to a path starting with / for this drive.");
+        }
+
         if (definitions.Any(item => OverlapsMountTarget(job.LocalPath, item.Target)))
         {
             return Result.Failure(
@@ -298,9 +305,7 @@ public sealed class RcloneSyncCoordinator : IDisposable
 
     private IEnumerable<string> BuildArguments(MountDefinition mount, SyncJob job)
     {
-        var remote = RemotePathUtility.FormatSource(
-            mount.RemoteName,
-            RemotePathUtility.Combine(mount.RemotePath, job.RemotePath));
+        var remote = RemotePathUtility.FormatSource(mount.RemoteName, job.RemotePath);
         var (command, source, destination) = job.Mode switch
         {
             SyncMode.CopyToRemote => ("copy", job.LocalPath, remote),

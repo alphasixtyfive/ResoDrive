@@ -1,7 +1,9 @@
-ResoDrive 0.3.17 improves updates on PCs where the person using ResoDrive needs a separate administrator password to install software. Once this version is installed, the app waits for its drives and background work to stop before asking Windows to start Setup. During an upgrade from an older version, Setup gives the old process time to finish closing.
+ResoDrive 0.3.18 lets sync jobs use paths from the storage connection independently of the mounted drive folder. For example, a drive mounted at `/Armeria` can copy `/Fleet Reference` to a local folder. The Sync page now shows the connection path used by each job.
 
-If work is still active or Setup cannot verify who owns a process, the update stops and leaves settings and cached files in place. The messages now explain what to close and why Windows needs an administrator account.
+**Check existing sync jobs before upgrading:** Jobs on drives mounted inside a folder may now point somewhere different. Set **Remote folder** to the full path beginning with `/`. Jobs with an empty or relative path on these drives will stop until you update them, preventing an unintended transfer or mirror.
 
-An update started from an older version may still report that ResoDrive is running under a different Windows account. If that happens, let uploads finish, choose **Exit** from ResoDrive's tray icon while signed in as the usual user, then run **ResoDrive-Setup.exe** below and enter the administrator password. Do not end ResoDrive or rclone in Task Manager while transfers may be active.
+The sync editor now explains absolute paths and managed local storage more clearly. A confirmed Nextcloud remote wipe deletes files in ResoDrive's current managed folder; external local folders stay outside it.
+
+On a standard-user PC, an update started from an older version may still report that ResoDrive is running under another Windows account. Let uploads finish, choose **Exit** from ResoDrive's tray icon while signed in as the usual user, then run **ResoDrive-Setup.exe** below and enter the administrator password.
 
 Download **ResoDrive-Setup.exe** below, or check for updates in ResoDrive Settings.

@@ -5,19 +5,6 @@ namespace ResoDrive.Core.Tests;
 public sealed class RemotePathUtilityTests
 {
     [Theory]
-    [InlineData("", "", "")]
-    [InlineData("root", "", "root")]
-    [InlineData("", "child", "child")]
-    [InlineData("/root/", "/child/", "/root/child")]
-    [InlineData("root", "/child", "root/child")]
-    [InlineData("", "/srv/harbour", "/srv/harbour")]
-    public void Combine_PreservesRootedBaseAndJoinsWithOneSeparator(
-        string root,
-        string child,
-        string expected) =>
-        Assert.Equal(expected, RemotePathUtility.Combine(root, child));
-
-    [Theory]
     [InlineData(" /srv/harbour/ ", "/srv/harbour")]
     [InlineData("documents/", "documents")]
     [InlineData("/", "")]
@@ -40,11 +27,10 @@ public sealed class RemotePathUtilityTests
     public void FormatSource_PreservesRootedRemotePath(string path, string expected) =>
         Assert.Equal(expected, RemotePathUtility.FormatSource("storage", path));
 
-    [Fact]
-    public void Display_UsesFriendlyDriveAndFolderNotation() =>
-        Assert.Equal("Archive · team/reports", RemotePathUtility.Display("Archive", "team", "reports"));
-
-    [Fact]
-    public void Display_DoesNotDuplicateAbsolutePathSeparator() =>
-        Assert.Equal("Archive · /srv/harbour", RemotePathUtility.Display("Archive", "/srv", "harbour"));
+    [Theory]
+    [InlineData("", "Archive")]
+    [InlineData("team/reports", "Archive · team/reports")]
+    [InlineData("/Fleet Reference", "Archive · /Fleet Reference")]
+    public void Display_ShowsPathFromConnectionRoot(string path, string expected) =>
+        Assert.Equal(expected, RemotePathUtility.Display("Archive", path));
 }

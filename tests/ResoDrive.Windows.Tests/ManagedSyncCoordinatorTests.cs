@@ -26,7 +26,7 @@ public sealed class ManagedSyncCoordinatorTests : IDisposable
         var runner = new RecordingRunner(arguments =>
         {
             Assert.True(Directory.Exists(job.LocalPath));
-            Assert.Equal([command, "storage:base/documents", job.LocalPath], arguments.Take(3));
+            Assert.Equal([command, "storage:/documents", job.LocalPath], arguments.Take(3));
         });
         using var coordinator = CreateCoordinator([mount], runner);
         Assert.False(Directory.Exists(job.LocalPath));
@@ -248,7 +248,7 @@ public sealed class ManagedSyncCoordinatorTests : IDisposable
             DisplayName = "Managed documents",
             LocalPath = _paths.ManagedSyncFolder(id.Value),
             ManagedLocalCopy = true,
-            RemotePath = "documents",
+            RemotePath = "/documents",
             Mode = mode
         };
         return (new MountDefinition

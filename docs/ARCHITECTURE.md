@@ -33,8 +33,9 @@ status snapshots. The WPF process never infers ownership from a visible drive.
   its private per-user rclone runtime; it never discovers or updates system copies.
 - A mount definition selects a remote, optional subpath, target, cache profile,
   restart policy, and startup policy.
-- A sync job belongs to a mount definition for organization but addresses the
-  remote endpoint directly; it does not depend on the drive being mounted.
+- A sync job belongs to a mount definition for organization but sends its own
+  folder path to the remote endpoint. The drive's subpath is never added, and the
+  drive need not be mounted. Jobs on a drive with a subpath must start with `/`.
 - Copy is the default transfer behavior. Mirror is destructive and requires a
   explicit confirmation before a mirror run.
 

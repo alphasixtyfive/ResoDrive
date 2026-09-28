@@ -343,10 +343,10 @@ public sealed class RcloneSyncCoordinatorTests
     }
 
     [Theory]
-    [InlineData(SyncMode.CopyToRemote, "copy", @"C:\Data", "storage:base/documents")]
-    [InlineData(SyncMode.CopyFromRemote, "copy", "storage:base/documents", @"C:\Data")]
-    [InlineData(SyncMode.SyncToRemote, "sync", @"C:\Data", "storage:base/documents")]
-    [InlineData(SyncMode.SyncFromRemote, "sync", "storage:base/documents", @"C:\Data")]
+    [InlineData(SyncMode.CopyToRemote, "copy", @"C:\Data", "storage:/documents")]
+    [InlineData(SyncMode.CopyFromRemote, "copy", "storage:/documents", @"C:\Data")]
+    [InlineData(SyncMode.SyncToRemote, "sync", @"C:\Data", "storage:/documents")]
+    [InlineData(SyncMode.SyncFromRemote, "sync", "storage:/documents", @"C:\Data")]
     public async Task RunAsync_MapsEverySupportedMode(
         SyncMode mode,
         string command,
@@ -355,7 +355,8 @@ public sealed class RcloneSyncCoordinatorTests
     {
         var runner = new RecordingRunner();
         var (mount, job) = CreateDefinition(enabled: true, mode);
-        mount = mount with { RemotePath = "base" };
+        job = job with { RemotePath = "/documents" };
+        mount = mount with { RemotePath = "base", SyncJobs = [job] };
         using var coordinator = CreateCoordinator(mount, runner);
 
         var result = await coordinator.RunAsync(mount.Id, job.Id);
@@ -365,17 +366,51 @@ public sealed class RcloneSyncCoordinatorTests
     }
 
     [Fact]
-    public async Task RunAsync_PreservesAbsoluteMountPathInRemoteSource()
+    public async Task RunAsync_UsesConnectionRootRatherThanMountFolder()
     {
         var runner = new RecordingRunner();
         var (mount, job) = CreateDefinition(enabled: true);
-        mount = mount with { RemotePath = "/srv/harbour" };
+        job = job with { RemotePath = "/documents" };
+        mount = mount with { RemotePath = "/srv/harbour", SyncJobs = [job] };
         using var coordinator = CreateCoordinator(mount, runner);
 
         var result = await coordinator.RunAsync(mount.Id, job.Id);
 
         Assert.True(result.Succeeded);
-        Assert.Equal("storage:/srv/harbour/documents", runner.Arguments[2]);
+        Assert.Equal("storage:/documents", runner.Arguments[2]);
+    }
+
+    [Fact]
+    public async Task RunAsync_UsesAbsoluteJobPathFromConnectionRoot()
+    {
+        var runner = new RecordingRunner();
+        var (mount, job) = CreateDefinition(enabled: true);
+        job = job with { RemotePath = "/Fleet Reference" };
+        mount = mount with { RemotePath = "/Armeria", SyncJobs = [job] };
+        using var coordinator = CreateCoordinator(mount, runner);
+
+        var result = await coordinator.RunAsync(mount.Id, job.Id);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal("storage:/Fleet Reference", runner.Arguments[2]);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("/")]
+    [InlineData("documents")]
+    public async Task RunAsync_RejectsAmbiguousPathOnSubfolderMount(string remotePath)
+    {
+        var runner = new RecordingRunner();
+        var (mount, job) = CreateDefinition(enabled: true);
+        job = job with { RemotePath = remotePath };
+        mount = mount with { RemotePath = "/Armeria", SyncJobs = [job] };
+        using var coordinator = CreateCoordinator(mount, runner);
+
+        var result = await coordinator.RunAsync(mount.Id, job.Id);
+
+        Assert.Equal("sync.remote_path_absolute", result.Error?.Code);
+        Assert.Equal(0, runner.CallCount);
     }
 
     [Fact]

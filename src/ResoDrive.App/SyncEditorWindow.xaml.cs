@@ -162,6 +162,14 @@ public partial class SyncEditorWindow : WpfWindow
             );
             return;
         }
+        if (RemotePathUtility.Normalize(SelectedMount.RemotePath).Length > 0 &&
+            !job.RemotePath.StartsWith('/'))
+        {
+            WpfMessageBox.Show(this,
+                "Start Remote folder with / for this drive, for example /Fleet Reference.",
+                "Check sync job", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
         var mirror = job.Mode.IsMirror();
         if (
             mirror
@@ -286,17 +294,23 @@ public partial class SyncEditorWindow : WpfWindow
                 managed ? "Open managed local folder" : "Browse for local folder");
 
             LocalCopyNotice.Text = managed
-                ? "Stored in ResoDrive's folder and included in Nextcloud remote wipe. External copies and upload originals are not covered."
+                ? "ResoDrive chooses this local folder. A confirmed Nextcloud remote wipe deletes its contents."
                 : IsDownload && !IsEnrolled
-                    ? "Managed copies are unavailable for this connection. Use a Nextcloud app-password connection or choose an external folder. External folders are not included in Nextcloud remote wipe."
-                    : "External folders and upload originals are not included in Nextcloud remote wipe.";
+                    ? "ResoDrive storage requires Nextcloud remote wipe setup. This folder is outside the wipe."
+                    : IsDownload
+                        ? "This local folder is outside Nextcloud remote wipe."
+                        : "Upload source files are outside Nextcloud remote wipe.";
             if (managed && _existing is { ManagedLocalCopy: false })
-                LocalCopyNotice.Text += " Existing files stay in the old folder; new downloads use the managed folder.";
+                LocalCopyNotice.Text += " Files in the old folder stay there; review them separately.";
             else if (managed && _existing is not null
                 && !_existing.LocalPath.Equals(_managedLocalPath, StringComparison.OrdinalIgnoreCase))
-                LocalCopyNotice.Text += " Files at the previous location stay there; this job uses the managed folder shown above.";
+                LocalCopyNotice.Text += IsManagedStoragePath(_existing.LocalPath)
+                    ? " The previous managed folder stays in place and remains covered."
+                    : " The previous folder stays in place; review it separately.";
             else if (!managed && _existing is { ManagedLocalCopy: true })
-                LocalCopyNotice.Text += " Choose a different folder. Previous managed copies stay in place and remain covered.";
+                LocalCopyNotice.Text += IsManagedStoragePath(_existing.LocalPath)
+                    ? " Choose a local folder. Previous managed files remain covered by remote wipe."
+                    : " Choose a local folder. Previous files stay in place; review them separately.";
         }
         finally
         {
@@ -386,7 +400,6 @@ public partial class SyncEditorWindow : WpfWindow
             : SelectedMount is null
                 ? "the selected remote folder"
                 : RemotePathUtility.Display(
-                    SelectedMount.DisplayName,
-                    SelectedMount.RemotePath,
+                    SelectedMount.RemoteName,
                     RemotePathBox.Text.Trim());
 }

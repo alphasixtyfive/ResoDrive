@@ -30,36 +30,19 @@ public static class RemotePathUtility
             .Any(segment => segment is "." or "..");
     }
 
-    public static string Combine(string? rootPath, string? childPath)
-    {
-        var root = Normalize(rootPath);
-        var child = Normalize(childPath);
-        if (root.Length == 0)
-        {
-            return child;
-        }
-
-        if (child.Length == 0)
-        {
-            return root;
-        }
-
-        return $"{root}/{(child[0] == '/' ? child[1..] : child)}";
-    }
-
     public static string FormatSource(string remoteName, string? path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(remoteName);
         return $"{remoteName.Trim().TrimEnd(':')}:{Normalize(path)}";
     }
 
-    public static string Display(string name, string? rootPath, string? childPath)
+    public static string Display(string name, string? path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        var path = Combine(rootPath, childPath);
-        return path.Length == 0
+        var normalized = Normalize(path);
+        return normalized.Length == 0
             ? name
-            : $"{name} · {path}";
+            : $"{name} · {normalized}";
     }
 
     private static bool IsUnsafeCharacter(char value) =>

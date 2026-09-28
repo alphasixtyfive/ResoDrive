@@ -85,7 +85,7 @@ public sealed class SyncEditorWindowTests
             Assert.False(managed.IsChecked);
             Assert.False(managed.IsEnabled);
             Assert.Empty(local.Text);
-            Assert.Contains("Managed copies are unavailable for this connection.", Control<TextBlock>(editor, "LocalCopyNotice").Text, StringComparison.Ordinal);
+            Assert.Contains("requires Nextcloud remote wipe setup", Control<TextBlock>(editor, "LocalCopyNotice").Text, StringComparison.Ordinal);
 
             Control<ComboBox>(editor, "MountBox").SelectedItem = enrolled;
             Assert.True(managed.IsChecked);
@@ -116,7 +116,7 @@ public sealed class SyncEditorWindowTests
             Assert.Equal(existing.LocalPath, local.Text);
             managed.IsChecked = true;
             Assert.Equal(paths.ManagedSyncFolder(existing.Id), local.Text);
-            Assert.Contains("Existing files stay", Control<TextBlock>(editor, "LocalCopyNotice").Text, StringComparison.Ordinal);
+            Assert.Contains("Files in the old folder stay there", Control<TextBlock>(editor, "LocalCopyNotice").Text, StringComparison.Ordinal);
             Control<ComboBox>(editor, "ModeBox").SelectedIndex = 3; // Mirror local to remote.
             Assert.False(managed.IsChecked);
             Assert.Equal(existing.LocalPath, local.Text);
@@ -138,7 +138,7 @@ public sealed class SyncEditorWindowTests
             var local = Control<TextBox>(editor, "LocalPathBox");
             Assert.True(managed.IsChecked);
             Assert.Equal(paths.ManagedSyncFolder(existing.Id), local.Text);
-            Assert.Contains("previous location stay there", Control<TextBlock>(editor, "LocalCopyNotice").Text, StringComparison.Ordinal);
+            Assert.Contains("previous folder stays in place", Control<TextBlock>(editor, "LocalCopyNotice").Text, StringComparison.Ordinal);
         }
         finally
         {

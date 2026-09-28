@@ -52,16 +52,17 @@ prove that every connection is enrolled. Complete the disposable test below.
 ## Include downloaded copies
 
 For **Copy remote to local** and **Mirror remote to local** jobs on an enrolled
-Nextcloud account, choose **Managed local copy** in the sync editor. New download
-jobs on enrolled accounts use this choice by default; existing jobs keep their
+Nextcloud account, choose **Store downloads in ResoDrive** in the sync editor.
+New download jobs on enrolled accounts use this choice by default; existing jobs keep their
 previous paths and behavior. The editor shows the exact managed destination.
 
 Managed copies live at `%LOCALAPPDATA%\rdrive\managed-sync\<job-id>` (or below the
 active `RDRIVE_DATA_DIR`). ResoDrive owns this dedicated tree. A confirmed wipe
 deletes everything inside it, including local edits or files manually placed
-there. Removing a sync job or changing its destination does not remove old managed
-copies from wipe coverage. The client never takes deletion targets from editable
-sync paths; each managed job must use its assigned directory and a download mode.
+there. Files left in the active managed-sync tree stay covered after a job is
+removed or its destination changes. The client never takes deletion targets from
+editable sync paths; each managed job must use its assigned directory and a
+download mode.
 
 **Existing external sync folders are not enrolled automatically.** Switching an
 existing job to managed storage downloads to a different directory; old external
