@@ -222,7 +222,7 @@ public sealed class MainWindowMarkupTests
         Assert.Equal("{StaticResource ConnectionBadgeText}", (string?)badgeText.Attribute("Style"));
 
         var badge = Assert.IsType<XElement>(badgeText.Parent);
-        Assert.Equal("3", (string?)badge.Attribute("Grid.Column"));
+        Assert.Equal("4", (string?)badge.Attribute("Grid.Column"));
         Assert.Equal("{StaticResource ConnectionBadge}", (string?)badge.Attribute("Style"));
         Assert.Equal("{Binding ConnectionTypeDisplay}", (string?)badge.Attribute("AutomationProperties.Name"));
 

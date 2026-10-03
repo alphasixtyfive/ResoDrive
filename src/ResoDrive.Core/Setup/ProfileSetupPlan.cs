@@ -48,7 +48,7 @@ public static class ProfileSetupPlan
             return Result.Failure<MountSettings>("setup.drive", "Drive letters must be between D and Z.");
         }
 
-        var remotePath = NormalizeRemotePath(request.RemotePath);
+        var remotePath = RemotePathUtility.Normalize(request.RemotePath);
         var displayName = request.DisplayName.Trim();
         var mountArguments = RcloneMountOptions.ForNewMount(request.MountArguments ?? profile.MountArguments);
         var argumentValidation = RcloneArgumentPolicy.ValidateMount(mountArguments);
@@ -99,9 +99,6 @@ public static class ProfileSetupPlan
 
         return Result.Success(mount);
     }
-
-    private static string NormalizeRemotePath(string? remotePath) =>
-        RemotePathUtility.Normalize(remotePath);
 
     private static string ConnectionHost(SetupConnectionDefinition connection) => connection switch
     {

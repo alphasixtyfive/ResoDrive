@@ -43,7 +43,10 @@ public sealed class RemoteWipeStore
         var json = await _protection.LoadProtectedFileAsync(
             _paths.RemoteWipeFile, MaximumRegistrationBytes, cancellationToken).ConfigureAwait(false);
         var registrations = JsonSerializer.Deserialize<List<RemoteWipeRegistration>>(json, JsonOptions);
-        if (registrations is null)
+        if (registrations is null || registrations.Any(registration => registration is null || registration.MountId == Guid.Empty ||
+                string.IsNullOrWhiteSpace(registration.ProbeEndpoint) || string.IsNullOrWhiteSpace(registration.ServerBaseUrl) ||
+                string.IsNullOrWhiteSpace(registration.Username) || string.IsNullOrWhiteSpace(registration.AppToken)) ||
+            registrations.Select(registration => registration.MountId).Distinct().Count() != registrations.Count)
             throw new CryptographicException("The protected remote-wipe file is invalid.");
         return registrations;
     }

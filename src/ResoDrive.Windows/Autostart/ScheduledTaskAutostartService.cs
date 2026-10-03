@@ -68,9 +68,11 @@ public sealed class ScheduledTaskAutostartService
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        StartupTaskRecord? existingTask = null;
+        var mutationAttempted = false;
         try
         {
-            var existingTask = _tasks.Read(_taskName);
+            existingTask = _tasks.Read(_taskName);
             if (existingTask is not null &&
                 !ScheduledTaskDefinition.IsOwned(existingTask.Xml, _applicationPath, _userId))
             {
@@ -82,6 +84,7 @@ public sealed class ScheduledTaskAutostartService
             if (enabled)
             {
                 var xml = ScheduledTaskDefinition.CreateXml(_applicationPath, _userId);
+                mutationAttempted = true;
                 _tasks.Register(_taskName, xml);
                 var verified = _tasks.Read(_taskName);
                 if (verified is null || !verified.Enabled ||
@@ -95,6 +98,7 @@ public sealed class ScheduledTaskAutostartService
             }
             else
             {
+                mutationAttempted = true;
                 _tasks.Delete(_taskName);
             }
 
@@ -102,6 +106,7 @@ public sealed class ScheduledTaskAutostartService
         }
         catch (Exception exception) when (Expected(exception))
         {
+            if (mutationAttempted) RestoreTask(existingTask);
             return Task.FromResult(Result.Failure(
                 "autostart.access_denied",
                 $"The Windows startup task could not be changed. {exception.Message}"));

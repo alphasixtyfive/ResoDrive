@@ -171,6 +171,34 @@ public sealed class RcloneBootstrapServiceTests
         }
     }
 
+    [Fact]
+    public async Task BodyDeadlineTimesOutAndReleasesRuntimeMutationLock()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "rdrive-bootstrap-timeout-" + Guid.NewGuid().ToString("N"));
+        var paths = new ApplicationPaths(root);
+        var runner = new FakeRunner(paths.RcloneExecutable);
+        using var handler = new BlockingArchiveHandler();
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var service = new RcloneBootstrapService(new RcloneRuntimeLocator(paths, runner), runner, client,
+            new string('0', 64), TimeSpan.FromMilliseconds(500));
+        try
+        {
+            var install = service.InstallAsync();
+            await handler.ReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            var result = await install.WaitAsync(TimeSpan.FromSeconds(3));
+
+            Assert.Equal("rclone.download_timeout", result.Error?.Code);
+            Assert.False(File.Exists(paths.RcloneExecutable));
+            Assert.True(File.Exists(Path.Combine(paths.Rclone, ".rclone-download.zip")));
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+            await using var mutationLock = await RcloneRuntimeMutationLock.AcquireAsync(paths.Rclone, timeout.Token);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
     private static byte[] CreateArchive(params (string Path, string Content)[] entries)
     {
         using var output = new MemoryStream();
@@ -306,10 +334,25 @@ public sealed class RcloneBootstrapServiceTests
         public void Report(RcloneBootstrapProgress value) => report(value);
     }
 
+    [Fact]
+    public async Task InstallAsync_RestoresPreviousRuntimeWhenWindowsBlocksCommittedExecutable()
+    {
+        var archive = CreateArchive(("rclone-v1.75.0-windows-amd64/rclone.exe", "new"));
+        using var harness = new Harness(archive);
+        harness.Paths.EnsureCreated();
+        File.WriteAllText(harness.Paths.RcloneExecutable, "old");
+        harness.Runner.BlockCanonicalRuntime = true;
+        var result = await harness.Service.InstallAsync();
+        Assert.False(result.Succeeded);
+        Assert.Equal("old", File.ReadAllText(harness.Paths.RcloneExecutable));
+        AssertNoTransactionFiles(harness.Paths.Rclone);
+    }
+
     private sealed class FakeRunner(string canonicalPath) : IRcloneProcessRunner
     {
         public List<string> Calls { get; } = [];
         public bool RejectCanonicalRuntime { get; set; }
+        public bool BlockCanonicalRuntime { get; set; }
 
         public Task<ProcessRunResult> RunAsync(
             string executablePath,
@@ -320,6 +363,8 @@ public sealed class RcloneBootstrapServiceTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             Calls.Add(executablePath);
+            if (BlockCanonicalRuntime && executablePath.Equals(canonicalPath, StringComparison.OrdinalIgnoreCase))
+                throw new System.ComponentModel.Win32Exception(5);
             var valid = File.Exists(executablePath) &&
                 File.ReadAllText(executablePath).Equals("new", StringComparison.Ordinal) &&
                 !(RejectCanonicalRuntime && Path.GetFullPath(executablePath).Equals(

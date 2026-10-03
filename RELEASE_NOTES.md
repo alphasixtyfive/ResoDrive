@@ -1,9 +1,11 @@
-ResoDrive 0.3.18 lets sync jobs use paths from the storage connection independently of the mounted drive folder. For example, a drive mounted at `/Armeria` can copy `/Fleet Reference` to a local folder. The Sync page now shows the connection path used by each job.
+Explorer can finish copying a file before it reaches the server. ResoDrive 0.3.19 makes that remaining work easier to see: click the tray icon for a small upload flyout with file progress, speed and queued files. Right-click the icon to open ResoDrive or use its usual commands.
 
-**Check existing sync jobs before upgrading:** Jobs on drives mounted inside a folder may now point somewhere different. Set **Remote folder** to the full path beginning with `/`. Jobs with an empty or relative path on these drives will stop until you update them, preventing an unintended transfer or mirror.
+You get a warning before disconnecting or exiting with unfinished uploads. If you choose to leave anyway, files already in the local cache stay there for the next connection. Updates wait until uploads can be verified as complete. Windows shutdown and automatic sleep protection also stay active while work is pending.
 
-The sync editor now explains absolute paths and managed local storage more clearly. A confirmed Nextcloud remote wipe deletes files in ResoDrive's current managed folder; external local folders stay outside it.
+Drive order is now yours to arrange. Use the faint handle beside a drive, its small reorder menu, or Alt+Up and Alt+Down. Your order is saved.
 
-On a standard-user PC, an update started from an older version may still report that ResoDrive is running under another Windows account. Let uploads finish, choose **Exit** from ResoDrive's tray icon while signed in as the usual user, then run **ResoDrive-Setup.exe** below and enter the administrator password.
+This release also fixes recovery during exit and updates, improves large upload queues, and cleans up settings and process handling. Download syncs check for junctions in their destination before starting, so files cannot be redirected outside the chosen folder.
+
+On a standard-user PC, an update started from an older version may still report that ResoDrive is running under another Windows account. Let uploads finish, choose **Exit** from the tray while signed in as the usual user, then run **ResoDrive-Setup.exe** and enter the administrator password.
 
 Download **ResoDrive-Setup.exe** below, or check for updates in ResoDrive Settings.

@@ -146,13 +146,41 @@ public sealed class ScheduledTaskAutostartServiceTests
     private ScheduledTaskAutostartService CreateService(IStartupTaskStore tasks) =>
         new(_applicationPath, UserId, tasks);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task VerificationExceptionRestoresThePreviousTask(bool existing)
+    {
+        var previous = existing ? new StartupTaskRecord(ScheduledTaskDefinition.CreateXml(_applicationPath, UserId), false) : null;
+        var tasks = new FakeTaskStore { Record = previous, ThrowVerificationRead = true };
+
+        var result = await CreateService(tasks).SetEnabledAsync(true);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(previous, tasks.Record);
+    }
+
     private sealed class FakeTaskStore : IStartupTaskStore
     {
         public StartupTaskRecord? Record { get; set; }
+        public bool ThrowVerificationRead { get; set; }
+        private bool _registered;
 
-        public StartupTaskRecord? Read(string taskName) => Record;
+        public StartupTaskRecord? Read(string taskName)
+        {
+            if (_registered && ThrowVerificationRead)
+            {
+                ThrowVerificationRead = false;
+                throw new IOException("Task Scheduler verification failed.");
+            }
+            return Record;
+        }
 
-        public void Register(string taskName, string xml) => Record = new(xml, true);
+        public void Register(string taskName, string xml)
+        {
+            _registered = true;
+            Record = new(xml, true);
+        }
 
         public void SetEnabled(string taskName, bool enabled)
         {

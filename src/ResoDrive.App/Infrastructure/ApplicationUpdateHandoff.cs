@@ -420,7 +420,7 @@ internal static class ApplicationUpdateHandoff
         var dataRoot = new ApplicationPaths().Root;
         return new ProcessStartInfo
         {
-            FileName = "msiexec.exe",
+            FileName = Path.Combine(Environment.SystemDirectory, "msiexec.exe"),
             Arguments = $"/i \"{installerPath}\" /passive /norestart /l*v \"{logPath}\" RDRIVE_DATA_ROOT=\"{Path.TrimEndingDirectorySeparator(dataRoot)}\\.\"",
             UseShellExecute = true,
             Verb = "runas",

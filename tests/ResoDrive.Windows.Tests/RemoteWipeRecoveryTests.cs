@@ -124,12 +124,16 @@ public sealed class RemoteWipeRecoveryTests : IDisposable
         string[] artifacts = ["settings.json.bak", "settings.pre-import-20260919.json", ".settings.json.abc.tmp",
             "rclone.conf.abc.setup-backup", "config-pass.dpapi.abc.setup-secret", "remote-wipe.dpapi.abc.setup-wipe",
             "ownership.json.bak", "sync-run-state.json.bak", "scheduler-state.json", "scheduler-state.json.bak",
-            "scheduler-state.json.tmp"];
+            "scheduler-state.json.tmp", "mount-upload-recovery.json", "mount-upload-recovery.json.bak", "mount-upload-recovery.json.abc.tmp"];
         foreach (var name in artifacts) File.WriteAllText(Path.Combine(_paths.Root, name), "sensitive");
+        var controls = Path.Combine(_paths.Root, "mount-controls");
+        Directory.CreateDirectory(controls);
+        File.WriteAllText(Path.Combine(controls, "mount.dpapi"), "sensitive");
         var unrelated = Path.Combine(_paths.Root, "admin-readme.txt");
         File.WriteAllText(unrelated, "keep");
         RemoteWipeCleanup.DeleteAccountData(_paths);
         Assert.All(artifacts, name => Assert.False(File.Exists(Path.Combine(_paths.Root, name))));
+        Assert.False(Directory.Exists(controls));
         Assert.True(File.Exists(unrelated));
         Assert.True(File.Exists(_paths.ProfilesFile));
         Assert.True(File.Exists(_paths.RcloneExecutable));
@@ -153,6 +157,25 @@ public sealed class RemoteWipeRecoveryTests : IDisposable
         var staged = await store.CreateStagedAsync(registrations);
         File.Move(staged, _paths.RemoteWipeFile);
         Assert.Equal(registrations, await store.LoadAsync());
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task MalformedProtectedCatalogFailsWithoutRemovingItsRecoveryData(int kind)
+    {
+        var registration = Registration;
+        var json = kind switch
+        {
+            0 => "null",
+            1 => "[null]",
+            _ => JsonSerializer.Serialize(new[] { registration, registration }, JsonSerializerOptions.Web)
+        };
+        await new DpapiSecretStore(_paths).SaveProtectedFileAsync(json, _paths.RemoteWipeFile);
+
+        await Assert.ThrowsAsync<System.Security.Cryptography.CryptographicException>(() => new RemoteWipeStore(_paths).LoadAsync());
+        Assert.True(File.Exists(_paths.RemoteWipeFile));
     }
 
     [Fact]

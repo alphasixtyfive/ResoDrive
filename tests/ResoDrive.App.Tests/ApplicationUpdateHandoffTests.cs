@@ -218,7 +218,7 @@ public sealed class ApplicationUpdateHandoffTests
 
         var startInfo = ApplicationUpdateHandoff.CreateInstallerStartInfo(installerPath);
 
-        Assert.Equal("msiexec.exe", startInfo.FileName);
+        Assert.Equal(Path.Combine(Environment.SystemDirectory, "msiexec.exe"), startInfo.FileName);
         Assert.Equal("runas", startInfo.Verb);
         Assert.True(startInfo.UseShellExecute);
         Assert.Contains("/passive", startInfo.Arguments, StringComparison.OrdinalIgnoreCase);

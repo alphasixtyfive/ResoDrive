@@ -94,13 +94,24 @@ Application and rclone downloads can continue from a partial file after a droppe
 connection, which avoids starting large transfers again on metered or satellite links.
 Downloads can be cancelled from Settings and resumed later.
 
-Mounted drives show queued uploads and cache errors when rclone can report them.
-ResoDrive checks these again before disconnecting, reconnecting or preparing an
-update. Close open documents first: no queued uploads does not mean that another
-application has saved its changes. Recovered processes and unavailable statistics
-are shown explicitly; Windows shutdown and crashes cannot provide this safeguard.
-Readiness checks run periodically, including after resume, but do not prove server
-connectivity when files can be served from cache.
+Left-click the tray icon, or open **Drives → Uploads** or **Uploads** in the tray menu, to see queued transfers,
+active uploads, modified files waiting to close, and upload errors. The tray icon
+animates while uploads are pending and shows an amber warning when their state
+cannot be confirmed. Explorer's copy progress measures delivery to the local
+cache; ResoDrive tracks the later delivery to the server.
+
+ResoDrive checks uploads before disconnecting, reconnecting, exiting, or preparing
+an update. Its background host asks Windows to postpone shutdown and sign-out
+while transfers remain pending or their status is unavailable, and prevents
+automatic sleep during that time. Windows can still override this protection;
+forced shutdown and power loss cannot be prevented. Keep the cache intact: recovery
+records let the host restore eligible drives after an interruption.
+
+See [upload behavior and desktop checks](docs/UPLOADS.md).
+
+Close documents first: a program's unsaved changes are outside ResoDrive's cache.
+Readiness checks run periodically, including after resume, but cached reads do not
+prove server connectivity.
 
 Use **Settings → Export diagnostics** to create a report with component versions,
 the rclone version reported by the background host, numeric performance options,

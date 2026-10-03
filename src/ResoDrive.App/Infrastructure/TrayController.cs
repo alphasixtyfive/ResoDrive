@@ -14,7 +14,7 @@ internal sealed record TrayActionResult(bool Succeeded, string Title, string Mes
 
 /// <summary>Owns the notification-area icon and its native Windows context menu.</summary>
 /// <remarks>All supplied providers and actions are invoked on the WPF dispatcher.</remarks>
-internal sealed class TrayController : IDisposable
+internal sealed partial class TrayController : IDisposable
 {
     private readonly Dispatcher _dispatcher;
     private readonly Action _exit;
@@ -26,6 +26,14 @@ internal sealed class TrayController : IDisposable
     private readonly Func<Task<TrayActionResult>> _refresh;
     private readonly Action<Exception>? _reportError;
     private readonly Action _restoreWindow;
+    private readonly Action? _showUploads;
+    private readonly string _productName;
+    private Action? _balloonAction;
+    private readonly DispatcherTimer _animation;
+    private readonly System.Drawing.Icon[] _uploadIcons;
+    private readonly System.Drawing.Icon _warningIcon;
+    private int _animationFrame;
+    private bool _uploadWarning;
     private readonly Func<IReadOnlyList<SyncRow>> _syncProvider;
     private readonly Func<SyncRow, Task<TrayActionResult>> _syncAction;
     private bool _disposed;
@@ -40,7 +48,9 @@ internal sealed class TrayController : IDisposable
         Func<Task<TrayActionResult>> refresh,
         Action restoreWindow,
         Action exit,
-        Action<Exception>? reportError = null)
+        Action<Exception>? reportError = null,
+        Action? showUploads = null,
+        string? productName = null)
     {
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _mountProvider = mountProvider ?? throw new ArgumentNullException(nameof(mountProvider));
@@ -52,22 +62,46 @@ internal sealed class TrayController : IDisposable
         _restoreWindow = restoreWindow ?? throw new ArgumentNullException(nameof(restoreWindow));
         _exit = exit ?? throw new ArgumentNullException(nameof(exit));
         _reportError = reportError;
+        _showUploads = showUploads;
+        _productName = productName ?? ProductInfo.Name;
 
         _icon = System.Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath!);
-        _notifyIcon = new Forms.NotifyIcon { Icon = _icon, Text = ProductInfo.Name, Visible = true };
+        _uploadIcons = [CreateUploadIcon(0), CreateUploadIcon(1)];
+        _warningIcon = CreateUploadIcon(0, warning: true);
+        _notifyIcon = new Forms.NotifyIcon { Icon = _icon, Text = _productName, Visible = true };
+        _animation = new DispatcherTimer(TimeSpan.FromMilliseconds(800), DispatcherPriority.Background,
+            (_, _) => _notifyIcon.Icon = _uploadIcons[++_animationFrame % _uploadIcons.Length], _dispatcher);
+        _animation.Stop();
         _notifyIcon.MouseUp += NotifyIcon_MouseUp;
         _notifyIcon.BalloonTipClicked += NotifyIcon_BalloonTipClicked;
     }
 
-    internal void UpdateStatus(int mountedCount, int runningSyncCount)
+    internal void UpdateStatus(int mountedCount, int runningSyncCount, long pendingUploads = 0, bool uploadWarning = false)
     {
         if (_disposed) return;
         if (!_dispatcher.CheckAccess())
         {
-            Dispatch(() => UpdateStatus(mountedCount, runningSyncCount));
+            Dispatch(() => UpdateStatus(mountedCount, runningSyncCount, pendingUploads, uploadWarning));
             return;
         }
-        _notifyIcon.Text = Truncate($"{ProductInfo.Name}: {mountedCount} mounted, {runningSyncCount} syncing", 127);
+        var uploading = pendingUploads > 0;
+        var uploadText = uploadWarning ? "uploads need attention"
+            : uploading ? $"{pendingUploads} uploads pending" : "no uploads pending";
+        _notifyIcon.Text = Truncate($"{_productName}: {mountedCount} mounted, {runningSyncCount} syncing · {uploadText}", 127);
+        if (uploading || uploadWarning)
+        {
+            _notifyIcon.Icon = uploadWarning ? _warningIcon : _uploadIcons[_animationFrame % _uploadIcons.Length];
+            if (uploading && !uploadWarning && SystemParameters.ClientAreaAnimation) _animation.Start();
+            else _animation.Stop();
+        }
+        else
+        {
+            _animation.Stop();
+            _notifyIcon.Icon = _icon;
+        }
+        if (uploadWarning && !_uploadWarning)
+            ShowResult(TrayActionResult.Failure("Uploads need attention", "Keep ResoDrive running. Open Uploads to check pending files and connection status."), _showUploads);
+        _uploadWarning = uploadWarning;
     }
 
     internal void ShowMountResult(MountRow mount, TrayActionResult result) =>
@@ -76,14 +110,15 @@ internal sealed class TrayController : IDisposable
     internal void ShowSyncResult(SyncRow sync, TrayActionResult result) =>
         ShowResult(result with { Title = string.IsNullOrWhiteSpace(result.Title) ? sync.Name : result.Title });
 
-    internal void ShowResult(TrayActionResult result)
+    internal void ShowResult(TrayActionResult result, Action? onClick = null)
     {
         if (_disposed || !result.Notify) return;
         if (!_dispatcher.CheckAccess())
         {
-            Dispatch(() => ShowResult(result));
+            Dispatch(() => ShowResult(result, onClick));
             return;
         }
+        _balloonAction = onClick ?? _restoreWindow;
         _notifyIcon.ShowBalloonTip(
             result.Succeeded ? 3000 : 5000,
             Truncate(result.Title, 63),
@@ -95,19 +130,23 @@ internal sealed class TrayController : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _animation.Stop();
         _notifyIcon.Visible = false;
         _notifyIcon.MouseUp -= NotifyIcon_MouseUp;
         _notifyIcon.BalloonTipClicked -= NotifyIcon_BalloonTipClicked;
         _notifyIcon.Dispose();
         _icon?.Dispose();
+        foreach (var icon in _uploadIcons) icon.Dispose();
+        _warningIcon.Dispose();
         GC.SuppressFinalize(this);
     }
 
-    private void NotifyIcon_BalloonTipClicked(object? sender, EventArgs e) => Dispatch(_restoreWindow);
+    private void NotifyIcon_BalloonTipClicked(object? sender, EventArgs e) => Dispatch(_balloonAction ?? _restoreWindow);
 
     private void NotifyIcon_MouseUp(object? sender, Forms.MouseEventArgs e)
     {
-        if (e.Button == Forms.MouseButtons.Left) Dispatch(_restoreWindow);
+        if (e.Button == Forms.MouseButtons.Left)
+            Dispatch(_showUploads ?? _restoreWindow);
         else if (e.Button == Forms.MouseButtons.Right) Dispatch(ShowMenu);
     }
 
@@ -139,12 +178,14 @@ internal sealed class TrayController : IDisposable
     {
         using var menu = new NativePopupMenu();
         menu.Add(ProductInfo.OpenLabel, _restoreWindow);
+        if (_showUploads is not null) menu.Add("Uploads…", _showUploads);
         menu.AddSeparator();
 
         var mounts = _mountProvider();
         foreach (var mount in mounts)
         {
             var submenu = menu.AddSubmenu($"{mount.Name}\t{mount.Drive}:");
+            if (mount.UploadActivityText.Length > 0) submenu.Add(Truncate(mount.UploadActivityText, 100), null, false);
             if (mount.CanOpen) submenu.Add("Open", () => _openMount(mount));
             submenu.Add(
                 mount.ActionText,
@@ -166,7 +207,7 @@ internal sealed class TrayController : IDisposable
             menu.Add("No drives configured", null, false);
 
         menu.AddSeparator();
-        menu.Add("Refresh status", () => _ = RunActionAsync(_refresh, ShowResult));
+        menu.Add("Refresh status", () => _ = RunActionAsync(_refresh, result => ShowResult(result)));
         menu.Add(ProductInfo.ExitLabel, _exit);
 
         var owner = System.Windows.Application.Current?.MainWindow is { } window
@@ -206,4 +247,35 @@ internal sealed class TrayController : IDisposable
 
     private static string Truncate(string value, int maximumLength) => value.Length <= maximumLength
         ? value : string.Concat(value.AsSpan(0, maximumLength - 1), "…");
+
+    private System.Drawing.Icon CreateUploadIcon(int frame, bool warning = false)
+    {
+        using var bitmap = new System.Drawing.Bitmap(32, 32);
+        using var graphics = System.Drawing.Graphics.FromImage(bitmap);
+        if (_icon is not null) graphics.DrawIcon(_icon, new System.Drawing.Rectangle(0, 0, 32, 32));
+        graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        using var background = new System.Drawing.SolidBrush(warning
+            ? System.Drawing.Color.FromArgb(255, 204, 102) : System.Drawing.Color.FromArgb(0, 103, 192));
+        using var arrow = new System.Drawing.Pen(warning ? System.Drawing.Color.FromArgb(32, 32, 32) : System.Drawing.Color.White, 2);
+        graphics.FillEllipse(background, 14, 14, 18, 18);
+        if (warning)
+        {
+            graphics.DrawLine(arrow, 23, 18, 23, 24);
+            graphics.DrawLine(arrow, 23, 26, 23, 28);
+        }
+        else
+        {
+            var tip = 18 + frame;
+            graphics.DrawLine(arrow, 23, tip, 23, 28);
+            graphics.DrawLine(arrow, 19, tip + 4, 23, tip);
+            graphics.DrawLine(arrow, 27, tip + 4, 23, tip);
+        }
+        var handle = bitmap.GetHicon();
+        try { return (System.Drawing.Icon)System.Drawing.Icon.FromHandle(handle).Clone(); }
+        finally { DestroyIcon(handle); }
+    }
+
+    [System.Runtime.InteropServices.LibraryImport("user32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static partial bool DestroyIcon(IntPtr icon);
 }

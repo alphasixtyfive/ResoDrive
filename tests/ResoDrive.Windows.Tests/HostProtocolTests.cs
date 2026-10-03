@@ -1,7 +1,56 @@
+using ResoDrive.Core.Domain;
+
 namespace ResoDrive.Windows.Tests;
 
 public sealed class HostProtocolTests
 {
+    [Fact]
+    public async Task LargeUnicodeHistoryFitsStatusFrameAndPreservesActiveWorkCount()
+    {
+        var syncs = Enumerable.Range(0, 900).Select(index => new HostSyncStatus(Guid.NewGuid(), Guid.NewGuid(),
+            index == 899 ? "Running" : "Succeeded", new string('\u4E00', 300), DateTimeOffset.UtcNow)).ToArray();
+        var mounts = Enumerable.Range(0, 900).Select(_ => new HostMountStatus(Guid.NewGuid(), "Mounted", new string('\u4E00', 300))).ToArray();
+        var response = HostProtocol.BoundStatus(new HostResponse(true, Mounts: mounts, SyncJobs: syncs));
+        await using var stream = new MemoryStream();
+
+        await HostProtocol.WriteAsync(stream, response, CancellationToken.None);
+        Assert.True(stream.Length < 1024 * 1024);
+        stream.Position = 0;
+        var restored = await HostProtocol.ReadAsync<HostResponse>(stream, CancellationToken.None);
+
+        Assert.Equal(1, restored!.ActiveSyncJobs);
+        Assert.Equal("Running", restored.SyncJobs![0].Lifecycle);
+        Assert.True(restored.SyncStatusTruncated);
+        Assert.True(restored.MountStatusTruncated);
+    }
+    [Fact]
+    public async Task StatusBoundsSharedUnicodeDetailsWhilePreservingCompleteCounts()
+    {
+        var path = new string('\u4E00', 4096);
+        var statuses = Enumerable.Range(0, 3).Select(_ => new HostMountStatus(Guid.NewGuid(), "Mounted", "Uploading", 100, 3)
+        {
+            UploadsDirty = 200,
+            Uploads = Enumerable.Range(0, 100).Select(index => new MountUploadFile { RelativePath = path + index }).ToArray()
+        });
+        var response = new HostResponse(true, Mounts: HostProtocol.BoundUploadDetails(statuses));
+        await using var stream = new MemoryStream();
+
+        await HostProtocol.WriteAsync(stream, response, CancellationToken.None);
+        Assert.True(stream.Length < 1024 * 1024);
+        stream.Position = 0;
+        var restored = await HostProtocol.ReadAsync<HostResponse>(stream, CancellationToken.None);
+
+        Assert.Equal(3, restored!.Mounts!.Count);
+        Assert.All(restored.Mounts, status =>
+        {
+            Assert.True(status.UploadDetailsTruncated);
+            Assert.Equal(100, status.UploadsQueued);
+            Assert.Equal(3, status.UploadsInProgress);
+            Assert.Equal(200, status.UploadsDirty);
+        });
+        Assert.NotEmpty(restored.Mounts[0].Uploads);
+    }
+
     [Fact]
     public void AcceptsBaseDirectory_RequiresEquivalentExplicitPath()
     {

@@ -243,7 +243,7 @@ public sealed class RcloneUpdateService
                 _checkTimeout,
                 cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             return Result.Failure<RcloneUpdateCheck>(
                 "rclone.update_check_failed",
@@ -467,7 +467,7 @@ public sealed class RcloneUpdateService
                 "rclone.exe is in use or the package folder is unavailable. Stop all mounts and sync jobs, then retry.",
                 true);
         }
-        catch (InvalidOperationException)
+        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             return Result.Failure<RcloneUpdateResult>(
                 "rclone.update_download_failed",
@@ -488,13 +488,10 @@ public sealed class RcloneUpdateService
         string executablePath,
         CancellationToken cancellationToken)
     {
-        if (!File.Exists(executablePath) || new FileInfo(executablePath).Length == 0)
-        {
-            return Result.Failure<string>("rclone.update_staged_missing", "The staged executable is missing.");
-        }
-
         try
         {
+            if (!File.Exists(executablePath) || new FileInfo(executablePath).Length == 0)
+                return Result.Failure<string>("rclone.update_staged_missing", "The staged executable is missing.");
             var result = await _processRunner.RunAsync(
                 executablePath,
                 ["version"],
@@ -509,7 +506,7 @@ public sealed class RcloneUpdateService
                     : Result.Failure<string>("rclone.update_staged_invalid", "The staged executable reported an invalid version.")
                 : Result.Failure<string>("rclone.update_staged_invalid", "The staged executable is invalid.");
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             return Result.Failure<string>("rclone.update_staged_invalid", "The staged executable could not be verified.");
         }
@@ -554,7 +551,9 @@ public sealed class RcloneUpdateService
     private static string? NormalizeStableVersion(string version)
     {
         var trimmed = version.Trim().TrimStart('v', 'V');
-        var components = trimmed.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        // Keep empty components: accepting "1..75.0" here would let the later
+        // Version.Parse comparison throw instead of reporting an invalid response.
+        var components = trimmed.Split('.');
         if (components.Length is < 2 or > 4 ||
             components.Any(component => !int.TryParse(
                 component,

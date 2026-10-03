@@ -37,7 +37,7 @@ public sealed class VfsTransferStatusTests
     [Fact]
     public async Task ControlCredentialsCannotBeSentToRemoteServers() =>
         await Assert.ThrowsAsync<ArgumentException>(() =>
-            VfsStatusReader.ReadAsync("example.com:1234", "user", "secret", CancellationToken.None));
+            VfsStatusReader.ReadAsync("example.com:1234", "user", "secret", Path.GetTempPath(), CancellationToken.None));
 
     [Fact]
     public void LostControlConnectionCannotEraseKnownPendingWork()
