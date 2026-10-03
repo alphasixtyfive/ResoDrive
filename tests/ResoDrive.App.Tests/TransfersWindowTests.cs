@@ -3,13 +3,14 @@ using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using ResoDrive.Core.Domain;
 using ResoDrive.Core.Settings;
 using ResoDrive.Windows;
 
 namespace ResoDrive.App.Tests;
 
 [Collection("Sync editor application")]
-public sealed class UploadsWindowTests
+public sealed class TransfersWindowTests
 {
     [Theory]
     [InlineData("model")]
@@ -22,8 +23,8 @@ public sealed class UploadsWindowTests
         {
             try
             {
-                var error = Assert.Throws<ArgumentNullException>(() => new UploadsWindow(
-                    missing == "model" ? null! : new UploadsViewModel(),
+                var error = Assert.Throws<ArgumentNullException>(() => new TransfersWindow(
+                    missing == "model" ? null! : new TransfersViewModel(),
                     missing == "openMainWindow" ? null! : Noop,
                     missing == "openSettings" ? null! : Noop));
                 Assert.Equal(missing, error.ParamName);
@@ -47,16 +48,16 @@ public sealed class UploadsWindowTests
     {
         var opened = 0;
         var settingsOpened = 0;
-        var model = new UploadsViewModel();
-        var uploads = new UploadsWindow(model, () => opened++, () => settingsOpened++);
-        var open = Assert.IsType<Button>(uploads.FindName("OpenMainWindowButton"));
-        var settings = Assert.IsType<Button>(uploads.FindName("OpenSettingsButton"));
-        var dismiss = Assert.IsType<Button>(uploads.FindName("DismissButton"));
+        var model = new TransfersViewModel();
+        var transfers = new TransfersWindow(model, () => opened++, () => settingsOpened++);
+        var open = Assert.IsType<Button>(transfers.FindName("OpenMainWindowButton"));
+        var settings = Assert.IsType<Button>(transfers.FindName("OpenSettingsButton"));
+        var dismiss = Assert.IsType<Button>(transfers.FindName("DismissButton"));
         try
         {
-            Assert.Equal("Uploads", uploads.Title);
-            Assert.Same(model, uploads.DataContext);
-            VerifySummaryLayout(uploads, model);
+            Assert.Equal("Transfers", transfers.Title);
+            Assert.Same(model, transfers.DataContext);
+            VerifySummaryLayout(transfers, model);
 
             Click(open);
             Assert.Equal(1, opened);
@@ -71,36 +72,36 @@ public sealed class UploadsWindowTests
                 Click(dismiss);
                 Click(settings);
             };
-            uploads.Closing += cancelClose;
+            transfers.Closing += cancelClose;
             try
             {
-                uploads.Close();
+                transfers.Close();
                 Assert.Equal(1, settingsOpened);
                 Click(open);
                 Assert.Equal(2, opened);
             }
-            finally { uploads.Closing -= cancelClose; }
+            finally { transfers.Closing -= cancelClose; }
         }
-        finally { uploads.Close(); }
+        finally { transfers.Close(); }
 
         Click(dismiss);
         Click(open);
         Click(settings);
-        uploads.ShowFlyout(System.Drawing.Point.Empty);
+        transfers.ShowFlyout(System.Drawing.Point.Empty);
         Assert.Equal(2, opened);
         Assert.Equal(1, settingsOpened);
     }
 
-    private static void VerifySummaryLayout(UploadsWindow uploads, UploadsViewModel model)
+    private static void VerifySummaryLayout(TransfersWindow transfers, TransfersViewModel model)
     {
-        var layout = Assert.IsType<Grid>(uploads.Content);
+        var layout = Assert.IsType<Grid>(transfers.Content);
         var summary = Assert.Single(layout.Children.OfType<TextBlock>());
         var files = Assert.Single(layout.Children.OfType<ScrollViewer>());
         model.Update([], false);
         RefreshLayout(layout);
         Assert.Equal(Visibility.Visible, summary.Visibility);
         Assert.Equal(Visibility.Collapsed, files.Visibility);
-        Assert.Equal("No active uploads.", summary.Text);
+        Assert.Equal("No active transfers.", summary.Text);
 
         var mount = new MountSettings { Id = Guid.NewGuid(), DisplayName = "Cloud", RemoteName = "cloud" };
         var row = new MountRow(mount, new HostMountStatus(mount.Id, "Mounted", "Mounted", 1, 0));
@@ -114,13 +115,31 @@ public sealed class UploadsWindowTests
         model.Update([row], false);
         RefreshLayout(layout);
         Assert.Equal(Visibility.Visible, summary.Visibility);
-        Assert.Equal("Checking uploads…", summary.Text);
+        Assert.Equal("Checking transfers…", summary.Text);
 
         row.ApplyStatus(new HostMountStatus(mount.Id, "Mounted", "Mounted", 0, 0) { UploadErrors = 1 });
         model.Update([row], false);
         RefreshLayout(layout);
         Assert.Equal(Visibility.Visible, summary.Visibility);
-        Assert.Equal("Some uploads need attention.", summary.Text);
+        Assert.Equal("Some transfers need attention.", summary.Text);
+
+        var job = new SyncJobSettings { Id = Guid.NewGuid(), DisplayName = "Photo library", LocalPath = @"C:\Demo\Photos", Mode = nameof(SyncMode.CopyFromRemote) };
+        var sync = new SyncRow(mount, job, new HostSyncStatus(mount.Id, job.Id,
+            nameof(SyncLifecycle.Running), "Syncing", null, BytesTransferred: 100, TotalBytes: 200,
+            ProgressPercent: 50, SpeedBytesPerSecond: 10));
+        model.Update([], false, [sync], activeSyncJobs: 1);
+        RefreshLayout(layout);
+        Assert.Equal(Visibility.Collapsed, summary.Visibility);
+        Assert.Equal(Visibility.Visible, files.Visibility);
+        Assert.Equal(0, layout.RowDefinitions[1].ActualHeight);
+        Assert.Single(model.Transfers);
+
+        sync.ApplyStatus(sync.TransferStatus! with { Lifecycle = nameof(SyncLifecycle.Succeeded) });
+        model.Update([], false, [sync], activeSyncJobs: 0);
+        RefreshLayout(layout);
+        Assert.Equal(Visibility.Visible, summary.Visibility);
+        Assert.Equal(Visibility.Collapsed, files.Visibility);
+        Assert.Equal("No active transfers.", summary.Text);
     }
 
     private static void RefreshLayout(Grid layout)

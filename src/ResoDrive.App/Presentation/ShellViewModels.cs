@@ -13,6 +13,9 @@ internal static class HostStatusPresentation
 {
     public static bool HasUsableMountStatus(HostResponse response) =>
         response.Succeeded && response.InitializationErrorCode is null;
+
+    public static bool HasUsableSyncStatus(HostResponse response) =>
+        HasUsableMountStatus(response) && response.SyncJobs is not null;
 }
 
 public sealed class ShellViewModel : NotifyBase
@@ -457,6 +460,7 @@ public sealed class SyncRow : NotifyBase
 {
     private readonly SyncMode? _mode;
     private bool _statusUnavailable;
+    private HostSyncStatus? _transferStatus;
     private SyncLifecycle _lifecycle = SyncLifecycle.Idle;
     private string _statusPrimary = string.Empty;
     private string _statusSecondary = string.Empty;
@@ -523,6 +527,8 @@ public sealed class SyncRow : NotifyBase
         new[] { ModeLabel, Route, StatusPrimary, StatusSecondary }.Where(value => value.Length > 0));
     public bool IsRunning => _lifecycle == SyncLifecycle.Running;
     public bool IsBusy => _lifecycle is SyncLifecycle.Queued or SyncLifecycle.Running;
+    public HostSyncStatus? TransferStatus => _transferStatus;
+    public bool StatusUnavailable => _statusUnavailable;
     public bool CanAct => _mode is not null && (IsBusy || (Enabled && !_statusUnavailable));
     public string ActionText => IsBusy ? "Stop" : _statusUnavailable ? "Waiting…" : Enabled ? "Run" : "Disabled";
     public string ActionGlyph => IsBusy ? "\uE71A" : _statusUnavailable ? "\uE895" : Enabled ? "\uE768" : "\uE711";
@@ -542,12 +548,17 @@ public sealed class SyncRow : NotifyBase
         if (_statusUnavailable) return;
         _statusUnavailable = true;
         _statusPrimary = "Status unavailable";
+        _statusSecondary = string.Empty;
         Changed(string.Empty);
     }
 
     public void ApplyStatus(HostSyncStatus? status)
     {
+        // Keep the raw counters current even when their formatted text has not changed.
+        Set(ref _transferStatus, status, nameof(TransferStatus));
+        var wasUnavailable = _statusUnavailable;
         _statusUnavailable = false;
+        if (wasUnavailable) Changed(nameof(StatusUnavailable));
         var recognized = Enum.TryParse(status?.Lifecycle, true, out SyncLifecycle lifecycle);
         var nextLifecycle = recognized ? lifecycle : SyncLifecycle.Idle;
         var presentation = SyncStatusPresentation.Create(
@@ -557,7 +568,7 @@ public sealed class SyncRow : NotifyBase
             nextLifecycle,
             status,
             recognized);
-        if (_lifecycle == nextLifecycle &&
+        if (!wasUnavailable && _lifecycle == nextLifecycle &&
             _statusPrimary == presentation.Primary &&
             _statusSecondary == presentation.Secondary)
         {

@@ -90,16 +90,16 @@ and open ResoDrive. The first time through:
 Your settings, encrypted credentials, logs, cache, and managed rclone copy live in
 `%LOCALAPPDATA%\rdrive`. An upgrade leaves that folder alone. After the first
 install, you can check for and install ResoDrive updates from Settings.
-If you installed the earlier 0.3.19, run the revised Setup manually; a correction
-with the same version number will not appear as a newer update in Settings.
 Application and rclone downloads can continue from a partial file after a dropped
 connection, which avoids starting large transfers again on metered or satellite links.
 Downloads can be cancelled from Settings and resumed later.
 
-Left-click the tray icon, or choose **Uploads** in its menu, to see queued transfers,
-active uploads, modified files waiting to close, and upload errors. The tray icon
+Left-click the tray icon, or choose **Transfers** in its menu, to see queued uploads,
+active sync jobs, modified files waiting to close, and upload errors. Active sync
+jobs show their direction, progress and speed; finished and idle jobs stay out of
+the popup. The tray icon
 popup has compact Open ResoDrive and Settings actions in its footer. The icon
-animates while uploads are pending and shows an amber warning when their state
+animates while uploads are pending or sync jobs are active, and shows an amber warning when upload state
 cannot be confirmed. Explorer's copy progress measures delivery to the local
 cache; ResoDrive tracks the later delivery to the server.
 

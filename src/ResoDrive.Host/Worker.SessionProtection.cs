@@ -38,7 +38,7 @@ public sealed partial class Worker
         if (!_operations.IsEmpty ||
             _syncs?.GetSnapshots().Any(snapshot => snapshot.Lifecycle is SyncLifecycle.Running or SyncLifecycle.Queued) == true)
         {
-            guard.Update(true, "ResoDrive is still transferring files. Wait for the uploads to finish.");
+            guard.Update(true, "ResoDrive is still transferring files. Wait for the transfers to finish.");
             return;
         }
         var mounts = _mounts?.GetSnapshots() ?? [];

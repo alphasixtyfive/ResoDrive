@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.20] - 2026-10-03
+
+- Show active sync jobs alongside uploads in the compact tray popup, with direction, file counts, progress, speed and remaining time. Keep queued jobs visible and remove completed jobs.
+- Animate the tray icon for sync jobs as well as uploads. Rename the tray menu entry to Transfers and keep the same small footer.
+- Hide old sync counters when the host disconnects, and keep status accurate after a sync starts, stops or settings reload. Handle incomplete host responses without reporting unfinished work as complete.
+- Use transfer wording in the Windows shutdown warning so it covers both uploads and downloads.
+
 ## [0.3.19] - 2026-10-03
 
 - Click the tray icon to see a compact upload progress popup with Open ResoDrive and Settings in its footer. It sizes to the queue, keeps scrolling out of the way, and shows when a file is waiting to close or retry.

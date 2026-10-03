@@ -5,7 +5,7 @@ using System.Windows.Interop;
 
 namespace ResoDrive.App;
 
-public partial class UploadsWindow : System.Windows.Window
+public partial class TransfersWindow : System.Windows.Window
 {
     private const int WorkAreaChanged = 0x001A;
     private const int DisplayChanged = 0x007E;
@@ -18,7 +18,7 @@ public partial class UploadsWindow : System.Windows.Window
     private bool _showing;
     private bool _closingOrClosed;
 
-    internal UploadsWindow(UploadsViewModel model, Action openMainWindow, Action openSettings)
+    internal TransfersWindow(TransfersViewModel model, Action openMainWindow, Action openSettings)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(openMainWindow);

@@ -16,13 +16,13 @@ public sealed class UploadPresentationTests
             Uploads = [new MountUploadFile { RelativePath = "report.docx", State = MountUploadState.WaitingForClose }],
         };
         var row = new MountRow(mount, status);
-        var model = new UploadsViewModel();
+        var model = new TransfersViewModel();
         model.Update([row], false);
 
         Assert.True(row.HasPendingUploads);
         Assert.Contains("waiting for close", row.UploadActivityText, StringComparison.Ordinal);
-        Assert.Contains("close this file", Assert.Single(model.Files).Detail, StringComparison.Ordinal);
-        Assert.DoesNotContain("No active uploads", model.Summary, StringComparison.Ordinal);
+        Assert.Contains("close this file", Assert.Single(model.Transfers).Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("No active transfers", model.Summary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -43,9 +43,9 @@ public sealed class UploadPresentationTests
         {
             Uploads = [new MountUploadFile { RelativePath = "report.docx", State = MountUploadState.Uploading, TotalBytes = 12, BytesTransferred = 12 }],
         });
-        var model = new UploadsViewModel();
+        var model = new TransfersViewModel();
         model.Update([row], false);
-        Assert.Equal("Waiting for server confirmation", Assert.Single(model.Files).Detail);
+        Assert.Equal("Waiting for server confirmation", Assert.Single(model.Transfers).Detail);
         Assert.Empty(model.Summary);
     }
 
@@ -60,19 +60,19 @@ public sealed class UploadPresentationTests
         {
             UploadsDirty = dirty,
         });
-        var model = new UploadsViewModel();
+        var model = new TransfersViewModel();
         model.Update([row], false);
 
         Assert.Empty(model.Summary);
-        var file = Assert.Single(model.Files);
+        var file = Assert.Single(model.Transfers);
         Assert.Equal("Cloud", file.Name);
         Assert.Equal(activity, file.Detail);
         Assert.Equal(System.Windows.Visibility.Collapsed, file.ProgressVisibility);
 
         row.ApplyStatus(new HostMountStatus(mount.Id, "Mounted", "Mounted", 0, 0));
         model.Update([row], false);
-        Assert.Empty(model.Files);
-        Assert.Equal("No active uploads.", model.Summary);
+        Assert.Empty(model.Transfers);
+        Assert.Equal("No active transfers.", model.Summary);
     }
 
     [Theory]
@@ -86,11 +86,11 @@ public sealed class UploadPresentationTests
         {
             UploadsDirty = dirty,
         });
-        var model = new UploadsViewModel();
+        var model = new TransfersViewModel();
         model.Update([row], false);
 
         Assert.Empty(model.Summary);
-        Assert.Single(model.Files);
+        Assert.Single(model.Transfers);
     }
 
     [Fact]
@@ -160,13 +160,13 @@ public sealed class UploadPresentationTests
     {
         var mount = Mount();
         var row = new MountRow(mount, new HostMountStatus(mount.Id, "Mounted", "Mounted", UploadStatusStale: true));
-        var model = new UploadsViewModel();
+        var model = new TransfersViewModel();
         model.Update([row], true);
-        Assert.Single(model.Files);
+        Assert.Single(model.Transfers);
         row.ApplyStatus(new HostMountStatus(mount.Id, "Mounted", "Mounted", 0, 0));
         model.Update([row], false);
-        Assert.Empty(model.Files);
-        Assert.Contains("No active uploads", model.Summary, StringComparison.Ordinal);
+        Assert.Empty(model.Transfers);
+        Assert.Contains("No active transfers", model.Summary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -177,12 +177,12 @@ public sealed class UploadPresentationTests
         {
             UploadStatusChecking = true,
         });
-        var model = new UploadsViewModel();
+        var model = new TransfersViewModel();
         model.Update([row], false);
 
         Assert.Equal("Checking uploads…", row.UploadActivityText);
-        Assert.Contains("Checking changed files", Assert.Single(model.Files).Detail, StringComparison.Ordinal);
-        Assert.DoesNotContain("No active uploads", model.Summary, StringComparison.Ordinal);
+        Assert.Contains("Checking changed files", Assert.Single(model.Transfers).Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("No active transfers", model.Summary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -197,28 +197,35 @@ public sealed class UploadPresentationTests
                 new MountUploadFile { RelativePath = "Report.docx", State = MountUploadState.Queued },
             ],
         });
-        var model = new UploadsViewModel();
+        var model = new TransfersViewModel();
         model.Update([row], false);
 
-        Assert.Equal(2, model.Files.Count);
-        Assert.All(model.Files, file => Assert.Equal(System.Windows.Visibility.Collapsed, file.ProgressVisibility));
+        Assert.Equal(2, model.Transfers.Count);
+        Assert.All(model.Transfers, file => Assert.Equal(System.Windows.Visibility.Collapsed, file.ProgressVisibility));
     }
 
     [Fact]
     public void SyncAndNativeProtectionFailureRemainVisibleWithoutMountUploads()
     {
-        var model = new UploadsViewModel();
-        model.Update([], false, otherTransfersActive: true);
-        Assert.Single(model.Files);
+        var mount = Mount();
+        var job = new SyncJobSettings
+        {
+            Id = Guid.NewGuid(), DisplayName = "Documents", LocalPath = @"C:\Data", Mode = nameof(SyncMode.CopyToRemote),
+        };
+        var sync = new SyncRow(mount, job, new HostSyncStatus(mount.Id, job.Id, "Running", "Syncing", null));
+        var model = new TransfersViewModel();
+        model.Update([], false, [sync], 1);
+        Assert.Single(model.Transfers);
         Assert.Empty(model.Summary);
-        model.Update([], false, otherTransfersActive: true, powerProtectionUnavailable: true);
+        model.Update([], false, [sync], 1, powerProtectionUnavailable: true);
 
-        Assert.Equal(2, model.Files.Count);
+        Assert.Equal(2, model.Transfers.Count);
         Assert.Contains("power protection needs attention", model.Summary, StringComparison.Ordinal);
         model.Update([], false, powerProtectionUnavailable: true);
-        Assert.Single(model.Files);
+        Assert.Equal("Windows power protection", Assert.Single(model.Transfers).Name);
         Assert.Contains("power protection needs attention", model.Summary, StringComparison.Ordinal);
-        Assert.DoesNotContain("No active uploads", model.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("No active transfers", model.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("Wait for uploads", model.Transfers[0].Detail, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -226,16 +233,16 @@ public sealed class UploadPresentationTests
     {
         var mount = Mount();
         var row = new MountRow(mount, new HostMountStatus(mount.Id, "Stopping", "Stopping…", 0, 0));
-        var model = new UploadsViewModel();
+        var model = new TransfersViewModel();
         model.Update([row], false);
 
         Assert.True(row.UploadNeedsAttention);
-        Assert.Contains("connects or disconnects", Assert.Single(model.Files).Detail, StringComparison.Ordinal);
-        Assert.DoesNotContain("No active uploads", model.Summary, StringComparison.Ordinal);
+        Assert.Contains("connects or disconnects", Assert.Single(model.Transfers).Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("No active transfers", model.Summary, StringComparison.Ordinal);
         row.ApplyStatus(new HostMountStatus(mount.Id, "Stopped", "Stopped", 0, 0));
         model.Update([row], false);
-        Assert.Empty(model.Files);
-        Assert.Contains("No active uploads", model.Summary, StringComparison.Ordinal);
+        Assert.Empty(model.Transfers);
+        Assert.Contains("No active transfers", model.Summary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -247,24 +254,24 @@ public sealed class UploadPresentationTests
             Uploads = [.. Enumerable.Range(0, 20).Select(index => new MountUploadFile { RelativePath = $"queued-{index}.txt" }),
                 new MountUploadFile { RelativePath = "active.txt", State = MountUploadState.Uploading, TotalBytes = 100, BytesTransferred = 40 }]
         });
-        var model = new UploadsViewModel();
+        var model = new TransfersViewModel();
         model.Update([row], false);
 
-        Assert.Equal(6, model.Files.Count);
-        Assert.Contains("active.txt", model.Files[0].Name, StringComparison.Ordinal);
-        Assert.Equal(40, model.Files[0].Percent);
-        Assert.Equal("More files pending", model.Files[^1].Detail);
-        var retained = model.Files[1];
+        Assert.Equal(6, model.Transfers.Count);
+        Assert.Contains("active.txt", model.Transfers[0].Name, StringComparison.Ordinal);
+        Assert.Equal(40, model.Transfers[0].Percent);
+        Assert.Equal("More files pending", model.Transfers[^1].Detail);
+        var retained = model.Transfers[1];
         row.ApplyStatus(row.UploadStatus! with
         {
             Uploads = [.. row.UploadStatus!.Uploads.Where(file => file.RelativePath != "active.txt").Select(file =>
                 file.RelativePath == "queued-6.txt" ? file with { State = MountUploadState.Uploading, TotalBytes = 100, BytesTransferred = 50 } : file)]
         });
         model.Update([row], false);
-        Assert.Contains("queued-6.txt", model.Files[0].Name, StringComparison.Ordinal);
-        Assert.Equal(50, model.Files[0].Percent);
-        Assert.Same(retained, model.Files[1]);
-        Assert.Equal("More files pending", model.Files[^1].Detail);
+        Assert.Contains("queued-6.txt", model.Transfers[0].Name, StringComparison.Ordinal);
+        Assert.Equal(50, model.Transfers[0].Percent);
+        Assert.Same(retained, model.Transfers[1]);
+        Assert.Equal("More files pending", model.Transfers[^1].Detail);
     }
 
     [Fact]
@@ -277,12 +284,12 @@ public sealed class UploadPresentationTests
             Uploads = [.. Enumerable.Range(0, 5).Select(index => new MountUploadFile { RelativePath = $"queued-{index}.txt" }),
                 new MountUploadFile { RelativePath = "retry.txt", State = MountUploadState.Retrying }],
         });
-        var model = new UploadsViewModel();
+        var model = new TransfersViewModel();
         model.Update([row], false);
 
-        Assert.Equal("Some uploads need attention.", model.Summary);
-        Assert.Contains(model.Files, file => file.Detail.Contains("upload error", StringComparison.Ordinal));
-        Assert.DoesNotContain(model.Files, file => file.Name.Contains("retry.txt", StringComparison.Ordinal));
+        Assert.Equal("Some transfers need attention.", model.Summary);
+        Assert.Contains(model.Transfers, file => file.Detail.Contains("upload error", StringComparison.Ordinal));
+        Assert.DoesNotContain(model.Transfers, file => file.Name.Contains("retry.txt", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -295,11 +302,11 @@ public sealed class UploadPresentationTests
         {
             UploadErrors = count,
         });
-        var model = new UploadsViewModel();
+        var model = new TransfersViewModel();
         model.Update([row], false);
 
-        Assert.Equal("Some uploads need attention.", model.Summary);
-        Assert.StartsWith(expected + ".", Assert.Single(model.Files).Detail, StringComparison.Ordinal);
+        Assert.Equal("Some transfers need attention.", model.Summary);
+        Assert.StartsWith(expected + ".", Assert.Single(model.Transfers).Detail, StringComparison.Ordinal);
         Assert.Equal(expected, UploadPresentation.Activity(row.UploadStatus));
     }
 
@@ -309,11 +316,11 @@ public sealed class UploadPresentationTests
         var mount = Mount();
         var row = new MountRow(mount, new HostMountStatus(mount.Id, "Mounted", "Mounted", 1, 0, UploadStatusStale: true)
         { Uploads = [new MountUploadFile { RelativePath = "status" }] });
-        var model = new UploadsViewModel();
+        var model = new TransfersViewModel();
         model.Update([row], false);
-        Assert.Equal(2, model.Files.Count);
-        Assert.Contains(model.Files, file => file.Name.EndsWith("status", StringComparison.Ordinal));
-        Assert.Contains(model.Files, file => file.Detail.Contains("unavailable", StringComparison.Ordinal));
+        Assert.Equal(2, model.Transfers.Count);
+        Assert.Contains(model.Transfers, file => file.Name.EndsWith("status", StringComparison.Ordinal));
+        Assert.Contains(model.Transfers, file => file.Detail.Contains("unavailable", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -331,19 +338,19 @@ public sealed class UploadPresentationTests
                 TotalBytes = 100, BytesTransferred = 40, SpeedBytesPerSecond = 16,
             }],
         });
-        var model = new UploadsViewModel();
+        var model = new TransfersViewModel();
         model.Update([row], false);
-        var file = Assert.Single(model.Files);
+        var file = Assert.Single(model.Transfers);
         Assert.Contains("/s", file.ProgressText, StringComparison.Ordinal);
         row.ApplyStatus(row.UploadStatus! with { UploadStatusStale = stale, UploadStatusChecking = checking });
         model.Update([row], hostUnavailable);
 
-        Assert.Same(file, model.Files.Single(item => item.Key == file.Key));
+        Assert.Same(file, model.Transfers.Single(item => item.Key == file.Key));
         Assert.Equal("Waiting for upload status", file.Detail);
         Assert.DoesNotContain("/s", file.ProgressText, StringComparison.Ordinal);
         Assert.Equal(System.Windows.Visibility.Collapsed, file.ProgressVisibility);
         Assert.Equal(System.Windows.Visibility.Collapsed, file.ProgressTextVisibility);
-        Assert.DoesNotContain("No active uploads", model.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("No active transfers", model.Summary, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -360,9 +367,9 @@ public sealed class UploadPresentationTests
                 TotalBytes = totalBytes, BytesTransferred = 1024, SpeedBytesPerSecond = 256,
             }],
         });
-        var model = new UploadsViewModel();
+        var model = new TransfersViewModel();
         model.Update([row], false);
-        var file = Assert.Single(model.Files);
+        var file = Assert.Single(model.Transfers);
 
         Assert.Equal(System.Windows.Visibility.Collapsed, file.ProgressVisibility);
         Assert.Equal(System.Windows.Visibility.Visible, file.ProgressTextVisibility);

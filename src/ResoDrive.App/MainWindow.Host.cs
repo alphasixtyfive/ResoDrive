@@ -53,15 +53,13 @@ public partial class MainWindow
                     _hostUnavailableReported = false;
                 }
                 ShowHostConnected();
-                _model.ApplyStatus(response.Mounts, response.MountStatusTruncated);
-                ApplyUploadStatus(response);
-                _model.ApplySyncStatus(response.SyncJobs, response.SyncStatusTruncated);
+                ApplyTransferStatus(response);
                 UpdateTrayStatus();
             }
             else
             {
                 _model.ApplyHostUnavailable();
-                MarkUploadsUnavailable();
+                MarkTransfersUnavailable();
                 UpdateTrayStatus();
                 var detail = response.InitializationErrorMessage ?? response.ErrorMessage;
                 if (!_hostUnavailableReported)
@@ -122,9 +120,7 @@ public partial class MainWindow
             if (!CanInteractWithHost) return;
             if (HostStatusPresentation.HasUsableMountStatus(response))
             {
-                _model.ApplyStatus(response.Mounts, response.MountStatusTruncated);
-                ApplyUploadStatus(response);
-                _model.ApplySyncStatus(response.SyncJobs, response.SyncStatusTruncated);
+                ApplyTransferStatus(response);
                 UpdateTrayStatus();
                 if (_hostUnavailableReported)
                     _model.AddLogEntry("\uE73E", "Background host connected", "Status updates resumed");

@@ -88,7 +88,7 @@ public partial class MainWindow : WpfWindow
             RestoreWindow,
             ExitApplication,
             exception => _model.AddLogEntry("\uE783", "Tray action failed", exception.Message, true),
-            ShowUploads);
+            ShowTransfers);
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
         Closed += MainWindow_Closed;
@@ -219,7 +219,7 @@ public partial class MainWindow : WpfWindow
         _hostConnection.Dispose();
         _componentStatusGeneration++;
         System.Windows.Application.Current.SessionEnding -= Application_SessionEnding;
-        CloseUploadWindows();
+        CloseTransfersWindow();
         _tray.Dispose();
         _ = DisposeSettingsStoreAfterDrainAsync();
     }
@@ -247,7 +247,7 @@ public partial class MainWindow : WpfWindow
         catch (Exception exception)
         {
             _model.ApplyHostUnavailable();
-            MarkUploadsUnavailable();
+            MarkTransfersUnavailable();
             UpdateTrayStatus();
             _model.AddLogEntry("\uE783", "Status refresh failed", exception.Message, true);
         }
@@ -267,15 +267,7 @@ public partial class MainWindow : WpfWindow
             response = takeover;
         }
         var hostReady = HostStatusPresentation.HasUsableMountStatus(response);
-        _model.Load(
-            _settings,
-            hostReady ? response.Mounts : null,
-            hostReady ? response.SyncJobs : null,
-            hostUnavailable: !hostReady,
-            mountStatusTruncated: response.MountStatusTruncated == true,
-            syncStatusTruncated: response.SyncStatusTruncated == true
-        );
-        ApplyUploadStatus(response);
+        LoadHostStatus(response);
         UpdateTrayStatus();
         LoadSettingsControls();
         UpdateConnectionStatus();
@@ -499,14 +491,7 @@ public partial class MainWindow : WpfWindow
                 return;
 
             var status = await HostClient.SendAsync(new HostRequest("status"), _lifetimeCancellation.Token);
-            var hostReady = HostStatusPresentation.HasUsableMountStatus(status);
-            _model.Load(
-                _settings,
-                hostReady ? status.Mounts : null,
-                hostReady ? status.SyncJobs : null,
-                hostUnavailable: !hostReady,
-                mountStatusTruncated: status.MountStatusTruncated == true,
-                syncStatusTruncated: status.SyncStatusTruncated == true);
+            LoadHostStatus(status);
             UpdateTrayStatus();
         }
         catch (Exception exception)
@@ -618,15 +603,7 @@ public partial class MainWindow : WpfWindow
         // A failed reload response contains no mount or sync snapshots. Query the host
         // again after rollback so the UI does not briefly present every drive as stopped.
         var status = await HostClient.SendAsync(new HostRequest("status"), _lifetimeCancellation.Token);
-        var hostReady = HostStatusPresentation.HasUsableMountStatus(status);
-        _model.Load(
-            _settings,
-            hostReady ? status.Mounts : null,
-            hostReady ? status.SyncJobs : null,
-            hostUnavailable: !hostReady,
-            mountStatusTruncated: status.MountStatusTruncated == true,
-            syncStatusTruncated: status.SyncStatusTruncated == true
-        );
+        LoadHostStatus(status);
         UpdateTrayStatus();
         LoadSettingsControls();
         return reload.Succeeded;
@@ -874,7 +851,7 @@ public partial class MainWindow : WpfWindow
                         reload.ErrorMessage ?? "The background host rejected the new connection.");
                     return false;
                 }
-                _model.Load(_settings, reload.Mounts, reload.SyncJobs);
+                LoadHostStatus(reload);
             }
 
             provisioning.Files.Complete();
@@ -1168,15 +1145,7 @@ public partial class MainWindow : WpfWindow
                         _lifetimeCancellation.Token)
                     : rollbackReload;
                 LoadSettingsControls();
-                var hostReady = rollbackStatus is not null &&
-                    HostStatusPresentation.HasUsableMountStatus(rollbackStatus);
-                _model.Load(
-                    _settings,
-                    hostReady ? rollbackStatus!.Mounts : null,
-                    hostReady ? rollbackStatus!.SyncJobs : null,
-                    hostUnavailable: !hostReady,
-                    mountStatusTruncated: rollbackStatus?.MountStatusTruncated == true,
-                    syncStatusTruncated: rollbackStatus?.SyncStatusTruncated == true);
+                LoadHostStatus(rollbackStatus);
                 UpdateTrayStatus();
                 ShowError(
                     "Settings were not activated",
@@ -1188,10 +1157,7 @@ public partial class MainWindow : WpfWindow
 
             LoadSettingsControls();
             await ReconcileAutostartAsync();
-            _model.Load(
-                _settings,
-                reload.Mounts,
-                reload.SyncJobs);
+            LoadHostStatus(reload);
             UpdateTrayStatus();
             UiDiagnosticLog.Current.Information("recovery.settings_imported");
         }
@@ -1260,8 +1226,7 @@ public partial class MainWindow : WpfWindow
             throw new InvalidOperationException(RcloneErrorMessage.Clean(
                 response.ErrorMessage,
                 "The host rejected the request."));
-        _model.ApplyStatus(response.Mounts, response.MountStatusTruncated);
-        ApplyUploadStatus(response);
+        ApplyTransferStatus(response);
         UpdateTrayStatus();
     }
 
@@ -1309,7 +1274,7 @@ public partial class MainWindow : WpfWindow
         if (!response.Succeeded)
             throw new InvalidOperationException(
                 response.ErrorMessage ?? "The host rejected the request.");
-        _model.ApplySyncStatus(response.SyncJobs, response.SyncStatusTruncated);
+        ApplyTransferStatus(response);
         UpdateTrayStatus();
     }
 
@@ -1579,8 +1544,7 @@ public partial class MainWindow : WpfWindow
                     "The background host rejected the request."));
         }
 
-        _model.ApplyStatus(response.Mounts, response.MountStatusTruncated);
-        ApplyUploadStatus(response);
+        ApplyTransferStatus(response);
         UpdateTrayStatus();
         var updated = _model.Mounts.FirstOrDefault(mount => mount.Id == row.Id);
         return TrayActionResult.Success(
@@ -1610,7 +1574,7 @@ public partial class MainWindow : WpfWindow
                 response.ErrorMessage ?? "The background host rejected the request.");
         }
 
-        _model.ApplySyncStatus(response.SyncJobs, response.SyncStatusTruncated);
+        ApplyTransferStatus(response);
         UpdateTrayStatus();
         var updated = _model.Jobs.FirstOrDefault(job => job.Id == row.Id);
         return TrayActionResult.Success(row.Name, updated?.Result ?? "The request was accepted.");
@@ -1624,7 +1588,7 @@ public partial class MainWindow : WpfWindow
         if (!HostStatusPresentation.HasUsableMountStatus(response))
         {
             _model.ApplyHostUnavailable();
-            MarkUploadsUnavailable();
+            MarkTransfersUnavailable();
             UpdateTrayStatus();
             return TrayActionResult.Failure(
                 "Refresh failed",
@@ -1632,21 +1596,19 @@ public partial class MainWindow : WpfWindow
                 "The background host is unavailable.");
         }
 
-        _model.ApplyStatus(response.Mounts, response.MountStatusTruncated);
-        ApplyUploadStatus(response);
-        _model.ApplySyncStatus(response.SyncJobs, response.SyncStatusTruncated);
+        ApplyTransferStatus(response);
         UpdateTrayStatus();
         return TrayActionResult.SilentSuccess();
     }
 
     private void UpdateTrayStatus()
     {
-        RefreshUploadsPresentation();
+        RefreshTransfersPresentation();
         var mounts = UploadMountRows();
         _tray.UpdateStatus(_model.Mounts.Count(mount => mount.IsMounted),
-            Math.Max(_hostActiveSyncJobs, _model.Jobs.Count(job => job.IsBusy)),
+            ActiveSyncJobCount,
             UploadPresentation.PendingCount(mounts),
-            _powerProtectionUnavailable || (_uploadsHostUnavailable && _model.Mounts.Any(mount => mount.ShouldStop || mount.NeedsHostRecovery)) || mounts.Any(mount => mount.UploadNeedsAttention &&
+            _powerProtectionUnavailable || (_mountUploadStatusUnavailable && _model.Mounts.Any(mount => mount.ShouldStop || mount.NeedsHostRecovery)) || mounts.Any(mount => mount.UploadNeedsAttention &&
                 ((mount.UploadStatus?.UploadStatusStale == true && !mount.UploadStatus.UploadStatusChecking)
                     || mount.UploadStatus?.UploadErrors > 0 || mount.UploadStatus?.UploadRecoveryRequired == true)));
     }
@@ -1696,7 +1658,7 @@ public partial class MainWindow : WpfWindow
     {
         var pending = UploadMountRows().Any(mount => mount.UploadNeedsAttention) ||
             _model.Jobs.Any(job => job.IsBusy) ||
-            (_uploadsHostUnavailable && _model.Mounts.Any(mount => mount.ShouldStop || mount.NeedsHostRecovery));
+            (_mountUploadStatusUnavailable && _model.Mounts.Any(mount => mount.ShouldStop || mount.NeedsHostRecovery));
         e.Cancel = pending;
         _exitRequested = !pending;
     }

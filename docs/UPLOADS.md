@@ -11,18 +11,26 @@ that display, including when uploads have finished. Right-click and choose
 The popup opens on request, with a
 consistent narrow width and a height that follows the queue. A short queue has
 no scrollbar or reserved scrollbar gap. Escape, the dismiss button, or clicking
-elsewhere hides the flyout while uploads continue. It prioritizes active files,
+elsewhere hides the flyout while transfers continue. It prioritizes active files,
 shows progress and speed, and
 keeps long queues summarized. Routine completion restores the normal icon without
-a notification. The Uploads entry also remains available from the tray menu.
+a notification. The **Transfers** entry also remains available from the tray menu.
 
-The Uploads flyout combines the VFS queue, active rclone transfers, and dirty
+The Transfers flyout combines the VFS queue, active rclone transfers, and dirty
 cache metadata. Modified files held open are shown as waiting for close. Reaching
 100% transferred bytes still requires server confirmation. Details are bounded;
 the total pending-work check includes entries beyond the displayed list. An
 incomplete inspection remains unknown and blocks a normal disconnect or shutdown.
 Unavailable observations hide old progress and speeds. When the server does not
 report a file size, transferred bytes and speed remain visible without a percentage bar.
+
+Active sync jobs share the same list, identified by drive and job name. Their
+copy or mirror direction, file counts, progress, speed and remaining time appear
+when available. Queued and checking jobs remain visible without an invented
+percentage. Finished jobs disappear; their results remain in the main Sync page.
+Sync-only work also animates the tray icon. Unavailable observations hide old
+counters, speeds and progress, and a short summary covers active jobs omitted
+from a bounded host response.
 
 For a deliberate exit or disconnect, the warning offers **Exit anyway** or
 **Disconnect anyway**. **Keep running** or **Keep connected** is the default;
@@ -55,7 +63,7 @@ Use disposable local files and an isolated ResoDrive data directory. Record the
 build hash, Windows version, rclone version, and WinFsp version.
 
 1. Copy a large file through Explorer on a slow connection. Confirm that Explorer
-   can finish first while the Uploads window and tray still show pending work.
+   can finish first while the Transfers popup and tray still show pending work.
 2. Keep a modified document open. Confirm the waiting-for-close state and normal
    exit rejection; close it and wait for server confirmation.
 3. Test disconnect/reconnect and retry behavior. An unavailable status must never
@@ -70,6 +78,8 @@ build hash, Windows version, rclone version, and WinFsp version.
    monitor, let its queue grow and shrink, and check its position above the taskbar.
    Confirm that Escape, dismiss and clicking elsewhere hide it without stopping
    transfers; reopening should show current progress.
+   Run a sync alongside an upload, then by itself, and check queued, checking,
+   downloading and completed states in the same popup.
 7. Test a real shutdown/sign-out manually on the test PC with pending uploads and
    after they finish. Automated tests send session messages only to disposable
    guard windows; they do not shut down the machine.
