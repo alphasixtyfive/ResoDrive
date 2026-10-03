@@ -8,10 +8,15 @@
     <WindowChrome CaptionHeight="0" ResizeBorderThickness="0" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
   </WindowChrome.WindowChrome>
   <Grid Margin="16">
-    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
     <Grid>
-      <TextBlock Text="Uploads" FontFamily="Segoe UI Variable Text, Segoe UI" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,36,0"/>
-      <Button x:Name="DismissButton" Style="{StaticResource IconOnlyButton}" Content="&#xE8BB;" HorizontalAlignment="Right"
+      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+      <TextBlock Text="Uploads" FontFamily="Segoe UI Variable Text, Segoe UI" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="0,0,8,0"/>
+      <Button x:Name="OpenMainWindowButton" Grid.Column="1" Content="Open ResoDrive" Style="{StaticResource ButtonStyle}"
+        Background="Transparent" BorderThickness="0" Foreground="{StaticResource FocusBrush}" FontSize="13"
+        Height="30" MinHeight="30" Padding="6,0" Margin="0,0,8,0" Click="OpenMainWindow_Click"
+        AutomationProperties.Name="Open ResoDrive main window"/>
+      <Button x:Name="DismissButton" Grid.Column="2" Style="{StaticResource IconOnlyButton}" Content="&#xE8BB;"
         Width="30" MinWidth="30" Height="30" MinHeight="30" FontSize="12"
         Background="Transparent" BorderThickness="0" Foreground="{StaticResource MutedBrush}" ToolTip="Dismiss"
         AutomationProperties.Name="Dismiss upload progress" Click="Dismiss_Click"/>
@@ -43,9 +48,5 @@
         </DataTemplate></ItemsControl.ItemTemplate>
       </ItemsControl>
     </ScrollViewer>
-    <Button x:Name="OpenMainWindowButton" Grid.Row="3" Content="Open ResoDrive" Style="{StaticResource ButtonStyle}" HorizontalAlignment="Left"
-      Background="Transparent" BorderThickness="0" Foreground="{StaticResource MutedBrush}" FontSize="12"
-      MinHeight="28" Padding="4,0" Margin="-4,4,0,-4" Click="OpenMainWindow_Click"
-      AutomationProperties.Name="Open ResoDrive main window"/>
   </Grid>
 </Window>

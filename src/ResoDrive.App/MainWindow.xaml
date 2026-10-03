@@ -59,17 +59,32 @@
         </Setter.Value>
       </Setter>
     </Style>
+    <GeometryGroup x:Key="DriveOrderGripGlyph">
+      <EllipseGeometry Center="1,1" RadiusX="1" RadiusY="1"/>
+      <EllipseGeometry Center="7,1" RadiusX="1" RadiusY="1"/>
+      <EllipseGeometry Center="1,6" RadiusX="1" RadiusY="1"/>
+      <EllipseGeometry Center="7,6" RadiusX="1" RadiusY="1"/>
+      <EllipseGeometry Center="1,11" RadiusX="1" RadiusY="1"/>
+      <EllipseGeometry Center="7,11" RadiusX="1" RadiusY="1"/>
+    </GeometryGroup>
     <Style x:Key="DriveOrderGrip" TargetType="Button" BasedOn="{StaticResource IconOnlyButton}">
       <Setter Property="Width" Value="24" />
       <Setter Property="MinWidth" Value="24" />
-      <Setter Property="Height" Value="28" />
-      <Setter Property="MinHeight" Value="28" />
+      <Setter Property="Height" Value="24" />
+      <Setter Property="MinHeight" Value="24" />
       <Setter Property="Background" Value="Transparent" />
-      <Setter Property="BorderBrush" Value="Transparent" />
       <Setter Property="Foreground" Value="{StaticResource MutedBrush}" />
-      <Setter Property="FontSize" Value="12" />
       <Setter Property="Cursor" Value="Hand" />
       <Setter Property="Opacity" Value="{DynamicResource DriveOrderGripOpacity}" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Grid Background="Transparent">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
       <Style.Triggers>
         <Trigger Property="IsMouseOver" Value="True"><Setter Property="Opacity" Value="{DynamicResource DriveOrderGripHoverOpacity}" /></Trigger>
         <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter Property="Opacity" Value="1" /></Trigger>
@@ -252,12 +267,16 @@
                   </Grid.ColumnDefinitions>
                   <Border Style="{StaticResource RowStatusRail}" Background="{Binding StatusBrush}" />
                   <Button x:Name="DriveOrderHandle" Grid.Column="1" Style="{StaticResource DriveOrderGrip}"
-                      Content="&#xE784;" ToolTip="Drag to reorder, or click to move · Alt+↑ / Alt+↓"
+                    ToolTip="Drag to reorder, or click to move · Alt+↑ / Alt+↓"
                     AutomationProperties.Name="{Binding Name, Mode=OneWay, StringFormat='Reorder {0}'}" AutomationProperties.HelpText="Drag this handle, or use Alt+Up and Alt+Down to change the drive order."
                     PreviewMouseLeftButtonDown="DriveOrder_MouseDown" PreviewMouseMove="DriveOrder_MouseMove"
                     PreviewMouseLeftButtonUp="DriveOrder_MouseUp" LostMouseCapture="DriveOrder_LostMouseCapture"
                     GiveFeedback="DriveOrder_GiveFeedback"
                     Click="DriveOrderMenu_Click">
+                    <Button.Content>
+                      <Path Data="{StaticResource DriveOrderGripGlyph}" Width="8" Height="12" Stretch="Uniform"
+                        Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" IsHitTestVisible="False"/>
+                    </Button.Content>
                     <Button.ContextMenu>
                         <ContextMenu Style="{StaticResource PopupMenu}" ItemContainerStyle="{StaticResource PopupMenuItem}"
                             Opened="DriveOrderMenu_Opened" DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
