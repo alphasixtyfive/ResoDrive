@@ -1,0 +1,52 @@
+<Window x:Class="ResoDrive.App.UploadsWindow"
+  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+  Title="Uploads" Width="360" MaxWidth="360" MaxHeight="400" SizeToContent="Height"
+  WindowStyle="None" ResizeMode="NoResize" WindowStartupLocation="Manual" ShowInTaskbar="False" Topmost="True"
+  Background="{StaticResource WindowBrush}" Foreground="{StaticResource TextBrush}">
+  <WindowChrome.WindowChrome>
+    <WindowChrome CaptionHeight="0" ResizeBorderThickness="0" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
+  </WindowChrome.WindowChrome>
+  <Grid Margin="16">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+    <Grid>
+      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+      <TextBlock Text="Uploads" FontFamily="Segoe UI Variable Text, Segoe UI" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="0,0,8,0"/>
+      <Button x:Name="OpenMainWindowButton" Grid.Column="1" Content="Open ResoDrive" Style="{StaticResource ButtonStyle}"
+        Background="Transparent" BorderThickness="0" Foreground="{StaticResource FocusBrush}" FontSize="13"
+        Height="30" MinHeight="30" Padding="6,0" Margin="0,0,8,0" Click="OpenMainWindow_Click"
+        AutomationProperties.Name="Open ResoDrive main window"/>
+      <Button x:Name="DismissButton" Grid.Column="2" Style="{StaticResource IconOnlyButton}" Content="&#xE8BB;"
+        Width="30" MinWidth="30" Height="30" MinHeight="30" FontSize="12"
+        Background="Transparent" BorderThickness="0" Foreground="{StaticResource MutedBrush}" ToolTip="Dismiss"
+        AutomationProperties.Name="Dismiss upload progress" Click="Dismiss_Click"/>
+    </Grid>
+    <TextBlock Grid.Row="1" Text="{Binding Summary}" TextWrapping="Wrap" Margin="0,6,0,12"
+      AutomationProperties.LiveSetting="Polite"/>
+    <ScrollViewer Grid.Row="2" MaxHeight="260" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <ScrollViewer.Style>
+        <Style TargetType="ScrollViewer"><Style.Triggers>
+          <DataTrigger Binding="{Binding Files.Count}" Value="0"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+        </Style.Triggers></Style>
+      </ScrollViewer.Style>
+      <ItemsControl ItemsSource="{Binding Files}">
+        <ItemsControl.Style>
+          <Style TargetType="ItemsControl"><Style.Triggers>
+            <DataTrigger Binding="{Binding ComputedVerticalScrollBarVisibility, RelativeSource={RelativeSource AncestorType=ScrollViewer}}" Value="Visible">
+              <Setter Property="Margin" Value="0,0,8,0"/>
+            </DataTrigger>
+          </Style.Triggers></Style>
+        </ItemsControl.Style>
+        <ItemsControl.ItemTemplate><DataTemplate>
+          <Border Style="{StaticResource Card}" Padding="10" Margin="0,0,0,6"><StackPanel>
+            <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"/>
+            <TextBlock Text="{Binding Detail}" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,3,0,0"/>
+            <ProgressBar Style="{StaticResource SlimProgressBar}" Minimum="0" Maximum="100" Value="{Binding Percent, Mode=OneWay}"
+              Visibility="{Binding ProgressVisibility}" Height="4" Margin="0,7,0,3" AutomationProperties.Name="Upload progress"/>
+            <TextBlock Text="{Binding ProgressText}" Visibility="{Binding ProgressTextVisibility}" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
+          </StackPanel></Border>
+        </DataTemplate></ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+  </Grid>
+</Window>

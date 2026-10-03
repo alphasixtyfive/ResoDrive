@@ -36,6 +36,7 @@ public sealed class SyncEditorWindowTests
                 VerifyNewJob(paths, enrolled, external, registered);
                 VerifyExistingExternalJob(paths, enrolled, registered);
                 VerifyExistingManagedJob(paths, enrolled, registered);
+                VerifyUploadsWindow();
                 Assert.False(Directory.Exists(paths.Root));
             }
             catch (Exception exception)
@@ -52,6 +53,20 @@ public sealed class SyncEditorWindowTests
         Assert.True(thread.Join(TimeSpan.FromSeconds(20)));
         if (failure is not null)
             ExceptionDispatchInfo.Capture(failure).Throw();
+    }
+
+    private static void VerifyUploadsWindow()
+    {
+        var opened = false;
+        var uploads = new UploadsWindow(new UploadsViewModel(), () => opened = true);
+        try
+        {
+            Assert.Equal("Uploads", uploads.Title);
+            Assert.NotNull(uploads.DataContext);
+            Control<Button>(uploads, "OpenMainWindowButton").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.True(opened);
+        }
+        finally { uploads.Close(); }
     }
 
     private static void VerifyNewJob(
@@ -159,7 +174,7 @@ public sealed class SyncEditorWindowTests
         }
     }
 
-    private static T Control<T>(SyncEditorWindow editor, string name) where T : FrameworkElement =>
+    private static T Control<T>(System.Windows.Window editor, string name) where T : FrameworkElement =>
         Assert.IsType<T>(editor.FindName(name));
 
     private static MountSettings Mount(string name) => new()

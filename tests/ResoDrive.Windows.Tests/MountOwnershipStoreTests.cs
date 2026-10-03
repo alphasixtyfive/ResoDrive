@@ -4,6 +4,35 @@ namespace ResoDrive.Windows.Tests;
 
 public sealed class MountOwnershipStoreTests
 {
+    [Theory]
+    [InlineData("not json")]
+    [InlineData("null")]
+    [InlineData("[null]")]
+    public async Task UnreadableRecordsCannotBeOverwrittenAsAnEmptyCatalog(string json)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "rdrive-ownership-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = new ApplicationPaths(root);
+            paths.EnsureCreated();
+            await File.WriteAllTextAsync(paths.OwnershipFile, json);
+            using var store = new MountOwnershipStore(paths);
+            await Assert.ThrowsAsync<IOException>(() => store.LoadAsync(CancellationToken.None));
+            await Assert.ThrowsAsync<IOException>(() => store.UpsertAsync(new OwnedMount(Guid.NewGuid(), 1, DateTime.UtcNow, "rclone.exe", "remote:", "R:"), CancellationToken.None));
+            Assert.Equal(json, await File.ReadAllTextAsync(paths.OwnershipFile));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+    [Fact]
+    public void LiveUnverifiedProcessIsNotTreatedAsGone()
+    {
+        using var process = System.Diagnostics.Process.GetCurrentProcess();
+        var owned = new OwnedMount(Guid.NewGuid(), process.Id, process.StartTime.ToUniversalTime(), "missing-rclone.exe", "remote:", "R:");
+        Assert.Null(MountOwnershipStore.TryOpenVerified(owned));
+        Assert.False(MountOwnershipStore.IsDefinitelyGone(owned));
+        Assert.True(MountOwnershipStore.IsDefinitelyGone(owned with { StartTimeUtc = owned.StartTimeUtc.AddMinutes(-1) }));
+    }
+
     [Fact]
     public void IsSameExecutablePath_NormalizesEquivalentPaths()
     {

@@ -52,9 +52,9 @@ public sealed partial class DpapiSecretStore : IConfigSecretStore
     {
         _paths.EnsureCreated();
         var stagedPath = _paths.ConfigSecretFile + $".{Guid.NewGuid():N}.tmp";
-        await SaveProtectedFileAsync(password, stagedPath, cancellationToken).ConfigureAwait(false);
         try
         {
+            await SaveProtectedFileAsync(password, stagedPath, cancellationToken).ConfigureAwait(false);
             if (File.Exists(_paths.ConfigSecretFile))
             {
                 File.Replace(stagedPath, _paths.ConfigSecretFile, null, ignoreMetadataErrors: true);

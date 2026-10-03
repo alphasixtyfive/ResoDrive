@@ -87,8 +87,8 @@ internal static partial class WindowAppearance
         window.MinHeight = Math.Min(window.MinHeight, availableHeight);
         if (constrainMaximum)
         {
-            window.MaxWidth = availableWidth;
-            window.MaxHeight = availableHeight;
+            window.MaxWidth = Math.Min(window.MaxWidth, availableWidth);
+            window.MaxHeight = Math.Min(window.MaxHeight, availableHeight);
         }
         if (!double.IsNaN(window.Width))
             window.Width = Math.Min(window.Width, availableWidth);

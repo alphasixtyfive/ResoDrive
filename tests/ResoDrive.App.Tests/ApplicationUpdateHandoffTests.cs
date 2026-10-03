@@ -8,6 +8,107 @@ namespace ResoDrive.App.Tests;
 public sealed class ApplicationUpdateHandoffTests
 {
     [Fact]
+    public void FinalReceiptLeftByLegacyHelperIsRecoveredAndRemovedWithTheFirstReceipt()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, ApplicationUpdateHandoff.OutcomeFileName);
+        var first = new ApplicationUpdateOutcome("0.3.19", "succeeded", 0, "Installed.", false, false, DateTimeOffset.UtcNow);
+        var final = first with { RelaunchAcknowledged = true, Finalized = true, RecordedAtUtc = first.RecordedAtUtc.AddSeconds(1) };
+        File.WriteAllText(path, JsonSerializer.Serialize(first));
+        File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(final));
+
+        Assert.Equal(final, ApplicationUpdateHandoff.ReadOutcome(directory.Path));
+        ApplicationUpdateHandoff.DeleteOutcome(directory.Path);
+        Assert.False(File.Exists(path));
+        Assert.False(File.Exists(path + ".tmp"));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void StaleOrDifferentVersionStagedReceiptCannotReplaceCurrentOutcome(bool differentVersion)
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, ApplicationUpdateHandoff.OutcomeFileName);
+        var first = new ApplicationUpdateOutcome("0.3.19", "succeeded", 0, "Installed.", false, false, DateTimeOffset.UtcNow);
+        var staged = first with
+        {
+            Version = differentVersion ? "0.3.18" : first.Version,
+            Finalized = true, RelaunchAcknowledged = true,
+            RecordedAtUtc = differentVersion ? first.RecordedAtUtc.AddSeconds(1) : first.RecordedAtUtc.AddSeconds(-1)
+        };
+        File.WriteAllText(path, JsonSerializer.Serialize(first));
+        File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(staged));
+        Assert.Equal(first, ApplicationUpdateHandoff.ReadOutcome(directory.Path));
+    }
+
+    [Fact]
+    public void UnreadableStagedReceiptPreservesReadablePrimaryOutcome()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, ApplicationUpdateHandoff.OutcomeFileName);
+        var first = new ApplicationUpdateOutcome("0.3.19", "succeeded", 0, "Installed.", false, false, DateTimeOffset.UtcNow);
+        File.WriteAllText(path, JsonSerializer.Serialize(first));
+        File.WriteAllText(path + ".tmp", "incomplete json");
+        Assert.Equal(first, ApplicationUpdateHandoff.ReadOutcome(directory.Path));
+    }
+
+    [Fact]
+    public void OversizedDiagnosticReceiptIsIgnored()
+    {
+        using var directory = new TemporaryDirectory();
+        File.WriteAllText(Path.Combine(directory.Path, ApplicationUpdateHandoff.OutcomeFileName), new string('x', 128 * 1024));
+        Assert.Null(ApplicationUpdateHandoff.ReadOutcome(directory.Path));
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"Finalized\":true}")]
+    [InlineData("{\"Version\":\"0.3.19\",\"Status\":null,\"Message\":\"Installed.\",\"RecordedAtUtc\":\"2026-10-03T12:00:00Z\"}")]
+    public void IncompleteReceiptsCannotBePresentedAsAnUpdateResult(string json)
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, ApplicationUpdateHandoff.OutcomeFileName);
+        File.WriteAllText(path, json);
+        File.WriteAllText(path + ".tmp", json);
+        Assert.Null(ApplicationUpdateHandoff.ReadOutcome(directory.Path));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void UnreadablePrimaryCannotBeReplacedByAnUnrelatedStagedResult(bool locked)
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, ApplicationUpdateHandoff.OutcomeFileName);
+        File.WriteAllText(path, "incomplete json");
+        var staged = new ApplicationUpdateOutcome("0.3.18", "succeeded", 0, "Installed.", true, true, DateTimeOffset.UtcNow);
+        File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(staged));
+        using var held = locked ? new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None) : null;
+        Assert.Null(ApplicationUpdateHandoff.ReadOutcome(directory.Path));
+    }
+
+    [Fact]
+    public void FinalizedOrphanStageIsReadableAfterThePrimaryWasRemoved()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, ApplicationUpdateHandoff.OutcomeFileName);
+        var staged = new ApplicationUpdateOutcome("0.3.19", "succeeded", 0, "Installed.", true, true, DateTimeOffset.UtcNow);
+        File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(staged));
+        Assert.Equal(staged, ApplicationUpdateHandoff.ReadOutcome(directory.Path));
+    }
+
+    [Fact]
+    public void PendingReceiptRemainsAvailableToReportAnInterruptedHandoff()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, ApplicationUpdateHandoff.OutcomeFileName);
+        var pending = new ApplicationUpdateOutcome("0.3.19", "pending", null, "Preparing the update.", false, false, DateTimeOffset.UtcNow);
+        File.WriteAllText(path, JsonSerializer.Serialize(pending));
+        Assert.Equal(pending, ApplicationUpdateHandoff.ReadOutcome(directory.Path));
+    }
+
+    [Fact]
     public void PreparationFailureIsShownOnlyForTheCurrentAttempt()
     {
         using var directory = new TemporaryDirectory();
@@ -218,7 +319,7 @@ public sealed class ApplicationUpdateHandoffTests
 
         var startInfo = ApplicationUpdateHandoff.CreateInstallerStartInfo(installerPath);
 
-        Assert.Equal("msiexec.exe", startInfo.FileName);
+        Assert.Equal(Path.Combine(Environment.SystemDirectory, "msiexec.exe"), startInfo.FileName);
         Assert.Equal("runas", startInfo.Verb);
         Assert.True(startInfo.UseShellExecute);
         Assert.Contains("/passive", startInfo.Arguments, StringComparison.OrdinalIgnoreCase);

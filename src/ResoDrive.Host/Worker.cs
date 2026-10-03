@@ -6,6 +6,7 @@ using ResoDrive.Core.Domain;
 using ResoDrive.Core.Results;
 using ResoDrive.Core.Settings;
 using ResoDrive.Windows;
+using ResoDrive.Windows.Hosting;
 
 namespace ResoDrive.Host;
 
@@ -31,11 +32,11 @@ public sealed partial class Worker : BackgroundService
     private AtomicSettingsStore? _store;
     private RcloneMountCoordinator? _mounts;
     private RcloneSyncCoordinator? _syncs;
+    private NativeSessionGuard? _sessionGuard;
+    private readonly object _sessionProtectionGate = new();
     private ManagerSettings? _settings;
     private ResoDrive.Core.Results.OperationError? _initializationFailure;
-    private IReadOnlyList<MountDefinition> _definitions = [];
-    private string? _rclonePath;
-    private string? _configPath;
+    private List<MountDefinition> _definitions = [];
     private int _taskId;
     private bool _firstSchedulePass = true;
     private bool _shutdownRequested;
@@ -82,6 +83,7 @@ public sealed partial class Worker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        _sessionGuard = new NativeSessionGuard();
         if (_inspectRuntimeUserAgent)
         {
             var refreshed = await RefreshRuntimeUserAgentAsync(stoppingToken).ConfigureAwait(false);
@@ -93,6 +95,7 @@ public sealed partial class Worker : BackgroundService
         if (new RemoteWipeStateStore(_paths).Read() is { Phase: not RemoteWipePhase.Completed })
         {
             _recoveringRemoteWipe = true;
+            _sessionGuard.Update(false);
             await Task.WhenAll(ServeAsync(stoppingToken), ResumeRemoteWipeAsync(stoppingToken)).ConfigureAwait(false);
             return;
         }
@@ -159,10 +162,15 @@ public sealed partial class Worker : BackgroundService
 
             if (_mounts is not null)
             {
+                _mounts.UploadStatusInvalidated -= OnUploadStatusInvalidated;
                 await _mounts.DisposeAsync().ConfigureAwait(false);
             }
             _syncs?.Dispose();
             _store?.Dispose();
+            NativeSessionGuard? sessionGuard;
+            lock (_sessionProtectionGate) { sessionGuard = _sessionGuard; _sessionGuard = null; }
+            if (sessionGuard is not null)
+                await sessionGuard.DisposeAsync().ConfigureAwait(false);
 
             // The next host lifetime resumes the durable command after this lifetime has
             // finished disposing work. Cleanup never races active host operations.
@@ -172,6 +180,9 @@ public sealed partial class Worker : BackgroundService
     public override void Dispose()
     {
         _remoteWipeClient.Dispose();
+        NativeSessionGuard? sessionGuard;
+        lock (_sessionProtectionGate) { sessionGuard = _sessionGuard; _sessionGuard = null; }
+        sessionGuard?.Dispose();
         _reloadGate.Dispose();
         _scheduleStateGate.Dispose();
         _slots.Dispose();
@@ -216,10 +227,8 @@ public sealed partial class Worker : BackgroundService
                     .ConfigureAwait(false);
                 response = request is null ? new(false, "host.invalid_request", "The request was empty.")
                     : await HandleAsync(request, token).ConfigureAwait(false);
-                shutdownRequested = response.Succeeded && string.Equals(
-                    request?.Command,
-                    "shutdown",
-                    StringComparison.OrdinalIgnoreCase);
+                shutdownRequested = response.Succeeded &&
+                    request?.Command.Trim().ToLowerInvariant() is "shutdown" or "exit";
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -241,14 +250,17 @@ public sealed partial class Worker : BackgroundService
             try
             {
                 await HostProtocol.WriteAsync(pipe, response, token).ConfigureAwait(false);
-                if (shutdownRequested)
-                {
-                    _applicationLifetime.StopApplication();
-                }
             }
             catch (Exception exception) when (exception is IOException or OperationCanceledException)
             {
                 LogClientFailure(_logger, exception);
+            }
+            finally
+            {
+                // An accepted shutdown still takes effect if its client leaves
+                // before receiving the reply. All guards ran before acceptance.
+                if (shutdownRequested)
+                    _applicationLifetime.StopApplication();
             }
         }
     }
@@ -272,6 +284,8 @@ public sealed partial class Worker : BackgroundService
             };
         }
         var command = request.Command.Trim().ToLowerInvariant();
+        if (request.AllowPendingUploads && (command is not ("exit" or "stop") || !request.Confirmed))
+            return new(false, "host.invalid_override", "Continuing with pending uploads requires an explicit exit or disconnect confirmation.");
         if (_recoveringRemoteWipe || new RemoteWipeStateStore(_paths).Read() is { Phase: not RemoteWipePhase.Completed })
         {
             // An idle recovery host can be stopped for an update. Its durable work resumes
@@ -284,7 +298,7 @@ public sealed partial class Worker : BackgroundService
         {
             return Status();
         }
-        if (command == "shutdown")
+        if (command is "shutdown" or "exit")
         {
             return await HandleShutdownAsync(request, token).ConfigureAwait(false);
         }
@@ -294,7 +308,7 @@ public sealed partial class Worker : BackgroundService
             if (_shutdownRequested)
                 return new(false, "host.stopping", "ResoDrive is stopping. Try again after it restarts.");
             if (command == "check-uploads")
-                return _mounts is null ? Status() : Response(await _mounts.CheckPendingUploadsAsync(token).ConfigureAwait(false));
+                return Response(await CheckPendingUploadsAsync(token).ConfigureAwait(false));
             if (command is "reload" or "activate-runtime")
             {
                 if (command == "activate-runtime")
@@ -329,6 +343,8 @@ public sealed partial class Worker : BackgroundService
                     return new(false, "host.sync_job_id", "A valid sync job ID is required.");
                 }
                 var syncId = new SyncJobId(syncGuid);
+                if (!_definitions.Any(definition => definition.Id == mountId && definition.SyncJobs.Any(job => job.Id == syncId)))
+                    return new(false, "sync.not_found", "The sync job no longer exists on this drive.");
                 if (command == "cancel-sync")
                 {
                     if (_operations.TryGetValue(SyncKey(syncId), out var source))
@@ -351,10 +367,20 @@ public sealed partial class Worker : BackgroundService
                 return QueueSync(mountId, syncId, false, token) ? Status()
                     : new(false, "host.operation_in_progress", "This sync job is already queued or running.");
             }
+            if (command == "stop")
+            {
+                var target = mountCoordinator.ValidateStopTarget(mountId);
+                if (!target.Succeeded) return Response(target);
+                if (!request.AllowPendingUploads)
+                {
+                    var uploads = await mountCoordinator.CheckPendingUploadsForMountAsync(mountId, token).ConfigureAwait(false);
+                    if (!uploads.Succeeded) return Response(uploads);
+                }
+            }
             Func<CancellationToken, Task<OperationResult>>? action = command switch
             {
                 "start" => operationToken => mountCoordinator.StartAsync(mountId, operationToken),
-                "stop" => operationToken => mountCoordinator.StopAsync(mountId, operationToken),
+                "stop" => operationToken => mountCoordinator.StopAsync(mountId, request.AllowPendingUploads, operationToken),
                 "restart" => operationToken => mountCoordinator.RestartAsync(mountId, operationToken),
                 _ => null
             };
@@ -396,11 +422,10 @@ public sealed partial class Worker : BackgroundService
                 );
             }
 
-            if (_mounts is not null)
+            if (!request.AllowPendingUploads)
             {
-                var uploads = await _mounts.CheckPendingUploadsAsync(token).ConfigureAwait(false);
-                if (!uploads.Succeeded)
-                    return Response(uploads);
+                var uploads = await CheckPendingUploadsAsync(token).ConfigureAwait(false);
+                if (!uploads.Succeeded) return Response(uploads);
             }
             _shutdownRequested = true;
             if (HasWork() && !request.Confirmed)
@@ -424,7 +449,7 @@ public sealed partial class Worker : BackgroundService
 
     private async Task MonitorMountsAsync(CancellationToken token)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
         while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
         {
             await _reloadGate.WaitAsync(token).ConfigureAwait(false);
@@ -432,6 +457,7 @@ public sealed partial class Worker : BackgroundService
             {
                 if (_mounts is not null && !_shutdownRequested)
                     await _mounts.RefreshHealthAsync(token).ConfigureAwait(false);
+                UpdateSessionProtection();
             }
             finally { _reloadGate.Release(); }
         }
@@ -632,6 +658,7 @@ public sealed partial class Worker : BackgroundService
             return false;
         }
         onQueued?.Invoke();
+        UpdateSessionProtection();
         Track(RunAsync(key, source, action));
         return true;
     }
@@ -668,6 +695,7 @@ public sealed partial class Worker : BackgroundService
                 _operations.TryRemove(key, out _);
             }
             source.Dispose();
+            UpdateSessionProtection();
         }
     }
 
@@ -709,7 +737,6 @@ public sealed partial class Worker : BackgroundService
         }
         var rclone = new RcloneRuntimeLocator(_paths).ExecutablePath;
         var config = _paths.ConfigFile;
-        var changed = !string.Equals(rclone, _rclonePath, StringComparison.OrdinalIgnoreCase) || !string.Equals(config, _configPath, StringComparison.OrdinalIgnoreCase);
         var definitionsChanged = _settings is not null &&
             !string.Equals(
                 JsonSerializer.Serialize(_settings.Mounts),
@@ -736,18 +763,11 @@ public sealed partial class Worker : BackgroundService
                 "host.mount_restart_required",
                 "The mounted drives being changed must briefly disconnect before the settings can be activated.");
         }
-        if (changed && _mounts is not null)
+        if (_mounts is null)
         {
-            if (HasWork())
-            {
-                return Result.Failure("host.restart_required", "Paths changed while work is active. Stop all work, then reload.");
-            }
-            await _mounts.DisposeAsync().ConfigureAwait(false);
-            _mounts = null;
-            _syncs?.Dispose();
-            _syncs = null;
+            _mounts = new(rclone, config, _paths, new MountTargetInventory(), _clientUserAgent);
+            _mounts.UploadStatusInvalidated += OnUploadStatusInvalidated;
         }
-        _mounts ??= new(rclone, config, _paths, new MountTargetInventory(), _clientUserAgent);
         var mountCoordinator = _mounts;
         var reconciled = await mountCoordinator.ReconcileAsync(definitions, token).ConfigureAwait(false);
         if (!reconciled.Succeeded)
@@ -780,8 +800,6 @@ public sealed partial class Worker : BackgroundService
             _lastRuns.TryRemove(obsoleteId, out _);
         }
         _syncs ??= new(rclone, config, _paths, () => _definitions, _clientUserAgent);
-        _rclonePath = rclone;
-        _configPath = config;
         var isFirstLoad = _settings is null;
         if (isFirstLoad)
         {
@@ -794,6 +812,7 @@ public sealed partial class Worker : BackgroundService
         // present their reconciled Stopped snapshots as manual Mount actions.
         Volatile.Write(ref _settings, loaded.Value);
         Volatile.Write(ref _initializationFailure, null);
+        UpdateSessionProtection();
         return Result.Success();
     }
 
@@ -855,7 +874,7 @@ public sealed partial class Worker : BackgroundService
     private bool HasWork() =>
         !_operations.IsEmpty ||
         (_mounts?.GetSnapshots().Any(snapshot => snapshot.Lifecycle is not MountLifecycle.Stopped and not MountLifecycle.Failed) ?? false) ||
-        (_syncs?.GetSnapshots().Any(snapshot => snapshot.Lifecycle == SyncLifecycle.Running) ?? false);
+        (_syncs?.GetSnapshots().Any(snapshot => snapshot.Lifecycle is SyncLifecycle.Running or SyncLifecycle.Queued) ?? false);
 
     private DefinitionWorkAnalysis AnalyzeDefinitionWork(ManagerSettings incoming)
     {
@@ -944,6 +963,7 @@ public sealed partial class Worker : BackgroundService
 
     private HostResponse Status()
     {
+        UpdateSessionProtection();
         var identity = Volatile.Read(ref _runtimeIdentity);
         if (Volatile.Read(ref _settings) is null)
         {
@@ -957,9 +977,10 @@ public sealed partial class Worker : BackgroundService
                 ReportedRcloneVersion: identity.Version,
                 RcloneIdentityErrorCode: identity.ErrorCode,
                 InitializationErrorCode: failure?.Code,
-                InitializationErrorMessage: failure?.Message);
+                InitializationErrorMessage: failure?.Message,
+                SessionProtectionError: _sessionGuard?.Status.Error);
         }
-        return new(
+        return HostProtocol.BoundStatus(new(
             true,
             Mounts: _mounts?.GetSnapshots().Select(snapshot => HostProtocol.ToStatus(snapshot) with
             {
@@ -968,7 +989,8 @@ public sealed partial class Worker : BackgroundService
             SyncJobs: _syncs?.GetSnapshots().Select(HostProtocol.ToStatus).ToArray() ?? [],
             HostBaseDirectory: AppContext.BaseDirectory,
             ReportedRcloneVersion: identity.Version,
-            RcloneIdentityErrorCode: identity.ErrorCode);
+            RcloneIdentityErrorCode: identity.ErrorCode,
+            SessionProtectionError: _sessionGuard?.Status.Error));
     }
     private static HostResponse Response(OperationResult result) => new(
         result.Succeeded,

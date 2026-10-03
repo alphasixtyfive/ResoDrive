@@ -60,7 +60,7 @@ public sealed class RcloneRuntimeLocator
             return Result.Success(new InstallationStatus(reportedVersion, ExecutablePath));
         }
         catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+            exception is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             return Result.Failure<InstallationStatus>("rclone.invalid", exception.Message);
         }

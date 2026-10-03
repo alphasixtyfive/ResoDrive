@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 namespace ResoDrive.Windows;
 
 public sealed record ProcessRunResult(int ExitCode, string StandardOutput, string StandardError, bool TimedOut);
@@ -6,6 +7,7 @@ public sealed record ProcessRunResult(int ExitCode, string StandardOutput, strin
 public static class ProcessRunner
 {
     private const int MaximumCapturedCharacters = 256 * 1024;
+    internal const int MaximumLogLineCharacters = 64 * 1024;
     private static readonly TimeSpan ForcedStopTimeout = TimeSpan.FromSeconds(3);
 
     public static async Task<ProcessRunResult> RunAsync(
@@ -49,6 +51,7 @@ public static class ProcessRunner
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
         ArgumentNullException.ThrowIfNull(arguments);
+        using var timeoutSource = new CancellationTokenSource(timeout);
 
         var startInfo = new ProcessStartInfo
         {
@@ -83,7 +86,6 @@ public static class ProcessRunner
             process.StandardError,
             standardErrorLineReceived,
             CancellationToken.None);
-        using var timeoutSource = new CancellationTokenSource(timeout);
         using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             timeoutSource.Token);
@@ -125,21 +127,52 @@ public static class ProcessRunner
             return await ReadBoundedAsync(reader, cancellationToken).ConfigureAwait(false);
         }
 
+        return await ReadBoundedLinesAsync(reader, lineReceived, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static async Task<string> ReadBoundedLinesAsync(StreamReader reader, Action<string> lineReceived,
+        CancellationToken cancellationToken)
+    {
         var result = new BoundedTextBuffer(MaximumCapturedCharacters);
-        while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
+        var buffer = new char[4096];
+        var pending = new StringBuilder(MaximumLogLineCharacters);
+        var truncated = false;
+        var previousWasCarriageReturn = false;
+        while (true)
         {
-            result.Append(line);
-            result.Append(Environment.NewLine);
-            try
+            var count = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+            if (count == 0) break;
+            for (var index = 0; index < count; index++)
             {
-                lineReceived(line);
-            }
-            catch (Exception exception) when (exception is not OutOfMemoryException)
-            {
-                // A status observer must never interrupt or strand the child process.
+                var value = buffer[index];
+                if (value is '\r' or '\n')
+                {
+                    if (value != '\n' || !previousWasCarriageReturn) EmitLine();
+                    previousWasCarriageReturn = value == '\r';
+                    continue;
+                }
+                previousWasCarriageReturn = false;
+                if (pending.Length < MaximumLogLineCharacters) pending.Append(value);
+                else truncated = true;
             }
         }
+        if (pending.Length > 0 || truncated) EmitLine();
         return result.ToString();
+
+        void EmitLine()
+        {
+            var line = pending.ToString();
+            if (truncated) line += " [truncated]";
+            result.Append(line);
+            result.Append(Environment.NewLine);
+            pending.Clear();
+            truncated = false;
+            try { lineReceived(line); }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                // An observer must never interrupt draining or strand the child process.
+            }
+        }
     }
 
     private static async Task<string> ReadBoundedAsync(StreamReader reader, CancellationToken cancellationToken)

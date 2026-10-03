@@ -253,6 +253,8 @@ public sealed class AtomicSettingsStore : IDisposable
 
     private static OperationResult<ManagerSettings> ValidateSettings(ManagerSettings settings)
     {
+        if (settings.Revision < 0 || settings.Revision == long.MaxValue)
+            return Result.Failure<ManagerSettings>("settings.invalid", "The settings revision is invalid or exhausted.");
         if (settings.SchemaVersion != ManagerSettings.CurrentSchemaVersion)
         {
             return Result.Failure<ManagerSettings>(

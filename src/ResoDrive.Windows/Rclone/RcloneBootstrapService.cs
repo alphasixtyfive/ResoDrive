@@ -28,6 +28,7 @@ public sealed class RcloneBootstrapService
     private readonly IRcloneProcessRunner _processRunner;
     private readonly HttpClient _httpClient;
     private readonly string _archiveSha256;
+    private readonly TimeSpan _downloadTimeout;
 
     public const string ReleaseVersion = "v1.75.0";
     internal const string ArchiveSha256 = "203581f0a7baeae873f2347483a798c79e2eaf5c384a4e9d866aa374f1c89ac0";
@@ -43,12 +44,15 @@ public sealed class RcloneBootstrapService
         RcloneRuntimeLocator locator,
         IRcloneProcessRunner processRunner,
         HttpClient httpClient,
-        string? archiveSha256 = null)
+        string? archiveSha256 = null,
+        TimeSpan? downloadTimeout = null)
     {
         _locator = locator ?? throw new ArgumentNullException(nameof(locator));
         _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _archiveSha256 = archiveSha256 ?? ArchiveSha256;
+        _downloadTimeout = downloadTimeout ?? TimeSpan.FromHours(1);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(_downloadTimeout, TimeSpan.Zero);
     }
 
     public async Task<OperationResult<InstallationStatus>> InstallAsync(
@@ -80,24 +84,27 @@ public sealed class RcloneBootstrapService
         var replacementStarted = false;
         var preserveBackup = false;
         var preserveArchive = false;
+        using var downloadDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        downloadDeadline.CancelAfter(_downloadTimeout);
         try
         {
             progress?.Report(new RcloneBootstrapProgress("Connecting to the rclone download"));
-            await DownloadAsync(archivePath, progress, cancellationToken).ConfigureAwait(false);
+            await DownloadAsync(archivePath, progress, downloadDeadline.Token).ConfigureAwait(false);
             progress?.Report(new RcloneBootstrapProgress("Verifying download"));
-            if (!await HasExpectedHashAsync(archivePath, _archiveSha256, cancellationToken).ConfigureAwait(false))
+            if (!await HasExpectedHashAsync(archivePath, _archiveSha256, downloadDeadline.Token).ConfigureAwait(false))
             {
                 TryDelete(archivePath);
                 return Result.Failure<InstallationStatus>("rclone.download_hash", "The rclone download failed verification.");
             }
 
-            await ExtractExecutableAsync(archivePath, stagedPath, cancellationToken).ConfigureAwait(false);
-            var stagedVersion = await InspectExecutableAsync(stagedPath, cancellationToken).ConfigureAwait(false);
+            await ExtractExecutableAsync(archivePath, stagedPath, downloadDeadline.Token).ConfigureAwait(false);
+            var stagedVersion = await InspectExecutableAsync(stagedPath, downloadDeadline.Token).ConfigureAwait(false);
             if (!stagedVersion.Succeeded ||
                 !string.Equals(stagedVersion.Value, ReleaseVersion, StringComparison.OrdinalIgnoreCase))
                 return Result.Failure<InstallationStatus>("rclone.download_invalid", "The downloaded rclone executable is invalid.");
 
             progress?.Report(new RcloneBootstrapProgress("Installing rclone"));
+            downloadDeadline.Token.ThrowIfCancellationRequested();
             var target = _locator.ExecutablePath;
             if (File.Exists(target))
             {
@@ -324,14 +331,21 @@ public sealed class RcloneBootstrapService
         string executable,
         CancellationToken cancellationToken)
     {
-        var result = await _processRunner.RunAsync(
-            executable, ["version"], TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
-        var line = result.StandardOutput
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .FirstOrDefault(value => value.StartsWith("rclone v", StringComparison.OrdinalIgnoreCase));
-        return !result.TimedOut && result.ExitCode == 0 && line is not null
-            ? Result.Success(line["rclone ".Length..])
-            : Result.Failure<string>("rclone.download_invalid", "The downloaded executable did not report a version.");
+        try
+        {
+            var result = await _processRunner.RunAsync(
+                executable, ["version"], TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
+            var line = result.StandardOutput
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault(value => value.StartsWith("rclone v", StringComparison.OrdinalIgnoreCase));
+            return !result.TimedOut && result.ExitCode == 0 && line is not null
+                ? Result.Success(line["rclone ".Length..])
+                : Result.Failure<string>("rclone.download_invalid", "The downloaded executable did not report a version.");
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return Result.Failure<string>("rclone.download_invalid", "Windows could not start the downloaded executable.");
+        }
     }
 
     private static bool RestoreBackup(string target, string backup)

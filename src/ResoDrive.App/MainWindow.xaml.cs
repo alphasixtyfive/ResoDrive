@@ -23,14 +23,13 @@ namespace ResoDrive.App;
 public partial class MainWindow : WpfWindow
 #pragma warning restore CA1001
 {
-    private static readonly TimeSpan InitialHostProbeTimeout = TimeSpan.FromMilliseconds(250);
-    private static readonly TimeSpan StartingHostProbeTimeout = TimeSpan.FromMilliseconds(750);
     private const int MaximumAutomaticHostRecoveryAttempts = 3;
     private readonly ApplicationPaths _paths = new();
     private readonly AccountDataGuard _accountData = new(new ApplicationPaths());
     private readonly ShellViewModel _model = new();
-    private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(4) };
+    private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly CancellationTokenSource _lifetimeCancellation = new();
+    private readonly HostConnectionRecovery _hostConnection;
     private readonly SemaphoreSlim _settingsMutationGate = new(1, 1);
     private CancellationTokenSource? _rcloneOperationCancellation;
     private CancellationTokenSource? _applicationDownloadCancellation;
@@ -67,6 +66,7 @@ public partial class MainWindow : WpfWindow
 
     public MainWindow(bool startInBackground = false)
     {
+        _hostConnection = new(_lifetimeCancellation.Token);
         _startInBackground = startInBackground;
         InitializeComponent();
         StatusVisuals.ApplyPending(ApplicationUpdateStatusIcon);
@@ -87,7 +87,8 @@ public partial class MainWindow : WpfWindow
             RefreshTrayAsync,
             RestoreWindow,
             ExitApplication,
-            exception => _model.AddLogEntry("\uE783", "Tray action failed", exception.Message, true));
+            exception => _model.AddLogEntry("\uE783", "Tray action failed", exception.Message, true),
+            ShowUploads);
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
         Closed += MainWindow_Closed;
@@ -136,7 +137,7 @@ public partial class MainWindow : WpfWindow
             await RefreshConnectionMetadataAsync();
             await Task.WhenAll(CheckApplicationUpdateAsync(), CheckRcloneUpdateAsync());
         }
-        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        catch (OperationCanceledException exception) when (exception.CancellationToken.IsCancellationRequested)
         {
             // The window was closed while startup work was still in flight.
         }
@@ -215,8 +216,10 @@ public partial class MainWindow : WpfWindow
         _timer.Stop();
         _settingsClosing = true;
         _lifetimeCancellation.Cancel();
+        _hostConnection.Dispose();
         _componentStatusGeneration++;
         System.Windows.Application.Current.SessionEnding -= Application_SessionEnding;
+        CloseUploadWindows();
         _tray.Dispose();
         _ = DisposeSettingsStoreAfterDrainAsync();
     }
@@ -243,6 +246,9 @@ public partial class MainWindow : WpfWindow
         }
         catch (Exception exception)
         {
+            _model.ApplyHostUnavailable();
+            MarkUploadsUnavailable();
+            UpdateTrayStatus();
             _model.AddLogEntry("\uE783", "Status refresh failed", exception.Message, true);
         }
     }
@@ -265,8 +271,11 @@ public partial class MainWindow : WpfWindow
             _settings,
             hostReady ? response.Mounts : null,
             hostReady ? response.SyncJobs : null,
-            hostUnavailable: !hostReady
+            hostUnavailable: !hostReady,
+            mountStatusTruncated: response.MountStatusTruncated == true,
+            syncStatusTruncated: response.SyncStatusTruncated == true
         );
+        ApplyUploadStatus(response);
         UpdateTrayStatus();
         LoadSettingsControls();
         UpdateConnectionStatus();
@@ -296,9 +305,9 @@ public partial class MainWindow : WpfWindow
 
         var activeDrives = foreignHost.Mounts?.Count(status =>
             status.Lifecycle is not "Stopped" and not "Failed") ?? 0;
-        var activeJobs = foreignHost.SyncJobs?.Count(status =>
-            status.Lifecycle.Equals("Running", StringComparison.OrdinalIgnoreCase)) ?? 0;
-        var hasActiveWork = activeDrives > 0 || activeJobs > 0;
+        var activeJobs = Math.Max(foreignHost.ActiveSyncJobs, foreignHost.SyncJobs?.Count(status =>
+            status.Lifecycle is "Running" or "Queued") ?? 0);
+        var hasActiveWork = activeDrives > 0 || activeJobs > 0 || foreignHost.MountStatusTruncated || foreignHost.SyncStatusTruncated;
         var workSummary = hasActiveWork
             ? $"\n\nActive work: {activeDrives} drive{(activeDrives == 1 ? string.Empty : "s")} and {activeJobs} sync job{(activeJobs == 1 ? string.Empty : "s")}."
             : string.Empty;
@@ -316,8 +325,10 @@ public partial class MainWindow : WpfWindow
 
         var shutdown = await HostClient.ShutdownForeignHostAsync(
             foreignHost.HostBaseDirectory,
-            hasActiveWork
+            hasActiveWork,
+            _lifetimeCancellation.Token
         );
+        if (!CanInteractWithHost) return null;
         if (!shutdown.Succeeded &&
             shutdown.ErrorCode?.Equals("host.work_active", StringComparison.OrdinalIgnoreCase) == true)
         {
@@ -331,7 +342,8 @@ public partial class MainWindow : WpfWindow
                 return null;
             shutdown = await HostClient.ShutdownForeignHostAsync(
                 foreignHost.HostBaseDirectory,
-                confirmed: true
+                confirmed: true,
+                _lifetimeCancellation.Token
             );
         }
         if (!shutdown.Succeeded)
@@ -345,7 +357,7 @@ public partial class MainWindow : WpfWindow
 
         for (var attempt = 0; attempt < 30; attempt++)
         {
-            await Task.Delay(500);
+            await Task.Delay(500, _lifetimeCancellation.Token);
             var response = await EnsureHostAsync();
             if (response.Succeeded ||
                 response.ErrorCode?.Equals(
@@ -486,13 +498,15 @@ public partial class MainWindow : WpfWindow
             if (!await EnrichConnectionMetadataAsync())
                 return;
 
-            var status = await HostClient.SendAsync(new HostRequest("status"));
+            var status = await HostClient.SendAsync(new HostRequest("status"), _lifetimeCancellation.Token);
             var hostReady = HostStatusPresentation.HasUsableMountStatus(status);
             _model.Load(
                 _settings,
                 hostReady ? status.Mounts : null,
                 hostReady ? status.SyncJobs : null,
-                hostUnavailable: !hostReady);
+                hostUnavailable: !hostReady,
+                mountStatusTruncated: status.MountStatusTruncated == true,
+                syncStatusTruncated: status.SyncStatusTruncated == true);
             UpdateTrayStatus();
         }
         catch (Exception exception)
@@ -504,181 +518,6 @@ public partial class MainWindow : WpfWindow
                 true);
         }
     }
-
-    private static async Task<HostResponse> EnsureHostAsync()
-    {
-        var statusRequest = new HostRequest("status");
-        var response = await HostClient.SendAsync(statusRequest, InitialHostProbeTimeout);
-        if (
-            response.Succeeded
-            || !string.Equals(
-                response.ErrorCode,
-                "host.unavailable",
-                StringComparison.OrdinalIgnoreCase
-            )
-        )
-            return response;
-        var hostPath = CurrentExecutablePath;
-        if (!File.Exists(hostPath))
-            return new HostResponse(
-                false,
-                "host.not_found",
-                $"{ProductInfo.Name} was not found at '{hostPath}'."
-            );
-        using var hostProcess =
-            await Task.Run(() => Process.Start(
-                new ProcessStartInfo(hostPath, "--host")
-                {
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    WorkingDirectory = AppContext.BaseDirectory,
-                }
-            )) ?? throw new InvalidOperationException("The background host could not be started.");
-        for (var attempt = 0; attempt < 6; attempt++)
-        {
-            await Task.Delay(350);
-            response = await HostClient.SendAsync(statusRequest, StartingHostProbeTimeout);
-            if (response.Succeeded)
-                return response;
-        }
-        return response;
-    }
-
-    private async Task RefreshStatusAsync()
-    {
-        if (CloseForRemoteWipe()) return;
-        if (_refreshing)
-            return;
-        _refreshing = true;
-        try
-        {
-            var response = await HostClient.SendAsync(new HostRequest("status"));
-            if (HostStatusPresentation.HasUsableMountStatus(response))
-            {
-                if (_hostUnavailableReported)
-                {
-                    _model.AddLogEntry("\uE73E", "Background host connected", "Status updates resumed");
-                    _hostUnavailableReported = false;
-                }
-                ShowHostConnected();
-                _model.ApplyStatus(response.Mounts);
-                _model.ApplySyncStatus(response.SyncJobs);
-                UpdateTrayStatus();
-            }
-            else
-            {
-                _model.ApplyHostUnavailable();
-                UpdateTrayStatus();
-                var detail = response.InitializationErrorMessage ?? response.ErrorMessage;
-                if (!_hostUnavailableReported)
-                {
-                    _model.AddLogEntry(
-                        "\uE783",
-                        "Status delayed",
-                        detail ?? "Host unavailable",
-                        true
-                    );
-                    _hostUnavailableReported = true;
-                }
-                ShowHostInterrupted(detail, recoveryExhausted: false);
-                if (response.InitializationErrorCode is not null ||
-                    response.ErrorCode?.Equals("host.unavailable", StringComparison.OrdinalIgnoreCase) == true)
-                    await TryRecoverHostAsync();
-            }
-        }
-        finally
-        {
-            _refreshing = false;
-        }
-    }
-
-    private async Task TryRecoverHostAsync(bool userInitiated = false)
-    {
-        if (_hostRecoveryBusy || IsClosing)
-            return;
-        if (userInitiated)
-            _hostRecoveryAttempts = 0;
-        if (_hostRecoveryAttempts >= MaximumAutomaticHostRecoveryAttempts)
-        {
-            ShowHostInterrupted(null, recoveryExhausted: true);
-            return;
-        }
-
-        _hostRecoveryBusy = true;
-        var attempt = ++_hostRecoveryAttempts;
-        try
-        {
-            ShowHostInterrupted(null, recoveryExhausted: false);
-            if (attempt > 1)
-                await Task.Delay(TimeSpan.FromSeconds(attempt - 1), _lifetimeCancellation.Token);
-            var response = await EnsureHostAsync();
-            if (response.InitializationErrorCode is not null)
-            {
-                // The pipe is alive, but its first settings load failed. Retry that
-                // load instead of launching a second host or sending a mount request.
-                var reload = await HostClient.SendAsync(
-                    new HostRequest("reload"), _lifetimeCancellation.Token);
-                response = reload.Succeeded
-                    ? await HostClient.SendAsync(
-                        new HostRequest("status"), _lifetimeCancellation.Token)
-                    : reload;
-            }
-            if (HostStatusPresentation.HasUsableMountStatus(response))
-            {
-                _model.ApplyStatus(response.Mounts);
-                _model.ApplySyncStatus(response.SyncJobs);
-                UpdateTrayStatus();
-                if (_hostUnavailableReported)
-                    _model.AddLogEntry("\uE73E", "Background host connected", "Status updates resumed");
-                _hostUnavailableReported = false;
-                ShowHostConnected();
-                return;
-            }
-
-            ShowHostInterrupted(
-                response.InitializationErrorMessage ?? response.ErrorMessage,
-                recoveryExhausted: attempt >= MaximumAutomaticHostRecoveryAttempts);
-        }
-        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
-        {
-        }
-        catch (Exception exception)
-        {
-            ShowHostInterrupted(
-                exception.Message,
-                recoveryExhausted: attempt >= MaximumAutomaticHostRecoveryAttempts);
-            if (attempt >= MaximumAutomaticHostRecoveryAttempts)
-                _model.AddLogEntry("\uE783", "Host recovery paused", exception.Message, true);
-        }
-        finally
-        {
-            _hostRecoveryBusy = false;
-        }
-    }
-
-    private void ShowHostConnected()
-    {
-        _hostRecoveryAttempts = 0;
-        HostRecoveryBanner.Visibility = Visibility.Collapsed;
-        HostRetryButton.Visibility = Visibility.Collapsed;
-    }
-
-    private void ShowHostInterrupted(string? detail, bool recoveryExhausted)
-    {
-        HostRecoveryBanner.Visibility = Visibility.Visible;
-        HostRetryButton.Visibility = recoveryExhausted ? Visibility.Visible : Visibility.Collapsed;
-        SetLiveText(HostRecoveryText, recoveryExhausted
-            ? $"Connection interrupted · Automatic recovery paused.{FormatHostDetail(detail)}"
-            : $"Connection interrupted · Reconnecting…{FormatHostDetail(detail)}");
-    }
-
-    private static string FormatHostDetail(string? detail) =>
-        string.IsNullOrWhiteSpace(detail) ? string.Empty : $"  {detail.Trim()}";
-
-    private async void RetryHost_Click(object sender, RoutedEventArgs e) =>
-        await ExecuteUiActionAsync(
-            "Host recovery failed",
-            () => TryRecoverHostAsync(userInitiated: true));
 
     private async Task<bool> SaveAndReloadAsync(ManagerSettings updated)
     {
@@ -738,7 +577,9 @@ public partial class MainWindow : WpfWindow
             return false;
         }
         _settings = result.Value;
+        if (!CanInteractWithHost) return true;
         var reload = await HostClient.SendAsync(new HostRequest("reload"));
+        if (!CanInteractWithHost) return true;
         var restartDeclined = false;
         if (!reload.Succeeded &&
             reload.ErrorCode?.Equals("host.mount_restart_required", StringComparison.OrdinalIgnoreCase) == true)
@@ -776,13 +617,15 @@ public partial class MainWindow : WpfWindow
         }
         // A failed reload response contains no mount or sync snapshots. Query the host
         // again after rollback so the UI does not briefly present every drive as stopped.
-        var status = await HostClient.SendAsync(new HostRequest("status"));
+        var status = await HostClient.SendAsync(new HostRequest("status"), _lifetimeCancellation.Token);
         var hostReady = HostStatusPresentation.HasUsableMountStatus(status);
         _model.Load(
             _settings,
             hostReady ? status.Mounts : null,
             hostReady ? status.SyncJobs : null,
-            hostUnavailable: !hostReady
+            hostUnavailable: !hostReady,
+            mountStatusTruncated: status.MountStatusTruncated == true,
+            syncStatusTruncated: status.SyncStatusTruncated == true
         );
         UpdateTrayStatus();
         LoadSettingsControls();
@@ -1331,7 +1174,9 @@ public partial class MainWindow : WpfWindow
                     _settings,
                     hostReady ? rollbackStatus!.Mounts : null,
                     hostReady ? rollbackStatus!.SyncJobs : null,
-                    hostUnavailable: !hostReady);
+                    hostUnavailable: !hostReady,
+                    mountStatusTruncated: rollbackStatus?.MountStatusTruncated == true,
+                    syncStatusTruncated: rollbackStatus?.SyncStatusTruncated == true);
                 UpdateTrayStatus();
                 ShowError(
                     "Settings were not activated",
@@ -1357,6 +1202,7 @@ public partial class MainWindow : WpfWindow
     }
 
     private static bool HasActiveHostWork(HostResponse response) =>
+        response.MountStatusTruncated || response.SyncStatusTruncated || response.ActiveSyncJobs > 0 ||
         response.Mounts?.Any(mount =>
             !Enum.TryParse(mount.Lifecycle, true, out MountLifecycle lifecycle) ||
             lifecycle is not MountLifecycle.Stopped and not MountLifecycle.Failed) == true ||
@@ -1408,12 +1254,14 @@ public partial class MainWindow : WpfWindow
             throw new InvalidOperationException(
                 "Wait for the rclone component operation to finish before mounting a drive.");
         }
-        var response = await HostClient.SendAsync(new HostRequest(command, row.Id));
+        var response = await SendInteractiveMountActionAsync(row, command);
+        if (response is null) return;
         if (!response.Succeeded)
             throw new InvalidOperationException(RcloneErrorMessage.Clean(
                 response.ErrorMessage,
                 "The host rejected the request."));
-        _model.ApplyStatus(response.Mounts);
+        _model.ApplyStatus(response.Mounts, response.MountStatusTruncated);
+        ApplyUploadStatus(response);
         UpdateTrayStatus();
     }
 
@@ -1456,11 +1304,12 @@ public partial class MainWindow : WpfWindow
             return;
         }
         var command = row.IsBusy ? "cancel-sync" : "run-sync";
-        var response = await HostClient.SendAsync(new HostRequest(command, row.MountId, row.Id));
+        var response = await HostClient.SendAsync(new HostRequest(command, row.MountId, row.Id), _lifetimeCancellation.Token);
+        if (!CanInteractWithHost) return;
         if (!response.Succeeded)
             throw new InvalidOperationException(
                 response.ErrorMessage ?? "The host rejected the request.");
-        _model.ApplySyncStatus(response.SyncJobs);
+        _model.ApplySyncStatus(response.SyncJobs, response.SyncStatusTruncated);
         UpdateTrayStatus();
     }
 
@@ -1545,6 +1394,7 @@ public partial class MainWindow : WpfWindow
             return;
         }
         var registeredMountIds = await LoadRemoteWipeMountIdsAsync();
+        if (!CanInteractWithHost) return;
         var editor = new SyncEditorWindow(_paths, _settings.Mounts, registeredMountIds, null, null) { Owner = this };
         if (editor.ShowDialog() != true || editor.Value is null || editor.SelectedMount is null)
             return;
@@ -1579,6 +1429,7 @@ public partial class MainWindow : WpfWindow
             return;
         }
         var registeredMountIds = await LoadRemoteWipeMountIdsAsync();
+        if (!CanInteractWithHost) return;
         var editor = new SyncEditorWindow(_paths, _settings.Mounts, registeredMountIds, row.MountId, row.Settings)
         {
             Owner = this,
@@ -1614,7 +1465,7 @@ public partial class MainWindow : WpfWindow
         string heading,
         Func<Task> action)
     {
-        if (!_activeUiActions.Add(heading))
+        if (!CanInteractWithHost || !_activeUiActions.Add(heading))
             return;
         try
         {
@@ -1625,6 +1476,7 @@ public partial class MainWindow : WpfWindow
         }
         catch (Exception exception)
         {
+            if (!CanInteractWithHost) return;
             _model.AddLogEntry("\uE783", heading, exception.Message, true);
             ShowError(heading, exception.Message);
         }
@@ -1716,7 +1568,8 @@ public partial class MainWindow : WpfWindow
         var command = row.ShouldStop ? "stop" : "start";
         if (command == "start" && _rcloneMutationBusy)
             return TrayActionResult.Failure("rclone is being updated", "Try again when the component operation finishes.");
-        var response = await HostClient.SendAsync(new HostRequest(command, row.Id));
+        var response = await SendInteractiveMountActionAsync(row, command);
+        if (response is null) return TrayActionResult.SilentSuccess();
         if (!response.Succeeded)
         {
             return TrayActionResult.Failure(
@@ -1726,7 +1579,8 @@ public partial class MainWindow : WpfWindow
                     "The background host rejected the request."));
         }
 
-        _model.ApplyStatus(response.Mounts);
+        _model.ApplyStatus(response.Mounts, response.MountStatusTruncated);
+        ApplyUploadStatus(response);
         UpdateTrayStatus();
         var updated = _model.Mounts.FirstOrDefault(mount => mount.Id == row.Id);
         return TrayActionResult.Success(
@@ -1736,6 +1590,7 @@ public partial class MainWindow : WpfWindow
 
     private async Task<TrayActionResult> RunTraySyncAsync(SyncRow row)
     {
+        if (!CanInteractWithHost) return TrayActionResult.SilentSuccess();
         if (!row.IsBusy && _rcloneMutationBusy)
             return TrayActionResult.Failure("rclone is being updated", "Try again when the component operation finishes.");
         if (!row.IsBusy && row.IsMirror)
@@ -1746,7 +1601,8 @@ public partial class MainWindow : WpfWindow
         }
 
         var command = row.IsBusy ? "cancel-sync" : "run-sync";
-        var response = await HostClient.SendAsync(new HostRequest(command, row.MountId, row.Id));
+        var response = await HostClient.SendAsync(new HostRequest(command, row.MountId, row.Id), _lifetimeCancellation.Token);
+        if (!CanInteractWithHost) return TrayActionResult.SilentSuccess();
         if (!response.Succeeded)
         {
             return TrayActionResult.Failure(
@@ -1754,7 +1610,7 @@ public partial class MainWindow : WpfWindow
                 response.ErrorMessage ?? "The background host rejected the request.");
         }
 
-        _model.ApplySyncStatus(response.SyncJobs);
+        _model.ApplySyncStatus(response.SyncJobs, response.SyncStatusTruncated);
         UpdateTrayStatus();
         var updated = _model.Jobs.FirstOrDefault(job => job.Id == row.Id);
         return TrayActionResult.Success(row.Name, updated?.Result ?? "The request was accepted.");
@@ -1762,10 +1618,13 @@ public partial class MainWindow : WpfWindow
 
     private async Task<TrayActionResult> RefreshTrayAsync()
     {
-        var response = await HostClient.SendAsync(new HostRequest("status"));
+        if (!CanInteractWithHost) return TrayActionResult.SilentSuccess();
+        var response = await HostClient.SendAsync(new HostRequest("status"), _lifetimeCancellation.Token);
+        if (!CanInteractWithHost) return TrayActionResult.SilentSuccess();
         if (!HostStatusPresentation.HasUsableMountStatus(response))
         {
             _model.ApplyHostUnavailable();
+            MarkUploadsUnavailable();
             UpdateTrayStatus();
             return TrayActionResult.Failure(
                 "Refresh failed",
@@ -1773,103 +1632,27 @@ public partial class MainWindow : WpfWindow
                 "The background host is unavailable.");
         }
 
-        _model.ApplyStatus(response.Mounts);
-        _model.ApplySyncStatus(response.SyncJobs);
+        _model.ApplyStatus(response.Mounts, response.MountStatusTruncated);
+        ApplyUploadStatus(response);
+        _model.ApplySyncStatus(response.SyncJobs, response.SyncStatusTruncated);
         UpdateTrayStatus();
         return TrayActionResult.SilentSuccess();
     }
 
-    private void UpdateTrayStatus() => _tray.UpdateStatus(
-        _model.Mounts.Count(mount => mount.IsMounted),
-        _model.Jobs.Count(job => job.IsBusy));
+    private void UpdateTrayStatus()
+    {
+        RefreshUploadsPresentation();
+        _tray.UpdateStatus(_model.Mounts.Count(mount => mount.IsMounted),
+            Math.Max(_hostActiveSyncJobs, _model.Jobs.Count(job => job.IsBusy)),
+            UploadMountRows().Sum(mount => (mount.UploadStatus?.UploadsInProgress ?? 0) + (mount.UploadStatus?.UploadsQueued ?? 0)
+                + (mount.UploadStatus?.UploadsDirty ?? 0) + (mount.UploadStatus?.UploadStatusChecking == true || mount.IsTransient ? 1 : 0)),
+            _powerProtectionUnavailable || (_uploadsHostUnavailable && _model.Mounts.Any(mount => mount.ShouldStop || mount.NeedsHostRecovery)) || UploadMountRows().Any(mount => mount.UploadNeedsAttention &&
+                ((mount.UploadStatus?.UploadStatusStale == true && !mount.UploadStatus.UploadStatusChecking)
+                    || mount.UploadStatus?.UploadErrors > 0 || mount.UploadStatus?.UploadRecoveryRequired == true)));
+    }
 
     private void OpenAbout_Click(object sender, RoutedEventArgs e) =>
         new AboutWindow { Owner = this }.ShowDialog();
-
-    private async void ExitApplication()
-    {
-        if (_exitRequested)
-        {
-            return;
-        }
-
-        _exitRequested = true;
-        _exitChecking = true;
-        _timer.Stop();
-        try
-        {
-            var status = await HostClient.SendAsync(
-                new HostRequest("status"),
-                TimeSpan.FromMilliseconds(500));
-            if (!status.Succeeded &&
-                (status.ErrorCode is not "host.unavailable" || IsInstalledHostProcessRunning()))
-            {
-                _exitRequested = false;
-                _timer.Start();
-                RestoreWindow();
-                ShowError(
-                    $"{ProductInfo.Name} could not exit safely",
-                    status.ErrorMessage ?? "The background host did not confirm its state.");
-                return;
-            }
-            var activeMounts = status.Mounts?.Count(mount =>
-                mount.Lifecycle is not "Stopped" and not "Failed") ?? 0;
-            var activeSyncs = status.SyncJobs?.Count(job => job.Lifecycle == "Running") ?? 0;
-            var confirmed = activeMounts == 0 && activeSyncs == 0;
-            if (!confirmed)
-            {
-                RestoreWindow();
-                var work = string.Join(
-                    " and ",
-                    new[]
-                    {
-                        activeMounts == 0 ? null : $"{activeMounts} mounted drive{(activeMounts == 1 ? string.Empty : "s")}",
-                        activeSyncs == 0 ? null : $"{activeSyncs} running sync job{(activeSyncs == 1 ? string.Empty : "s")}"
-                    }.Where(value => value is not null));
-                confirmed = WpfMessageBox.Show(
-                    this,
-                    $"Exiting will stop {work}. Close open documents first. Upload status may be unavailable for some drives. Continue?",
-                    $"Exit {ProductInfo.Name}?",
-                    MessageBoxButton.YesNo,
-                    MessageBoxImage.Warning) == MessageBoxResult.Yes;
-            }
-
-            if (!confirmed)
-            {
-                _exitRequested = false;
-                _timer.Start();
-                return;
-            }
-
-            var shutdown = await HostClient.SendAsync(
-                new HostRequest("shutdown", Confirmed: true),
-                TimeSpan.FromSeconds(15));
-            if (!shutdown.Succeeded &&
-                (shutdown.ErrorCode is not "host.unavailable" || IsInstalledHostProcessRunning()))
-            {
-                _exitRequested = false;
-                _timer.Start();
-                ShowError($"{ProductInfo.Name} could not exit", shutdown.ErrorMessage ?? "The background host rejected the request.");
-                return;
-            }
-        }
-        catch (Exception exception)
-        {
-            _exitRequested = false;
-            _timer.Start();
-            ShowError(
-                $"{ProductInfo.Name} could not exit",
-                $"The background host could not be checked safely. {ProductInfo.Name} is still running.\n\n{exception.Message}");
-        }
-        finally
-        {
-            _exitChecking = false;
-            if (_exitRequested)
-            {
-                Close();
-            }
-        }
-    }
 
     private void MainWindow_StateChanged(object? sender, EventArgs e)
     {
@@ -1909,8 +1692,14 @@ public partial class MainWindow : WpfWindow
         IsStartupReady = false;
     }
 
-    private void Application_SessionEnding(object? sender, SessionEndingCancelEventArgs e) =>
-        _exitRequested = true;
+    private void Application_SessionEnding(object? sender, SessionEndingCancelEventArgs e)
+    {
+        var pending = UploadMountRows().Any(mount => mount.UploadNeedsAttention) ||
+            _model.Jobs.Any(job => job.IsBusy) ||
+            (_uploadsHostUnavailable && _model.Mounts.Any(mount => mount.ShouldStop || mount.NeedsHostRecovery));
+        e.Cancel = pending;
+        _exitRequested = !pending;
+    }
 
     private void HideToTray()
     {
@@ -1987,6 +1776,9 @@ public partial class MainWindow : WpfWindow
         "rdrive",
         "resodrive.exe");
 
-    private void ShowError(string title, string message) =>
+    private void ShowError(string title, string message)
+    {
+        if (IsClosing || _settingsClosing || _lifetimeCancellation.IsCancellationRequested) return;
         WpfMessageBox.Show(this, message, title, MessageBoxButton.OK, MessageBoxImage.Error);
+    }
 }

@@ -219,6 +219,8 @@ public partial class App : System.Windows.Application
 
     private void ApplyAccessibilityPalette()
     {
+        Resources["DriveOrderGripOpacity"] = System.Windows.SystemParameters.HighContrast ? 1d : 0.65d;
+        Resources["DriveOrderGripHoverOpacity"] = System.Windows.SystemParameters.HighContrast ? 1d : 0.85d;
         foreach (var key in AccessibilityBrushKeys)
         {
             if (!_defaultPalette.ContainsKey(key) &&
