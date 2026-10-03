@@ -7,14 +7,13 @@ cached writes responsive and exposes their separate upload status.
 
 Left-click the tray icon to open the compact Uploads flyout above the taskbar on
 that display, including when uploads have finished. Right-click and choose
-**Open ResoDrive** to open the main window. The flyout opens on request, with a
+**Open ResoDrive**, or use the link in the flyout, to open the main window. The flyout opens on request, with a
 consistent narrow width and a height that follows the queue. A short queue has
 no scrollbar or reserved scrollbar gap. Escape, the dismiss button, or clicking
 elsewhere hides the flyout while uploads continue. It prioritizes active files,
 shows progress and speed, and
 keeps long queues summarized. Routine completion restores the normal icon without
-a notification. The Uploads entry also remains available from the tray menu and
-Drives page.
+a notification. The Uploads entry also remains available from the tray menu.
 
 The Uploads flyout combines the VFS queue, active rclone transfers, and dirty
 cache metadata. Modified files held open are shown as waiting for close. Reaching

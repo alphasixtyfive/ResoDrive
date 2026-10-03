@@ -1,12 +1,13 @@
 # Changelog
 
-## [0.3.20] - 2026-10-03
+## [0.3.19] - 2026-10-03
 
 - Click the tray icon to see a compact upload progress flyout. It sizes to the queue, keeps scrolling out of the way, and shows when a file is waiting to close or retry.
 - Keep pending uploads visible after Explorer finishes copying. Preserve cached files when a drive disconnects or ResoDrive exits, and recover interrupted uploads with their original connection.
 - Warn before exit, disconnect, sleep or shutdown interrupts pending work. Exit and disconnect offer an explicit choice to pause uploads; updates still require a verified clear queue.
 - Reorder drives with a subtle drag handle, keyboard shortcuts or a small context menu, and keep the chosen order after restarting.
 - Prevent background recovery from restarting the host during exit or update installation; finish accepted shutdown even if its client disconnects.
+- Let the updater finish recording its result while the reopened app reads it, and recover a finalized receipt left by an earlier helper.
 - Improve large-queue handling, cancelled process launches, atomic settings saves and temporary-file cleanup. Show unavailable sync status when the host disconnects.
 - Reject nested junctions in download destinations before starting a sync, and make destination validation cancellable.
 

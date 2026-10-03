@@ -82,7 +82,16 @@ public partial class MainWindow
             _driveOrderDraggingMountId = null;
             ClearDriveOrderIndicator();
             ClearDriveOrderPress();
+            System.Windows.Input.Mouse.SetCursor(null);
         }
+        e.Handled = true;
+    }
+
+    private void DriveOrder_GiveFeedback(object sender, System.Windows.GiveFeedbackEventArgs e)
+    {
+        if (!_driveOrderDragging || e.Effects != WpfDragDropEffects.Move) return;
+        System.Windows.Input.Mouse.SetCursor(System.Windows.Input.Cursors.Hand);
+        e.UseDefaultCursors = false;
         e.Handled = true;
     }
 

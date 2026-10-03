@@ -10,14 +10,16 @@ public partial class UploadsWindow : System.Windows.Window
     private const int DisplayChanged = 0x007E;
     private const int WmDpiChanged = 0x02E0;
     private readonly System.Windows.Size _preferredSize;
+    private readonly Action _openMainWindow;
     private System.Drawing.Point _screenAnchor;
     private bool _positioning;
     private bool _showing;
 
-    internal UploadsWindow(UploadsViewModel model)
+    internal UploadsWindow(UploadsViewModel model, Action openMainWindow)
     {
         InitializeComponent();
         DataContext = model;
+        _openMainWindow = openMainWindow;
         _preferredSize = new System.Windows.Size(MaxWidth, MaxHeight);
         SourceInitialized += (_, _) =>
         {
@@ -67,6 +69,12 @@ public partial class UploadsWindow : System.Windows.Window
     }
 
     private void Dismiss_Click(object sender, RoutedEventArgs e) => Hide();
+
+    private void OpenMainWindow_Click(object sender, RoutedEventArgs e)
+    {
+        Hide();
+        _openMainWindow();
+    }
 
     private IntPtr WindowMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {

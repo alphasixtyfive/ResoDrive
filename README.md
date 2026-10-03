@@ -94,7 +94,7 @@ Application and rclone downloads can continue from a partial file after a droppe
 connection, which avoids starting large transfers again on metered or satellite links.
 Downloads can be cancelled from Settings and resumed later.
 
-Left-click the tray icon, or open **Drives → Uploads** or **Uploads** in the tray menu, to see queued transfers,
+Left-click the tray icon, or choose **Uploads** in its menu, to see queued transfers,
 active uploads, modified files waiting to close, and upload errors. The tray icon
 animates while uploads are pending and shows an amber warning when their state
 cannot be confirmed. Explorer's copy progress measures delivery to the local

@@ -88,7 +88,7 @@ public partial class MainWindow : WpfWindow
             RestoreWindow,
             ExitApplication,
             exception => _model.AddLogEntry("\uE783", "Tray action failed", exception.Message, true),
-            () => ShowUploads(fromTray: true));
+            ShowUploads);
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
         Closed += MainWindow_Closed;

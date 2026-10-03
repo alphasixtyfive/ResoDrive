@@ -62,15 +62,16 @@
     <Style x:Key="DriveOrderGrip" TargetType="Button" BasedOn="{StaticResource IconOnlyButton}">
       <Setter Property="Width" Value="24" />
       <Setter Property="MinWidth" Value="24" />
-      <Setter Property="Height" Value="34" />
+      <Setter Property="Height" Value="28" />
+      <Setter Property="MinHeight" Value="28" />
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="BorderBrush" Value="Transparent" />
       <Setter Property="Foreground" Value="{StaticResource MutedBrush}" />
-      <Setter Property="FontSize" Value="14" />
-      <Setter Property="Cursor" Value="SizeAll" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="Cursor" Value="Hand" />
       <Setter Property="Opacity" Value="{DynamicResource DriveOrderGripOpacity}" />
       <Style.Triggers>
-        <Trigger Property="IsMouseOver" Value="True"><Setter Property="Opacity" Value="0.8" /></Trigger>
+        <Trigger Property="IsMouseOver" Value="True"><Setter Property="Opacity" Value="{DynamicResource DriveOrderGripHoverOpacity}" /></Trigger>
         <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter Property="Opacity" Value="1" /></Trigger>
         <DataTrigger Binding="{Binding DataContext.Mounts.Count, RelativeSource={RelativeSource AncestorType=Window}}" Value="1">
           <Setter Property="IsEnabled" Value="False" />
@@ -208,9 +209,6 @@
             <TextBlock Style="{StaticResource Subtitle}" Text="{Binding MountSummary}" />
           </StackPanel>
           <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,0,4,0">
-            <Button Style="{StaticResource ButtonStyle}" Content="Uploads" Margin="0,0,8,0"
-              Click="ShowUploads_Click" ToolTip="View pending uploads"
-              AutomationProperties.Name="View uploads" />
             <Button
               Style="{StaticResource IconOnlyButton}"
               Margin="0,0,8,0"
@@ -246,7 +244,7 @@
                 <Grid>
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="3" />
-                    <ColumnDefinition Width="27" />
+                    <ColumnDefinition Width="24" />
                     <ColumnDefinition Width="53" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="70" />
@@ -258,6 +256,7 @@
                     AutomationProperties.Name="{Binding Name, Mode=OneWay, StringFormat='Reorder {0}'}" AutomationProperties.HelpText="Drag this handle, or use Alt+Up and Alt+Down to change the drive order."
                     PreviewMouseLeftButtonDown="DriveOrder_MouseDown" PreviewMouseMove="DriveOrder_MouseMove"
                     PreviewMouseLeftButtonUp="DriveOrder_MouseUp" LostMouseCapture="DriveOrder_LostMouseCapture"
+                    GiveFeedback="DriveOrder_GiveFeedback"
                     Click="DriveOrderMenu_Click">
                     <Button.ContextMenu>
                         <ContextMenu Style="{StaticResource PopupMenu}" ItemContainerStyle="{StaticResource PopupMenuItem}"

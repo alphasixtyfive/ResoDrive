@@ -139,6 +139,6 @@ internal sealed class UploadsViewModel : NotifyBase
             : pending > 0 || otherTransfersActive ? "Uploads pending. Keep ResoDrive running."
             : powerProtectionUnavailable ? "Uploads checked. Windows power protection needs attention."
             : rows.Count > 0 ? "Some uploads need attention."
-            : "Uploads complete. You can safely exit ResoDrive.";
+            : "No active uploads.";
     }
 }

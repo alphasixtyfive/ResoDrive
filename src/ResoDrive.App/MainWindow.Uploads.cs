@@ -1,4 +1,3 @@
-using System.Windows;
 using ResoDrive.Windows;
 using ResoDrive.Core.Settings;
 
@@ -13,21 +12,16 @@ public partial class MainWindow
     private bool _powerProtectionUnavailable;
     private int _hostActiveSyncJobs;
 
-    private void ShowUploads_Click(object sender, RoutedEventArgs e) => ShowUploads();
-
-    private void ShowUploads(bool fromTray = false)
+    private void ShowUploads()
     {
         if (IsClosing || _exitRequested || _exitChecking) return;
         RefreshUploadsPresentation();
         if (_uploadsWindow is null)
         {
-            _uploadsWindow = new UploadsWindow(_uploadsModel);
+            _uploadsWindow = new UploadsWindow(_uploadsModel, RestoreWindow);
             _uploadsWindow.Closed += (_, _) => _uploadsWindow = null;
         }
-        var screen = System.Windows.Forms.Screen.FromHandle(new System.Windows.Interop.WindowInteropHelper(this).Handle).Bounds;
-        var anchor = fromTray ? System.Windows.Forms.Cursor.Position
-            : new System.Drawing.Point(screen.Left + screen.Width / 2, screen.Top + screen.Height / 2);
-        _uploadsWindow.ShowFlyout(anchor);
+        _uploadsWindow.ShowFlyout(System.Windows.Forms.Cursor.Position);
     }
 
     private void ApplyUploadStatus(HostResponse response)

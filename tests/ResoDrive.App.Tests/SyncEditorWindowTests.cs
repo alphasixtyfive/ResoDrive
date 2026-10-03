@@ -57,11 +57,14 @@ public sealed class SyncEditorWindowTests
 
     private static void VerifyUploadsWindow()
     {
-        var uploads = new UploadsWindow(new UploadsViewModel());
+        var opened = false;
+        var uploads = new UploadsWindow(new UploadsViewModel(), () => opened = true);
         try
         {
             Assert.Equal("Uploads", uploads.Title);
             Assert.NotNull(uploads.DataContext);
+            Control<Button>(uploads, "OpenMainWindowButton").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.True(opened);
         }
         finally { uploads.Close(); }
     }

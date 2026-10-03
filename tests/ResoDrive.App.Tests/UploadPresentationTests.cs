@@ -22,7 +22,7 @@ public sealed class UploadPresentationTests
         Assert.True(row.HasPendingUploads);
         Assert.Contains("waiting for close", row.UploadActivityText, StringComparison.Ordinal);
         Assert.Contains("close this file", Assert.Single(model.Files).Detail, StringComparison.Ordinal);
-        Assert.DoesNotContain("safely exit", model.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("No active uploads", model.Summary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -46,7 +46,7 @@ public sealed class UploadPresentationTests
         var model = new UploadsViewModel();
         model.Update([row], false);
         Assert.Equal("Waiting for server confirmation", Assert.Single(model.Files).Detail);
-        Assert.DoesNotContain("safely exit", model.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("No active uploads", model.Summary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -60,7 +60,7 @@ public sealed class UploadPresentationTests
         row.ApplyStatus(new HostMountStatus(mount.Id, "Mounted", "Mounted", 0, 0));
         model.Update([row], false);
         Assert.Empty(model.Files);
-        Assert.Contains("safely exit", model.Summary, StringComparison.Ordinal);
+        Assert.Contains("No active uploads", model.Summary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public sealed class UploadPresentationTests
 
         Assert.Equal("Checking uploads…", row.UploadActivityText);
         Assert.Contains("Checking changed files", Assert.Single(model.Files).Detail, StringComparison.Ordinal);
-        Assert.DoesNotContain("safely exit", model.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("No active uploads", model.Summary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -109,7 +109,7 @@ public sealed class UploadPresentationTests
         model.Update([], false, powerProtectionUnavailable: true);
         Assert.Single(model.Files);
         Assert.Contains("power protection needs attention", model.Summary, StringComparison.Ordinal);
-        Assert.DoesNotContain("safely exit", model.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("No active uploads", model.Summary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -122,11 +122,11 @@ public sealed class UploadPresentationTests
 
         Assert.True(row.UploadNeedsAttention);
         Assert.Contains("connects or disconnects", Assert.Single(model.Files).Detail, StringComparison.Ordinal);
-        Assert.DoesNotContain("safely exit", model.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("No active uploads", model.Summary, StringComparison.Ordinal);
         row.ApplyStatus(new HostMountStatus(mount.Id, "Stopped", "Stopped", 0, 0));
         model.Update([row], false);
         Assert.Empty(model.Files);
-        Assert.Contains("safely exit", model.Summary, StringComparison.Ordinal);
+        Assert.Contains("No active uploads", model.Summary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -198,7 +198,7 @@ public sealed class UploadPresentationTests
         Assert.DoesNotContain("/s", file.ProgressText, StringComparison.Ordinal);
         Assert.Equal(System.Windows.Visibility.Collapsed, file.ProgressVisibility);
         Assert.Equal(System.Windows.Visibility.Collapsed, file.ProgressTextVisibility);
-        Assert.DoesNotContain("safely exit", model.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("No active uploads", model.Summary, StringComparison.Ordinal);
     }
 
     [Theory]
