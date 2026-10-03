@@ -348,6 +348,9 @@ public partial class MainWindow
             RefreshApplicationUpdateAction();
             ApplicationDownloadProgress.IsIndeterminate = true;
             SetLiveText(ApplicationUpdateStatusText, "Checking pending uploads…");
+            if (!CanInteractWithHost) return;
+            _hostConnection.Suspend();
+            _timer.Stop();
             var uploads = await HostClient.SendAsync(new HostRequest("check-uploads"), _lifetimeCancellation.Token);
             if (!uploads.Succeeded &&
                 (uploads.ErrorCode != "host.unavailable" || IsInstalledHostProcessRunning()))
@@ -369,6 +372,7 @@ public partial class MainWindow
                 return;
             }
             SetLiveText(ApplicationUpdateStatusText, "Preparing Windows Installer…");
+            if (IsClosing || _exitRequested) return;
             ApplicationUpdateHandoff.Start(
                 downloaded.Value.Version,
                 downloaded.Value.InstallerPath,
@@ -402,7 +406,11 @@ public partial class MainWindow
             _applicationDownloadCancellation = null;
             ApplicationDownloadProgress.Visibility = Visibility.Collapsed;
             if (!_exitRequested)
+            {
+                _hostConnection.Resume();
+                if (!IsClosing) _timer.Start();
                 SetApplicationUpdateBusy(false);
+            }
         }
     }
 

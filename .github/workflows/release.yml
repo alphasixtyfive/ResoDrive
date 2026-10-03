@@ -16,6 +16,30 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Freeze published installers for equal-version recovery checks
+        if: github.ref_name == 'v0.3.19'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $baseline = Join-Path $env:RUNNER_TEMP 'resodrive-same-version-baseline'
+          New-Item -ItemType Directory -Path $baseline -Force | Out-Null
+          $releaseJson = gh release view $env:RELEASE_TAG --json isDraft,assets
+          if ($LASTEXITCODE -ne 0) { throw 'The published same-version installer baseline is unavailable.' }
+          $release = $releaseJson | ConvertFrom-Json
+          if ($release.isDraft) { throw 'Recovery checks require the currently published installer baseline.' }
+          gh release download $env:RELEASE_TAG --dir $baseline `
+            --pattern 'resodrive-win-x64-0.3.19.msi*' --pattern 'resodrive-win-x64-0.3.19-setup.exe*'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not freeze the published same-version installers.' }
+          foreach ($name in @('resodrive-win-x64-0.3.19.msi', 'resodrive-win-x64-0.3.19.msi.sha256',
+              'resodrive-win-x64-0.3.19-setup.exe', 'resodrive-win-x64-0.3.19-setup.exe.sha256')) {
+            $asset = @($release.assets | Where-Object name -EQ $name)
+            if ($asset.Count -ne 1) { throw "Expected one published baseline asset: $name." }
+            $hash = (Get-FileHash -LiteralPath (Join-Path $baseline $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($asset[0].digest -ne "sha256:$hash") { throw "Published baseline hash mismatch: $name." }
+          }
+          Write-Output 'Published same-version installer baseline frozen and verified.'
       - name: Install .NET SDK
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
@@ -37,7 +61,18 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./tests/installer-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $recovery = @{}
+          if ($env:RELEASE_TAG -eq 'v0.3.19') {
+            $baseline = Join-Path $env:RUNNER_TEMP 'resodrive-same-version-baseline'
+            $recovery = @{
+              SameVersionBaselineMsiPath = Join-Path $baseline 'resodrive-win-x64-0.3.19.msi'
+              SameVersionBaselineSetupPath = Join-Path $baseline 'resodrive-win-x64-0.3.19-setup.exe'
+              CandidateMsiPath = 'artifacts/win-x64/resodrive-win-x64-0.3.19.msi'
+            }
+          }
+          ./tests/installer-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName @recovery
       - name: Verify different-account preparation on disposable user
         shell: pwsh
         timeout-minutes: 4
@@ -59,6 +94,7 @@ jobs:
           name: installer-smoke-logs
           path: |
             ${{ runner.temp }}/resodrive-installer-smoke/*.log
+            ${{ runner.temp }}/resodrive-installer-smoke/*.json
             ${{ runner.temp }}/resodrive-cross-account-smoke/*
           if-no-files-found: ignore
       - name: Preserve release artifacts

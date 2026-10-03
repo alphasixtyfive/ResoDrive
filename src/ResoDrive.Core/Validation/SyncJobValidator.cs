@@ -45,15 +45,8 @@ public sealed class SyncJobValidator : IValidator<SyncJob>
                 "schedule.interval"));
         }
 
-        AddArgumentIssues(RcloneArgumentPolicy.ValidateSync(value.Arguments), issues);
+        issues.AddRange(RcloneArgumentPolicy.ValidateSync(value.Arguments).Issues);
         return issues.Count == 0 ? ValidationResult.Valid : new ValidationResult(issues);
     }
 
-    private static void AddArgumentIssues(ValidationResult result, List<ValidationIssue> issues)
-    {
-        foreach (var issue in result.Issues)
-        {
-            issues.Add(issue);
-        }
-    }
 }

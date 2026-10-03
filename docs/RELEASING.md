@@ -4,6 +4,11 @@ Use increasing release versions and retain published tags. Withdraw known-broken
 downloads when necessary, with an explanation in the replacement release notes.
 Replacing a version is an exceptional owner-approved recovery operation; an
 existing installation of that version cannot discover it as a newer update.
+For the owner-requested .19 replacement, the MSI permits equal-version upgrades.
+Keep this exception limited to .19 and the historical .7 recovery. Verify both
+the earlier .19 MSI and setup bundle can be replaced without duplicate products,
+using exact accepted assets and preserved data hashes. Provide the manual Setup
+download in the release notes; do not change the application's version comparison.
 On the local development drive, keep only the current public build artifacts
 rather than archiving local copies.
 

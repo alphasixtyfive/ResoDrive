@@ -19,6 +19,8 @@ credentials, private service addresses, configuration files, or unredacted logs.
   origins are not profile-configurable.
 - Mirror destinations reject roots, protected locations, mount targets, overlapping
   jobs, and reparse-point changes. Mirror runs require explicit confirmation.
+- Download destinations are checked for nested junctions and symbolic links before
+  a sync starts. Destination inspection is cancellable and runs away from the UI.
 - The initial rclone download is pinned and checksum-verified. Runtime rclone
   updates use rclone's official signed self-update flow, are explicit, and are
   staged and version-checked before replacement. Interrupted downloads resume from

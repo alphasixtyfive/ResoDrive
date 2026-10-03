@@ -85,6 +85,26 @@ public sealed class AtomicSettingsStoreTests
         Assert.Empty(Directory.EnumerateFiles(paths.Root, "settings.pre-import-*.json"));
     }
 
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(long.MaxValue)]
+    public async Task InvalidRevisionCannotBeLoadedOrSaved(long revision)
+    {
+        var paths = TestPaths();
+        try
+        {
+            paths.EnsureCreated();
+            var json = $"{{\"schemaVersion\":1,\"revision\":{revision},\"application\":{{}},\"mounts\":[]}}";
+            await File.WriteAllTextAsync(paths.SettingsFile, json);
+            using var store = new AtomicSettingsStore(paths);
+
+            Assert.False((await store.LoadAsync()).Succeeded);
+            Assert.False((await store.SaveAsync(new ManagerSettings { Revision = revision }, revision)).Succeeded);
+            Assert.Equal(json, await File.ReadAllTextAsync(paths.SettingsFile));
+        }
+        finally { if (Directory.Exists(paths.Root)) Directory.Delete(paths.Root, true); }
+    }
+
     private static ApplicationPaths TestPaths() => new(
         Path.Combine(Path.GetTempPath(), "rdrive-tests", Guid.NewGuid().ToString("N")));
 }

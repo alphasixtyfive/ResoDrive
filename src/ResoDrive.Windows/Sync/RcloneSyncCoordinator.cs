@@ -114,54 +114,65 @@ public sealed class RcloneSyncCoordinator : IDisposable
             return Result.Failure("sync.not_found", "The sync job no longer exists.");
         }
 
+        async Task<OperationResult> RejectAsync(string code, string message)
+        {
+            if (!_runs.ContainsKey(syncJobId))
+                await PublishFinalAsync(new SyncSnapshot
+                {
+                    MountId = mountId, JobId = syncJobId, Lifecycle = SyncLifecycle.Failed,
+                    StatusText = message, CompletedAt = DateTimeOffset.UtcNow
+                }).ConfigureAwait(false);
+            return Result.Failure(code, message);
+        }
+
         if (!job.Enabled)
         {
-            return Result.Failure("sync.disabled", "Enable this sync job before running it.");
+            return await RejectAsync("sync.disabled", "Enable this sync job before running it.").ConfigureAwait(false);
         }
 
         if (job.Mode == SyncMode.Bisync)
         {
-            return Result.Failure(
+            return await RejectAsync(
                 "sync.bisync_not_enabled",
-                "Bidirectional sync is not enabled until its recovery workflow is configured.");
+                "Bidirectional sync is not enabled until its recovery workflow is configured.").ConfigureAwait(false);
         }
 
         var validation = new SyncJobValidator().Validate(job);
         if (!validation.IsValid)
         {
-            return Result.Failure("sync.invalid", validation.Issues[0].Message);
+            return await RejectAsync("sync.invalid", validation.Issues[0].Message).ConfigureAwait(false);
         }
 
         if (RemotePathUtility.Normalize(definition.RemotePath).Length > 0 &&
             (RemotePathUtility.Normalize(job.RemotePath).Length == 0 || !job.RemotePath.StartsWith('/')))
         {
-            return Result.Failure("sync.remote_path_absolute",
-                "Set Remote folder to a path starting with / for this drive.");
+            return await RejectAsync("sync.remote_path_absolute",
+                "Set Remote folder to a path starting with / for this drive.").ConfigureAwait(false);
         }
 
         if (definitions.Any(item => OverlapsMountTarget(job.LocalPath, item.Target)))
         {
-            return Result.Failure(
+            return await RejectAsync(
                 "sync.recursive_path",
-                "The local sync path cannot contain or be inside a drive managed by ResoDrive.");
+                "The local sync path cannot contain or be inside a drive managed by ResoDrive.").ConfigureAwait(false);
         }
 
         var managedPath = _paths.ManagedSyncFolder(job.Id.Value);
         if (job.ManagedLocalCopy && !Path.TrimEndingDirectorySeparator(Path.GetFullPath(job.LocalPath))
                 .Equals(managedPath, StringComparison.OrdinalIgnoreCase))
-            return Result.Failure("sync.managed_path", "Managed local copies must use their dedicated ResoDrive folder.");
+            return await RejectAsync("sync.managed_path", "Managed local copies must use their dedicated ResoDrive folder.").ConfigureAwait(false);
 
         if ((!job.ManagedLocalCopy && PathsOverlap(job.LocalPath, _paths.Root)) ||
             PathsOverlap(job.LocalPath, AppContext.BaseDirectory))
         {
-            return Result.Failure(
+            return await RejectAsync(
                 "sync.protected_path",
-                "The local sync path cannot contain or be inside ResoDrive application data or program files.");
+                "The local sync path cannot contain or be inside ResoDrive application data or program files.").ConfigureAwait(false);
         }
 
         if (job.ManagedLocalCopy && definitions.Any(mount => mount.SyncJobs.Any(other =>
                 (mount.Id != mountId || other.Id != syncJobId) && PathsOverlap(other.LocalPath, job.LocalPath))))
-            return Result.Failure("sync.managed_overlap", "A managed local copy cannot overlap another sync job's folder.");
+            return await RejectAsync("sync.managed_overlap", "A managed local copy cannot overlap another sync job's folder.").ConfigureAwait(false);
 
         var runSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         if (!_runs.TryAdd(syncJobId, runSource))
@@ -181,6 +192,12 @@ public sealed class RcloneSyncCoordinator : IDisposable
         RcloneSyncStats? latestStats = null;
         try
         {
+            if (!job.ManagedLocalCopy)
+            {
+                ManagedDataPath.ValidateAncestors(job.LocalPath);
+                if (job.Mode.IsFromRemote())
+                    await Task.Run(() => ManagedDataPath.ValidateTree(job.LocalPath, runSource.Token), runSource.Token).ConfigureAwait(false);
+            }
             if (job.ManagedLocalCopy)
             {
                 using var lease = await _accountData.AcquireAsync(runSource.Token).ConfigureAwait(false);
@@ -191,7 +208,7 @@ public sealed class RcloneSyncCoordinator : IDisposable
                 if (!registrations.Any(registration => registration.MountId == mountId.Value))
                     throw new IOException("Reconnect this account through Nextcloud setup before using managed local copies.");
                 ManagedDataPath.ValidateAncestors(managedPath);
-                ManagedDataPath.ValidateTree(managedPath);
+                await Task.Run(() => ManagedDataPath.ValidateTree(managedPath, runSource.Token), runSource.Token).ConfigureAwait(false);
                 Directory.CreateDirectory(managedPath);
                 ManagedDataPath.ValidateAncestors(managedPath);
                 runSource.Token.ThrowIfCancellationRequested();
@@ -475,6 +492,10 @@ public sealed class RcloneSyncCoordinator : IDisposable
     private async Task PublishFinalAsync(SyncSnapshot snapshot)
     {
         Publish(snapshot);
-        await _runStateStore.SaveAsync(snapshot).ConfigureAwait(false);
+        try { await _runStateStore.SaveAsync(snapshot).ConfigureAwait(false); }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Optional history must not change the outcome of a completed transfer.
+        }
     }
 }

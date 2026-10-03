@@ -17,6 +17,7 @@ public static class RemoteWipeCleanup
         // Never derive deletion targets from user-selected sync paths.
         Attempt(() => DeleteDirectory(paths.ManagedSyncRoot));
         Attempt(() => DeleteDirectory(paths.Cache));
+        Attempt(() => DeleteDirectory(Path.Combine(root, "mount-controls")));
         Attempt(() => DeleteDirectory(paths.Logs));
         if (failures.Count != 0)
             throw new IOException("Remote wipe is incomplete. Close applications using managed files and retry.",
@@ -36,7 +37,8 @@ public static class RemoteWipeCleanup
     {
         var name = Path.GetFileName(path).TrimStart('.');
         string[] names = ["settings.json", "rclone.conf", "config-pass.dpapi", "ownership.json",
-            "sync-run-state.json", "scheduler-state.json", "welcome.complete", "remote-wipe.dpapi"];
+            "sync-run-state.json", "scheduler-state.json", "welcome.complete", "remote-wipe.dpapi",
+            "mount-upload-recovery.json"];
         // Include atomic-write backups and setup staging, but retain the durable wipe state,
         // profiles, components and installers. Never enumerate outside the managed data root.
         return names.Any(prefix => name.Equals(prefix, StringComparison.OrdinalIgnoreCase) ||
@@ -63,18 +65,28 @@ public static class RemoteWipeCleanup
     {
         try
         {
-            if (ManagedDataPath.Attributes(path) is not { } attributes) return;
-            if (!attributes.HasFlag(FileAttributes.Directory) || attributes.HasFlag(FileAttributes.ReparsePoint))
-                throw new IOException("Remote wipe requires an ordinary managed directory.");
-            foreach (var child in Directory.EnumerateFileSystemEntries(path))
+            var directories = new Stack<(string Path, bool Visited)>();
+            directories.Push((path, false));
+            while (directories.TryPop(out var directory))
             {
-                if (ManagedDataPath.Attributes(child) is not { } childAttributes) continue;
-                if (childAttributes.HasFlag(FileAttributes.ReparsePoint))
-                    throw new IOException("Remote wipe cannot follow a redirected managed entry.");
-                if (childAttributes.HasFlag(FileAttributes.Directory)) DeleteDirectory(child);
-                else DeleteFile(child);
+                if (ManagedDataPath.Attributes(directory.Path) is not { } attributes) continue;
+                if (!attributes.HasFlag(FileAttributes.Directory) || attributes.HasFlag(FileAttributes.ReparsePoint))
+                    throw new IOException("Remote wipe requires an ordinary managed directory.");
+                if (directory.Visited)
+                {
+                    Directory.Delete(directory.Path);
+                    continue;
+                }
+                directories.Push((directory.Path, true));
+                foreach (var child in Directory.EnumerateFileSystemEntries(directory.Path))
+                {
+                    if (ManagedDataPath.Attributes(child) is not { } childAttributes) continue;
+                    if (childAttributes.HasFlag(FileAttributes.ReparsePoint))
+                        throw new IOException("Remote wipe cannot follow a redirected managed entry.");
+                    if (childAttributes.HasFlag(FileAttributes.Directory)) directories.Push((child, false));
+                    else DeleteFile(child);
+                }
             }
-            Directory.Delete(path);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {

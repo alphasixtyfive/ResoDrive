@@ -52,8 +52,7 @@ public sealed class InstallationPreparationService
             progress?.Report("Closing ResoDrive windows…");
             await _runtime.StopWindowsAsync(directory, response.HostProcessId, timeout.Token).ConfigureAwait(false);
             progress?.Report("Waiting for mounted drives and sync jobs to stop…");
-            if (response.Succeeded)
-                await _runtime.WaitForHostExitAsync(response.HostProcessId, timeout.Token).ConfigureAwait(false);
+            await _runtime.WaitForHostExitAsync(response.HostProcessId, timeout.Token).ConfigureAwait(false);
             await _runtime.VerifyStoppedAsync(directory, timeout.Token).ConfigureAwait(false);
             progress?.Report("ResoDrive is ready. Windows Installer will now continue.");
         }

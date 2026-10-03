@@ -68,10 +68,6 @@ $setupOutput = Join-Path $artifactRoot "$executableBaseName-$Runtime-$releaseVer
 $setupChecksumOutput = "$setupOutput.sha256"
 $msiUpgradeCode = '8D0BD004-119E-4589-B816-7D5A27D94561'
 $bundleUpgradeCode = '5B94F457-820F-4B41-B609-071179764B08'
-if ($BuildMsi -and $Runtime -ne 'win-x64') {
-    throw 'MSI packaging currently supports win-x64 only. Use -BuildMsi $false for win-arm64 portable builds.'
-}
-
 $resolvedArtifacts = [IO.Path]::GetFullPath($artifactRoot)
 $resolvedArtifactParent = [IO.Path]::GetFullPath((Join-Path $projectRoot 'artifacts'))
 if (-not $resolvedArtifacts.StartsWith($resolvedArtifactParent + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {

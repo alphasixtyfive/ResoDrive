@@ -11,7 +11,8 @@ public sealed record HostRequest(
     Guid? MountId = null,
     Guid? SyncJobId = null,
     bool Confirmed = false,
-    string? ExpectedHostBaseDirectory = null);
+    string? ExpectedHostBaseDirectory = null,
+    bool AllowPendingUploads = false);
 
 public sealed record HostMountStatus(
     Guid MountId,
@@ -20,7 +21,19 @@ public sealed record HostMountStatus(
     long? UploadsQueued = null,
     long? UploadsInProgress = null,
     bool UploadStatusStale = false,
-    string? RemoteWipeStatus = null);
+    string? RemoteWipeStatus = null)
+{
+    public long? UploadsDirty { get; init; }
+    public long? UploadErrors { get; init; }
+    public long? UploadBytesRemaining { get; init; }
+    public double? UploadSpeedBytesPerSecond { get; init; }
+    public double? UploadEtaSeconds { get; init; }
+    public IReadOnlyList<MountUploadFile> Uploads { get; init; } = [];
+    public bool UploadDetailsTruncated { get; init; }
+    public DateTimeOffset? UploadObservedAt { get; init; }
+    public bool UploadRecoveryRequired { get; init; }
+    public bool UploadStatusChecking { get; init; }
+}
 
 public sealed record HostSyncStatus(
     Guid MountId,
@@ -51,10 +64,16 @@ public sealed record HostResponse(
     string? ReportedRcloneVersion = null,
     string? RcloneIdentityErrorCode = null,
     string? InitializationErrorCode = null,
-    string? InitializationErrorMessage = null);
+    string? InitializationErrorMessage = null,
+    string? SessionProtectionError = null,
+    int ActiveSyncJobs = 0,
+    bool MountStatusTruncated = false,
+    bool SyncStatusTruncated = false);
 
 public static class HostProtocol
 {
+    private const int MaximumMessageBytes = 1024 * 1024;
+    private const int UploadDetailBudgetBytes = 256 * 1024;
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
 
     public static string GetPipeName(ApplicationPaths paths)
@@ -82,7 +101,43 @@ public static class HostProtocol
         snapshot.StatusText ?? snapshot.Lifecycle.ToString(),
         snapshot.UploadsQueued,
         snapshot.UploadsInProgress,
-        snapshot.UploadStatusStale);
+        snapshot.UploadStatusStale)
+    {
+        UploadsDirty = snapshot.UploadsDirty,
+        UploadErrors = snapshot.UploadErrors,
+        UploadBytesRemaining = snapshot.UploadBytesRemaining,
+        UploadSpeedBytesPerSecond = snapshot.UploadSpeedBytesPerSecond,
+        UploadEtaSeconds = snapshot.UploadEtaSeconds,
+        Uploads = snapshot.Uploads,
+        UploadDetailsTruncated = snapshot.UploadDetailsTruncated,
+        UploadObservedAt = snapshot.UploadObservedAt,
+        UploadRecoveryRequired = snapshot.UploadRecoveryRequired,
+        UploadStatusChecking = snapshot.UploadStatusChecking
+    };
+
+    public static IReadOnlyList<HostMountStatus> BoundUploadDetails(IEnumerable<HostMountStatus> statuses)
+    {
+        ArgumentNullException.ThrowIfNull(statuses);
+        var remaining = UploadDetailBudgetBytes;
+        var result = new List<HostMountStatus>();
+        foreach (var status in statuses)
+        {
+            var files = new List<MountUploadFile>();
+            foreach (var file in status.Uploads)
+            {
+                var size = JsonSerializer.SerializeToUtf8Bytes(file, SerializerOptions).Length + 1;
+                if (size > remaining) continue;
+                files.Add(file);
+                remaining -= size;
+            }
+            result.Add(status with
+            {
+                Uploads = files,
+                UploadDetailsTruncated = status.UploadDetailsTruncated || files.Count != status.Uploads.Count
+            });
+        }
+        return result;
+    }
 
     public static HostSyncStatus ToStatus(SyncSnapshot snapshot) => new(
         snapshot.MountId.Value,
@@ -102,9 +157,53 @@ public static class HostProtocol
         snapshot.EtaSeconds,
         snapshot.ElapsedSeconds);
 
+    public static IReadOnlyList<HostSyncStatus> BoundSyncStatuses(IEnumerable<HostSyncStatus> statuses)
+    {
+        ArgumentNullException.ThrowIfNull(statuses);
+        var remaining = 512 * 1024;
+        var result = new List<HostSyncStatus>();
+        foreach (var status in statuses.OrderBy(status => status.Lifecycle is "Running" or "Queued" ? 0 : 1)
+                     .ThenByDescending(status => status.CompletedAt))
+        {
+            var size = JsonSerializer.SerializeToUtf8Bytes(status, SerializerOptions).Length + 1;
+            if (size > remaining) continue;
+            result.Add(status);
+            remaining -= size;
+        }
+        return result;
+    }
+
+    public static HostResponse BoundStatus(HostResponse response)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        var mounts = BoundUploadDetails(response.Mounts ?? []);
+        var remaining = 400 * 1024;
+        var visibleMounts = new List<HostMountStatus>();
+        foreach (var mount in mounts.OrderBy(mount => mount.UploadRecoveryRequired || mount.UploadsQueued > 0 ||
+                     mount.UploadsInProgress > 0 || mount.UploadsDirty > 0 || mount.UploadStatusStale ? 0 : 1))
+        {
+            var size = JsonSerializer.SerializeToUtf8Bytes(mount, SerializerOptions).Length + 1;
+            if (size > remaining) continue;
+            visibleMounts.Add(mount);
+            remaining -= size;
+        }
+        var syncs = response.SyncJobs ?? [];
+        var visibleSyncs = BoundSyncStatuses(syncs);
+        return response with
+        {
+            Mounts = visibleMounts,
+            SyncJobs = visibleSyncs,
+            ActiveSyncJobs = Math.Max(response.ActiveSyncJobs, syncs.Count(status => status.Lifecycle is "Running" or "Queued")),
+            MountStatusTruncated = response.MountStatusTruncated || visibleMounts.Count != mounts.Count,
+            SyncStatusTruncated = response.SyncStatusTruncated || visibleSyncs.Count != syncs.Count
+        };
+    }
+
     public static async Task WriteAsync<T>(Stream stream, T value, CancellationToken cancellationToken)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(value, SerializerOptions);
+        if (bytes.Length > MaximumMessageBytes)
+            throw new InvalidDataException("The host message length is invalid.");
         var length = BitConverter.GetBytes(bytes.Length);
         await stream.WriteAsync(length, cancellationToken).ConfigureAwait(false);
         await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
@@ -116,7 +215,7 @@ public static class HostProtocol
         var lengthBytes = new byte[sizeof(int)];
         await stream.ReadExactlyAsync(lengthBytes, cancellationToken).ConfigureAwait(false);
         var length = BitConverter.ToInt32(lengthBytes);
-        if (length is <= 0 or > 1024 * 1024)
+        if (length is <= 0 or > MaximumMessageBytes)
         {
             throw new InvalidDataException("The host message length is invalid.");
         }
@@ -169,6 +268,7 @@ public static class HostClient
             request.Command.Equals("activate-runtime", StringComparison.OrdinalIgnoreCase)
             ? TimeSpan.FromSeconds(45)
             : request.Command.Equals("shutdown", StringComparison.OrdinalIgnoreCase) ||
+              request.Command.Equals("exit", StringComparison.OrdinalIgnoreCase) ||
               request.Command.Equals("check-uploads", StringComparison.OrdinalIgnoreCase)
                 ? TimeSpan.FromSeconds(15) : TimeSpan.FromSeconds(8);
         return SendCoreAsync(request, responseTimeout, enforceInstallation: true, cancellationToken);

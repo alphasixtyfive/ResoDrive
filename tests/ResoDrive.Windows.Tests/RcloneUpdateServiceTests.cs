@@ -21,6 +21,40 @@ public sealed class RcloneUpdateServiceTests
         Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(["version", "--check"]));
     }
 
+    [Theory]
+    [InlineData("v1..76.0")]
+    [InlineData("v1.76.0.")]
+    [InlineData("v.1.76.0")]
+    [InlineData("v2147483648.0.0")]
+    public async Task CheckAsync_RejectsMalformedLatestWithoutThrowing(string latest)
+    {
+        using var package = new TestPackage("v1.75.0");
+        var runner = new FakeRunner { LatestVersion = latest };
+
+        var result = await CreateService(package, runner).CheckAsync();
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("rclone.update_check_invalid", result.Error!.Code);
+        Assert.Equal("v1.75.0", File.ReadAllText(package.ExecutablePath));
+    }
+
+    [Theory]
+    [InlineData("v1..75.0")]
+    [InlineData("v1.75.0.")]
+    [InlineData("v.1.75.0")]
+    [InlineData("v2147483648.0.0")]
+    public async Task CheckAsync_RejectsMalformedInstalledVersionWithoutThrowing(string installed)
+    {
+        using var package = new TestPackage(installed);
+        var runner = new FakeRunner();
+
+        var result = await CreateService(package, runner).CheckAsync();
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("rclone.update_current_invalid", result.Error!.Code);
+        Assert.Equal(installed, File.ReadAllText(package.ExecutablePath));
+    }
+
     [Fact]
     public async Task CheckAsync_ReturnsTransientFailureOnTimeout()
     {
@@ -272,6 +306,16 @@ public sealed class RcloneUpdateServiceTests
             TimeSpan.FromSeconds(1));
     }
 
+    [Fact]
+    public async Task UpdateAsync_RestoresPreviousRuntimeWhenWindowsBlocksCommittedExecutable()
+    {
+        using var package = new TestPackage("v1.75.0");
+        var runner = new FakeRunner { BlockUpdatedCanonicalRuntime = true };
+        var result = await CreateService(package, runner).UpdateAsync();
+        Assert.False(result.Succeeded);
+        Assert.Equal("v1.75.0", File.ReadAllText(package.ExecutablePath));
+    }
+
     private sealed class FakeRunner : IRcloneProcessRunner
     {
         private int _concurrency;
@@ -279,6 +323,7 @@ public sealed class RcloneUpdateServiceTests
 
         public string LatestVersion { get; init; } = "v1.76.0";
         public string? StagedVersion { get; init; }
+        public bool BlockUpdatedCanonicalRuntime { get; init; }
         public bool CheckTimesOut { get; init; }
         public int CheckExitCode { get; init; }
         public bool WriteCheckToStandardError { get; init; }
@@ -306,6 +351,8 @@ public sealed class RcloneUpdateServiceTests
                 if (arguments.SequenceEqual(["version"]))
                 {
                     var version = File.ReadAllText(executablePath);
+                    if (BlockUpdatedCanonicalRuntime && version == LatestVersion && Path.GetFileName(executablePath) == "rclone.exe")
+                        throw new System.ComponentModel.Win32Exception(5);
                     return new ProcessRunResult(0, $"rclone {version}\n- os/version: Microsoft Windows 11", "", false);
                 }
 

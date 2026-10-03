@@ -16,9 +16,31 @@ public sealed record MountSnapshot
     public long? UploadsQueued { get; init; }
     public long? UploadsInProgress { get; init; }
     public bool UploadStatusStale { get; init; }
+    public bool UploadStatusChecking { get; init; }
+    public long? UploadsDirty { get; init; }
+    public long? UploadErrors { get; init; }
+    public long? UploadBytesRemaining { get; init; }
+    public double? UploadSpeedBytesPerSecond { get; init; }
+    public double? UploadEtaSeconds { get; init; }
+    public IReadOnlyList<MountUploadFile> Uploads { get; init; } = [];
+    public bool UploadDetailsTruncated { get; init; }
+    public DateTimeOffset? UploadObservedAt { get; init; }
+    public bool UploadRecoveryRequired { get; init; }
     public required MountId MountId { get; init; }
     public MountLifecycle Lifecycle { get; init; }
     public string? StatusText { get; init; }
+}
+
+public enum MountUploadState { Queued, Uploading, WaitingForClose, Retrying }
+
+public sealed record MountUploadFile
+{
+    public required string RelativePath { get; init; }
+    public MountUploadState State { get; init; }
+    public long? TotalBytes { get; init; }
+    public long BytesTransferred { get; init; }
+    public double? SpeedBytesPerSecond { get; init; }
+    public double? EtaSeconds { get; init; }
 }
 
 public enum SyncLifecycle

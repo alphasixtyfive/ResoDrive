@@ -35,6 +35,7 @@ internal sealed class SyncRunStateStore : IDisposable
             }
 
             using var stream = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            if (stream.Length > 4 * 1024 * 1024) return [];
             var entries = JsonSerializer.Deserialize<List<PersistedSyncRun>>(stream, SerializerOptions) ?? [];
             return entries
                 .Where(IsValid)
@@ -99,8 +100,8 @@ internal sealed class SyncRunStateStore : IDisposable
 
     public void Dispose() => _gate.Dispose();
 
-    private static bool IsValid(PersistedSyncRun value) =>
-        value.MountId != Guid.Empty &&
+    private static bool IsValid(PersistedSyncRun? value) =>
+        value is not null && value.MountId != Guid.Empty &&
         value.JobId != Guid.Empty &&
         value.CompletedAt is not null &&
         value.StatusText is { Length: > 0 and <= 300 } &&

@@ -31,5 +31,6 @@
     <Content Include="..\..\src\ResoDrive.App\MainWindow.Components.cs" Link="Fixtures\MainWindow.Components.cs" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\installer\Package.wxs" Link="Fixtures\Package.wxs" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\installer\Bundle.wxs" Link="Fixtures\Bundle.wxs" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\installer\ResoDrive.Installer.wixproj" Link="Fixtures\ResoDrive.Installer.wixproj" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

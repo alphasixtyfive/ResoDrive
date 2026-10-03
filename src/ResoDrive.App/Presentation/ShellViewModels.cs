@@ -45,7 +45,9 @@ public sealed class ShellViewModel : NotifyBase
         ManagerSettings settings,
         IReadOnlyList<HostMountStatus>? statuses,
         IReadOnlyList<HostSyncStatus>? syncStatuses = null,
-        bool hostUnavailable = false
+        bool hostUnavailable = false,
+        bool mountStatusTruncated = false,
+        bool syncStatusTruncated = false
     )
     {
         var statusMap = (statuses ?? []).ToDictionary(status => status.MountId);
@@ -57,11 +59,13 @@ public sealed class ShellViewModel : NotifyBase
         foreach (var mount in settings.Mounts)
         {
             statusMap.TryGetValue(mount.Id, out var status);
-            Mounts.Add(new MountRow(mount, status, hostUnavailable));
+            Mounts.Add(new MountRow(mount, status, hostUnavailable || (mountStatusTruncated && status is null)));
             foreach (var job in mount.SyncJobs)
             {
                 syncMap.TryGetValue((mount.Id, job.Id), out var syncStatus);
-                Jobs.Add(new SyncRow(mount, job, syncStatus));
+                var row = new SyncRow(mount, job, syncStatus);
+                if (hostUnavailable || (syncStatusTruncated && syncStatus is null)) row.MarkStatusUnavailable();
+                Jobs.Add(row);
             }
         }
         foreach (var status in (syncStatuses ?? [])
@@ -74,13 +78,37 @@ public sealed class ShellViewModel : NotifyBase
         IsInitialized = true;
     }
 
-    public void ApplyStatus(IReadOnlyList<HostMountStatus>? statuses)
+    public void ReorderMounts(IReadOnlyList<Guid> order)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+        if (order.Count != Mounts.Count || order.Distinct().Count() != order.Count ||
+            !order.ToHashSet().SetEquals(Mounts.Select(row => row.Id)))
+            throw new ArgumentException("Drive order must include each existing drive exactly once.", nameof(order));
+        var mountRows = Mounts.ToDictionary(row => row.Id);
+        for (var position = 0; position < order.Count; position++)
+        {
+            var current = Mounts.IndexOf(mountRows[order[position]]);
+            if (current != position)
+                Mounts.Move(current, position);
+        }
+        var positions = order.Select((id, position) => (id, position)).ToDictionary(item => item.id, item => item.position);
+        var syncRows = Jobs.OrderBy(row => positions[row.MountId]).ToArray();
+        for (var position = 0; position < syncRows.Length; position++)
+        {
+            var current = Jobs.IndexOf(syncRows[position]);
+            if (current != position)
+                Jobs.Move(current, position);
+        }
+    }
+
+    public void ApplyStatus(IReadOnlyList<HostMountStatus>? statuses, bool statusTruncated = false)
     {
         var map = (statuses ?? []).ToDictionary(status => status.MountId);
         foreach (var mount in Mounts)
         {
             map.TryGetValue(mount.Id, out var status);
-            mount.ApplyStatus(status);
+            if (statusTruncated && status is null) mount.MarkHostUnavailable();
+            else mount.ApplyStatus(status);
         }
         Refresh();
     }
@@ -89,16 +117,19 @@ public sealed class ShellViewModel : NotifyBase
     {
         foreach (var mount in Mounts)
             mount.MarkHostUnavailable();
+        foreach (var job in Jobs)
+            job.MarkStatusUnavailable();
         Refresh();
     }
 
-    public void ApplySyncStatus(IReadOnlyList<HostSyncStatus>? statuses)
+    public void ApplySyncStatus(IReadOnlyList<HostSyncStatus>? statuses, bool statusTruncated = false)
     {
         var map = (statuses ?? []).ToDictionary(status => (status.MountId, status.SyncJobId));
         foreach (var job in Jobs)
         {
             map.TryGetValue((job.MountId, job.Id), out var status);
-            job.ApplyStatus(status);
+            if (statusTruncated && status is null) job.MarkStatusUnavailable();
+            else job.ApplyStatus(status);
         }
         foreach (var status in (statuses ?? []).Where(IsTerminalSyncStatus))
         {
@@ -227,9 +258,7 @@ internal static class StatusPalette
 
 public sealed class MountRow : NotifyBase
 {
-    private long? _uploadsQueued;
-    private long? _uploadsInProgress;
-    private bool _uploadStatusStale;
+    public HostMountStatus? UploadStatus { get; private set; }
     private MountLifecycle _lifecycle = MountLifecycle.Stopped;
     private string _status = "Not mounted";
     private string _errorDetail = string.Empty;
@@ -254,13 +283,12 @@ public sealed class MountRow : NotifyBase
     public string ConnectionHostDisplay => Settings.ConnectionHost?.Trim() ?? string.Empty;
     public string UploadActivityText => !ShouldStop
         ? string.Empty
-        : _uploadStatusStale ? "Upload status unavailable"
-        : _uploadsQueued is not > 0 && _uploadsInProgress is not > 0 ? string.Empty
-        : "↑ " + string.Join(" · ", new[]
-        {
-            _uploadsInProgress > 0 ? $"{_uploadsInProgress} uploading" : null,
-            _uploadsQueued > 0 ? $"{_uploadsQueued} queued" : null
-        }.Where(value => value is not null));
+        : UploadStatus?.UploadStatusChecking == true ? "Checking uploads…"
+        : UploadStatus?.UploadStatusStale == true ? "Upload status unavailable"
+        : UploadPresentation.Activity(UploadStatus) is { Length: > 0 } activity ? "↑ " + activity : string.Empty;
+    public bool HasPendingUploads => UploadPresentation.HasPending(UploadStatus);
+    public bool UploadNeedsAttention => HasPendingUploads || IsTransient ||
+        (ShouldStop && (UploadStatus is null || UploadStatus.UploadStatusStale));
     public string UploadActivitySuffix => UploadActivityText.Length == 0 ? string.Empty
         : (ConnectionHostDisplay.Length > 0 ? "  ·  " : string.Empty) + UploadActivityText;
     public System.Windows.Visibility ConnectionDetailVisibility =>
@@ -358,6 +386,9 @@ public sealed class MountRow : NotifyBase
 
     public void ApplyStatus(HostMountStatus? status)
     {
+        var uploadChanged = (UploadStatus is null ? null : UploadStatus with { RemoteWipeStatus = null }) !=
+            (status is null ? null : status with { RemoteWipeStatus = null });
+        UploadStatus = status;
         var hadStatus = _hasStatus;
         var hostWasUnavailable = _hostUnavailable;
         _hasStatus = status is not null;
@@ -376,25 +407,24 @@ public sealed class MountRow : NotifyBase
                         ? nextLifecycle == MountLifecycle.Failed ? "Mount failed" : detail
                         : "Unknown mount state";
         var nextErrorDetail = nextLifecycle == MountLifecycle.Failed ? detail : string.Empty;
-        if (hadStatus == _hasStatus && hostWasUnavailable == _hostUnavailable &&
+        if (!uploadChanged && hadStatus == _hasStatus && hostWasUnavailable == _hostUnavailable &&
             previousLifecycle == nextLifecycle && _status == nextStatus &&
-            _errorDetail == nextErrorDetail && _uploadsQueued == status?.UploadsQueued &&
-            _uploadsInProgress == status?.UploadsInProgress && _uploadStatusStale == (status?.UploadStatusStale ?? false))
+            _errorDetail == nextErrorDetail)
             return;
         _status = nextStatus;
         _errorDetail = nextErrorDetail;
-        _uploadsQueued = status?.UploadsQueued;
-        _uploadsInProgress = status?.UploadsInProgress;
-        _uploadStatusStale = status?.UploadStatusStale ?? false;
         ChangedState();
     }
 
     public void MarkHostUnavailable()
     {
-        if (_hasStatus || _hostUnavailable)
-            return;
+        if (_hostUnavailable) return;
         _hostUnavailable = true;
-        _status = "Background host unavailable";
+        if (_hasStatus)
+        {
+            if (UploadStatus is not null) UploadStatus = UploadStatus with { UploadStatusStale = true };
+        }
+        else _status = "Background host unavailable";
         ChangedState();
     }
 
@@ -402,6 +432,9 @@ public sealed class MountRow : NotifyBase
     {
         Changed(nameof(StatusText));
         Changed(nameof(UploadActivityText));
+        Changed(nameof(UploadStatus));
+        Changed(nameof(HasPendingUploads));
+        Changed(nameof(UploadNeedsAttention));
         Changed(nameof(UploadActivitySuffix));
         Changed(nameof(ConnectionDetailVisibility));
         Changed(nameof(StatusVisibility));
@@ -423,6 +456,7 @@ public sealed class MountRow : NotifyBase
 public sealed class SyncRow : NotifyBase
 {
     private readonly SyncMode? _mode;
+    private bool _statusUnavailable;
     private SyncLifecycle _lifecycle = SyncLifecycle.Idle;
     private string _statusPrimary = string.Empty;
     private string _statusSecondary = string.Empty;
@@ -489,9 +523,9 @@ public sealed class SyncRow : NotifyBase
         new[] { ModeLabel, Route, StatusPrimary, StatusSecondary }.Where(value => value.Length > 0));
     public bool IsRunning => _lifecycle == SyncLifecycle.Running;
     public bool IsBusy => _lifecycle is SyncLifecycle.Queued or SyncLifecycle.Running;
-    public bool CanAct => _mode is not null && (Enabled || IsBusy);
-    public string ActionText => IsBusy ? "Stop" : Enabled ? "Run" : "Disabled";
-    public string ActionGlyph => IsBusy ? "\uE71A" : Enabled ? "\uE768" : "\uE711";
+    public bool CanAct => _mode is not null && (IsBusy || (Enabled && !_statusUnavailable));
+    public string ActionText => IsBusy ? "Stop" : _statusUnavailable ? "Waiting…" : Enabled ? "Run" : "Disabled";
+    public string ActionGlyph => IsBusy ? "\uE71A" : _statusUnavailable ? "\uE895" : Enabled ? "\uE768" : "\uE711";
     public MediaBrush ResultBrush =>
         _lifecycle switch
         {
@@ -503,8 +537,17 @@ public sealed class SyncRow : NotifyBase
     public string OptionsAccessibleName => $"Open settings for {Name}";
     public string ActionAccessibleName => $"{ActionText} {Name}";
 
+    public void MarkStatusUnavailable()
+    {
+        if (_statusUnavailable) return;
+        _statusUnavailable = true;
+        _statusPrimary = "Status unavailable";
+        Changed(string.Empty);
+    }
+
     public void ApplyStatus(HostSyncStatus? status)
     {
+        _statusUnavailable = false;
         var recognized = Enum.TryParse(status?.Lifecycle, true, out SyncLifecycle lifecycle);
         var nextLifecycle = recognized ? lifecycle : SyncLifecycle.Idle;
         var presentation = SyncStatusPresentation.Create(

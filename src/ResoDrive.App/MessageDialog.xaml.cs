@@ -13,7 +13,8 @@ public partial class MessageDialog : Window
         MessageBoxButton buttons,
         MessageBoxImage image,
         string? affirmativeLabel = null,
-        string? negativeLabel = null)
+        string? negativeLabel = null,
+        bool affirmativeIsDefault = true)
     {
         InitializeComponent();
         WindowAppearance.PrepareDialog(this);
@@ -21,7 +22,7 @@ public partial class MessageDialog : Window
         HeadingText.Text = heading;
         MessageText.Text = message;
         ApplySeverity(image);
-        ConfigureButtons(buttons, affirmativeLabel, negativeLabel);
+        ConfigureButtons(buttons, affirmativeLabel, negativeLabel, affirmativeIsDefault);
     }
 
     public MessageBoxResult Result => _result;
@@ -62,22 +63,23 @@ public partial class MessageDialog : Window
     private void ConfigureButtons(
         MessageBoxButton buttons,
         string? affirmativeLabel,
-        string? negativeLabel)
+        string? negativeLabel,
+        bool affirmativeIsDefault)
     {
         switch (buttons)
         {
             case MessageBoxButton.OKCancel:
-                AddButton("Cancel", MessageBoxResult.Cancel, accent: false);
-                AddButton("OK", MessageBoxResult.OK, accent: true, isDefault: true);
+                AddButton("Cancel", MessageBoxResult.Cancel, accent: !affirmativeIsDefault, isDefault: !affirmativeIsDefault);
+                AddButton("OK", MessageBoxResult.OK, accent: affirmativeIsDefault, isDefault: affirmativeIsDefault);
                 break;
             case MessageBoxButton.YesNo:
-                AddButton(negativeLabel ?? "No", MessageBoxResult.No, accent: false);
-                AddButton(affirmativeLabel ?? "Yes", MessageBoxResult.Yes, accent: true, isDefault: true);
+                AddButton(negativeLabel ?? "No", MessageBoxResult.No, accent: !affirmativeIsDefault, isDefault: !affirmativeIsDefault);
+                AddButton(affirmativeLabel ?? "Yes", MessageBoxResult.Yes, accent: affirmativeIsDefault, isDefault: affirmativeIsDefault);
                 break;
             case MessageBoxButton.YesNoCancel:
-                AddButton("Cancel", MessageBoxResult.Cancel, accent: false);
+                AddButton("Cancel", MessageBoxResult.Cancel, accent: !affirmativeIsDefault, isDefault: !affirmativeIsDefault);
                 AddButton("No", MessageBoxResult.No, accent: false);
-                AddButton("Yes", MessageBoxResult.Yes, accent: true, isDefault: true);
+                AddButton("Yes", MessageBoxResult.Yes, accent: affirmativeIsDefault, isDefault: affirmativeIsDefault);
                 break;
             default:
                 AddButton("OK", MessageBoxResult.OK, accent: true, isDefault: true);
@@ -101,6 +103,7 @@ public partial class MessageDialog : Window
             Close();
         };
         ButtonsPanel.Children.Add(button);
+        if (isDefault) Loaded += (_, _) => button.Focus();
     }
 }
 
@@ -124,7 +127,8 @@ public static class ModernMessageBox
         string message,
         string title,
         string confirmLabel,
-        string cancelLabel = "Cancel")
+        string cancelLabel = "Cancel",
+        bool affirmativeIsDefault = true)
     {
         ArgumentNullException.ThrowIfNull(owner);
         var dialog = new MessageDialog(
@@ -133,7 +137,8 @@ public static class ModernMessageBox
             MessageBoxButton.YesNo,
             MessageBoxImage.Question,
             confirmLabel,
-            cancelLabel)
+            cancelLabel,
+            affirmativeIsDefault)
         {
             Owner = owner,
         };

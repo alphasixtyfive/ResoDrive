@@ -329,12 +329,45 @@ internal static class ApplicationUpdateHandoff
         try
         {
             var path = Path.Combine(Path.GetFullPath(updatesDirectory), OutcomeFileName);
-            return File.Exists(path)
-                ? JsonSerializer.Deserialize<ApplicationUpdateOutcome>(File.ReadAllText(path), JsonOptions)
-                : null;
+            var outcome = ReadOutcomeFile(path, out var primaryMissing);
+            if (outcome?.Finalized == true) return outcome;
+
+            // Earlier helpers can leave the final receipt staged if Windows
+            // denies replacement while the relaunched UI reads the first one.
+            var staged = ReadOutcomeFile(path + ".tmp", out _);
+            return staged is { Finalized: true } &&
+                (primaryMissing || outcome is not null && staged.Version == outcome.Version &&
+                    staged.RecordedAtUtc >= outcome.RecordedAtUtc)
+                ? staged : outcome;
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or JsonException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private static ApplicationUpdateOutcome? ReadOutcomeFile(string path, out bool missing)
+    {
+        missing = false;
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.Read | FileShare.Delete);
+            if (stream.Length > 64 * 1024) return null;
+            var outcome = JsonSerializer.Deserialize<ApplicationUpdateOutcome>(stream, JsonOptions);
+            return outcome is not null &&
+                Version.TryParse(outcome.Version, out var version) && version.Build >= 0 && version.Revision < 0 &&
+                version.ToString(3) == outcome.Version && outcome.Status is "pending" or "succeeded" or "failed" or "canceled" &&
+                outcome.Message is not null && outcome.RecordedAtUtc != default
+                ? outcome : null;
+        }
+        catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
+        {
+            missing = true;
+            return null;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
         {
             return null;
         }
@@ -363,6 +396,7 @@ internal static class ApplicationUpdateHandoff
         {
             var path = Path.Combine(Path.GetFullPath(updatesDirectory), OutcomeFileName);
             File.Delete(path);
+            File.Delete(path + ".tmp");
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or ArgumentException)
@@ -420,7 +454,7 @@ internal static class ApplicationUpdateHandoff
         var dataRoot = new ApplicationPaths().Root;
         return new ProcessStartInfo
         {
-            FileName = "msiexec.exe",
+            FileName = Path.Combine(Environment.SystemDirectory, "msiexec.exe"),
             Arguments = $"/i \"{installerPath}\" /passive /norestart /l*v \"{logPath}\" RDRIVE_DATA_ROOT=\"{Path.TrimEndingDirectorySeparator(dataRoot)}\\.\"",
             UseShellExecute = true,
             Verb = "runas",

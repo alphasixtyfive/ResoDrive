@@ -36,6 +36,7 @@ public sealed class SyncEditorWindowTests
                 VerifyNewJob(paths, enrolled, external, registered);
                 VerifyExistingExternalJob(paths, enrolled, registered);
                 VerifyExistingManagedJob(paths, enrolled, registered);
+                UploadsWindowTests.VerifyWithApplicationResources();
                 Assert.False(Directory.Exists(paths.Root));
             }
             catch (Exception exception)
@@ -159,7 +160,7 @@ public sealed class SyncEditorWindowTests
         }
     }
 
-    private static T Control<T>(SyncEditorWindow editor, string name) where T : FrameworkElement =>
+    private static T Control<T>(System.Windows.Window editor, string name) where T : FrameworkElement =>
         Assert.IsType<T>(editor.FindName(name));
 
     private static MountSettings Mount(string name) => new()

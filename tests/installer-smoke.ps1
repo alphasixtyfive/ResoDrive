@@ -1,4 +1,10 @@
-param([Parameter(Mandatory)][string]$SetupPath, [string]$PreviousVersion = '')
+param(
+    [Parameter(Mandatory)][string]$SetupPath,
+    [string]$PreviousVersion = '',
+    [string]$SameVersionBaselineMsiPath = '',
+    [string]$SameVersionBaselineSetupPath = '',
+    [string]$CandidateMsiPath = ''
+)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -6,9 +12,10 @@ Set-StrictMode -Version Latest
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
     throw 'Installer smoke tests require a disposable GitHub-hosted Windows runner.'
 }
+$project = [xml](Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Directory.Build.props') -Raw)
+$expectedVersion = $project.SelectSingleNode('/Project/PropertyGroup/VersionPrefix').InnerText
+$targetVersion = [version]$expectedVersion
 if ([string]::IsNullOrWhiteSpace($PreviousVersion)) {
-    $project = [xml](Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Directory.Build.props') -Raw)
-    $targetVersion = [version]$project.SelectSingleNode('/Project/PropertyGroup/VersionPrefix').InnerText
     $releaseJson = gh release list --repo alphasixtyfive/ResoDrive --exclude-drafts --exclude-pre-releases --limit 100 --json tagName
     if ($LASTEXITCODE -ne 0) { throw 'Could not identify the previous public installer.' }
     $previousVersions = @($releaseJson | ConvertFrom-Json | ForEach-Object {
@@ -43,7 +50,9 @@ $managedCopyHash = (Get-FileHash -LiteralPath $managedCopy).Hash
 function Invoke-Installer([string]$Executable, [string]$Arguments) {
     # Windows Installer's service does not inherit process-local RDRIVE_DATA_DIR.
     # Pass the isolated root through the supported bundle/MSI property instead.
-    if ([IO.Path]::GetFileName($Executable) -ine 'msiexec.exe') {
+    if ([IO.Path]::GetFileName($Executable) -ieq 'msiexec.exe') {
+        $Arguments += " RDRIVE_DATA_ROOT=`"$([IO.Path]::TrimEndingDirectorySeparator($env:RDRIVE_DATA_DIR))\.`""
+    } else {
         $Arguments += " ResoDriveDataRoot=`"$env:RDRIVE_DATA_DIR`""
     }
     $process = Start-Process -FilePath $Executable -ArgumentList $Arguments -WindowStyle Hidden -PassThru
@@ -73,8 +82,141 @@ function Assert-Stopped($Process) {
     } finally { $Process.Dispose() }
 }
 
+function Get-MsiProperty([string]$Path, [string]$Name) {
+    if ($Name -notin @('ProductCode', 'ProductVersion', 'UpgradeCode')) { throw 'Unsupported MSI property.' }
+    $installer = $database = $view = $record = $null
+    try {
+        $installer = New-Object -ComObject WindowsInstaller.Installer
+        $database = $installer.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $installer, @($Path, 0))
+        $query = 'SELECT `Value` FROM `Property` WHERE `Property` = ' + "'$Name'"
+        $view = $database.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $database, @($query))
+        $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null) | Out-Null
+        $record = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
+        if ($null -eq $record) { throw "MSI property '$Name' is missing." }
+        return [string]$record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 1)
+    } finally {
+        if ($null -ne $view) { $view.GetType().InvokeMember('Close', 'InvokeMethod', $null, $view, $null) | Out-Null }
+        foreach ($item in @($record, $view, $database, $installer)) {
+            if ($null -ne $item) { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($item) | Out-Null }
+        }
+    }
+}
+
+function Get-RelatedMsiProducts([string]$UpgradeCode) {
+    $installer = $products = $null
+    try {
+        $installer = New-Object -ComObject WindowsInstaller.Installer
+        $products = $installer.GetType().InvokeMember('RelatedProducts', 'GetProperty', $null, $installer, @($UpgradeCode))
+        $count = [int]$products.GetType().InvokeMember('Count', 'GetProperty', $null, $products, $null)
+        for ($index = 0; $index -lt $count; $index++) {
+            [string]$products.GetType().InvokeMember('Item', 'GetProperty', $null, $products, @($index))
+        }
+    } finally {
+        foreach ($item in @($products, $installer)) {
+            if ($null -ne $item) { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($item) | Out-Null }
+        }
+    }
+}
+
+function Assert-OneRelatedMsiProduct([string]$ProductCode) {
+    $products = @(Get-RelatedMsiProducts $sameVersionUpgradeCode)
+    if ($products.Count -ne 1 -or $products[0] -ine $ProductCode) {
+        throw "Expected only product $ProductCode, found: $($products -join ', ')."
+    }
+}
+
+function Get-RelatedBundleEntries {
+    foreach ($hive in @([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryHive]::CurrentUser)) {
+        $views = if ($hive -eq [Microsoft.Win32.RegistryHive]::CurrentUser) {
+            @([Microsoft.Win32.RegistryView]::Default)
+        } else {
+            @([Microsoft.Win32.RegistryView]::Registry32, [Microsoft.Win32.RegistryView]::Registry64)
+        }
+        foreach ($registryView in $views) {
+            $base = $uninstall = $null
+            try {
+                $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($hive, $registryView)
+                $uninstall = $base.OpenSubKey('SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall')
+                if ($null -eq $uninstall) { continue }
+                foreach ($name in $uninstall.GetSubKeyNames()) {
+                    $entry = $uninstall.OpenSubKey($name)
+                    try {
+                        if ($null -ne $entry -and @($entry.GetValue('BundleUpgradeCode', @())) -icontains $bundleUpgradeCode) {
+                            "$hive/$registryView/$name"
+                        }
+                    } finally { if ($null -ne $entry) { $entry.Dispose() } }
+                }
+            } finally {
+                if ($null -ne $uninstall) { $uninstall.Dispose() }
+                if ($null -ne $base) { $base.Dispose() }
+            }
+        }
+    }
+}
+
+function Assert-BundleCount([int]$Expected) {
+    $entries = @(Get-RelatedBundleEntries)
+    if ($entries.Count -ne $Expected) { throw "Expected $Expected related bundle entries, found: $($entries -join ', ')." }
+}
+
+function Assert-VerifiedAsset([string]$Path) {
+    $checksum = [IO.File]::ReadAllText($Path + '.sha256').Trim()
+    $match = [regex]::Match($checksum, '\A([0-9a-fA-F]{64})\s+\*?(.+)\z')
+    $hash = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+    if (-not $match.Success -or $match.Groups[2].Value -cne [IO.Path]::GetFileName($Path) -or $hash -ine $match.Groups[1].Value) {
+        throw "Asset checksum does not match '$Path'."
+    }
+    return $hash
+}
+
+function Assert-CandidateInstalled {
+    if ((Get-FileHash -LiteralPath $app -Algorithm SHA256).Hash -ine $candidateAppHash -or
+        (Get-Item -LiteralPath $app).VersionInfo.ProductVersion -cne $candidateProductVersion) {
+        throw 'The installed executable does not match the exact candidate bundle payload.'
+    }
+}
+
+$sameVersionPaths = @($SameVersionBaselineMsiPath, $SameVersionBaselineSetupPath, $CandidateMsiPath)
+$sameVersionRecovery = @($sameVersionPaths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -gt 0
+$bundleUpgradeCode = '{5B94F457-820F-4B41-B609-071179764B08}'
+$sameVersionReceipt = $null
 try {
+    if ($sameVersionRecovery) {
+        if (@($sameVersionPaths | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -ne 0) {
+            throw 'Same-version smoke requires both baseline installers and the candidate MSI.'
+        }
+        $baselineMsi = (Resolve-Path -LiteralPath $SameVersionBaselineMsiPath).Path
+        $baselineSetup = (Resolve-Path -LiteralPath $SameVersionBaselineSetupPath).Path
+        $candidateMsi = (Resolve-Path -LiteralPath $CandidateMsiPath).Path
+        $sameVersionReceipt = [ordered]@{
+            Version = $expectedVersion
+            BaselineMsiSha256 = Assert-VerifiedAsset $baselineMsi
+            BaselineSetupSha256 = Assert-VerifiedAsset $baselineSetup
+            CandidateMsiSha256 = Assert-VerifiedAsset $candidateMsi
+            CandidateSetupSha256 = Assert-VerifiedAsset $setup
+            MsiReplacementPassed = $false
+            BundleReplacementPassed = $false
+            UserDataPreserved = $false
+        }
+        $sameVersionUpgradeCode = Get-MsiProperty $candidateMsi 'UpgradeCode'
+        $baselineProductCode = Get-MsiProperty $baselineMsi 'ProductCode'
+        $candidateProductCode = Get-MsiProperty $candidateMsi 'ProductCode'
+        if ((Get-MsiProperty $baselineMsi 'ProductVersion') -ne $expectedVersion -or
+            (Get-MsiProperty $candidateMsi 'ProductVersion') -ne $expectedVersion -or
+            (Get-MsiProperty $baselineMsi 'UpgradeCode') -ine $sameVersionUpgradeCode -or
+            $baselineProductCode -ieq $candidateProductCode) {
+            throw 'The baselines and candidate must be distinct MSI products in the same version and product family.'
+        }
+        if (@(Get-RelatedMsiProducts $sameVersionUpgradeCode).Count -ne 0) { throw 'The test product family is already installed.' }
+        Assert-BundleCount 0
+        $sameVersionReceipt['BaselineProductCode'] = $baselineProductCode
+        $sameVersionReceipt['CandidateProductCode'] = $candidateProductCode
+        $sameVersionReceipt | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $testRoot 'same-version-result.json') -Encoding utf8
+    }
     Invoke-Installer $setup "/install /quiet /norestart /log `"$testRoot\fresh.log`""
+    $candidateAppHash = (Get-FileHash -LiteralPath $app -Algorithm SHA256).Hash
+    $candidateProductVersion = (Get-Item -LiteralPath $app).VersionInfo.ProductVersion
+    if (($candidateProductVersion -split '\+', 2)[0] -cne $expectedVersion) { throw 'Fresh installation has an unexpected product version.' }
     $running = Start-TestApplication
     Invoke-Installer $setup "/repair /quiet /norestart /log `"$testRoot\repair.log`""
     Assert-Stopped $running
@@ -95,29 +237,74 @@ try {
     $match = [regex]::Match($checksum.Trim(), '\A([0-9a-fA-F]{64})\s+\*?(.+)\z')
     if (-not $match.Success -or $match.Groups[2].Value -cne $name -or
         (Get-FileHash -LiteralPath $previous).Hash -ine $match.Groups[1].Value) { throw 'Previous installer checksum is invalid.' }
-    Invoke-Installer 'msiexec.exe' "/i `"$previous`" /quiet /norestart /l*v `"$testRoot\previous.log`""
+    $msiexec = Join-Path ([Environment]::SystemDirectory) 'msiexec.exe'
+    Invoke-Installer $msiexec "/i `"$previous`" /quiet /norestart /l*v `"$testRoot\previous.log`""
     $running = Start-TestApplication
     Invoke-Installer $setup "/install /quiet /norestart /log `"$testRoot\upgrade.log`""
     Assert-Stopped $running
-    $properties = [xml](Get-Content (Join-Path $PSScriptRoot '..\Directory.Build.props') -Raw)
-    $expectedVersion = $properties.SelectSingleNode('/Project/PropertyGroup/VersionPrefix').InnerText
-    if ((Get-Item -LiteralPath $app).VersionInfo.ProductVersion -notlike "$expectedVersion*") { throw 'Upgrade did not install the expected version.' }
+    Assert-CandidateInstalled
     Assert-DataPreserved
     $running = Start-TestApplication
     Invoke-Installer $setup "/uninstall /quiet /norestart /log `"$testRoot\upgrade-uninstall.log`""
     Assert-Stopped $running
     if (Test-Path -LiteralPath $app) { throw 'Upgraded application was not removed.' }
     Assert-DataPreserved
+    if ($sameVersionRecovery) {
+        # Direct MSI recovery and Burn bundle recovery must each replace the old
+        # registration, even though their displayed three-part version is unchanged.
+        Assert-BundleCount 0
+        Invoke-Installer $msiexec "/i `"$baselineMsi`" /quiet /norestart /l*v `"$testRoot\same-version-msi-baseline.log`""
+        Assert-OneRelatedMsiProduct $baselineProductCode
+        $baselineAppHash = (Get-FileHash -LiteralPath $app -Algorithm SHA256).Hash
+        if ($baselineAppHash -ieq $candidateAppHash) { throw 'The baseline executable already matches the candidate; replacement was not exercised.' }
+        $running = Start-TestApplication
+        Invoke-Installer $msiexec "/i `"$candidateMsi`" /quiet /norestart /l*v `"$testRoot\same-version-msi-replace.log`""
+        Assert-Stopped $running
+        Assert-CandidateInstalled
+        Assert-OneRelatedMsiProduct $candidateProductCode
+        Assert-BundleCount 0
+        Assert-DataPreserved
+        Invoke-Installer $msiexec "/x $candidateProductCode /quiet /norestart /l*v `"$testRoot\same-version-msi-uninstall.log`""
+        if (Test-Path -LiteralPath $app) { throw 'Same-version MSI uninstall left the application.' }
+        if (@(Get-RelatedMsiProducts $sameVersionUpgradeCode).Count -ne 0) { throw 'Same-version MSI recovery left a registered product.' }
+        Assert-DataPreserved
+
+        Invoke-Installer $baselineSetup "/install /quiet /norestart /log `"$testRoot\same-version-bundle-baseline.log`""
+        Assert-OneRelatedMsiProduct $baselineProductCode
+        Assert-BundleCount 1
+        if ((Get-FileHash -LiteralPath $app -Algorithm SHA256).Hash -ine $baselineAppHash) { throw 'The baseline bundle and MSI contain different executables.' }
+        $running = Start-TestApplication
+        Invoke-Installer $setup "/install /quiet /norestart /log `"$testRoot\same-version-bundle-replace.log`""
+        Assert-Stopped $running
+        Assert-CandidateInstalled
+        Assert-OneRelatedMsiProduct $candidateProductCode
+        Assert-BundleCount 1
+        Assert-DataPreserved
+        Invoke-Installer $setup "/uninstall /quiet /norestart /log `"$testRoot\same-version-bundle-uninstall.log`""
+        if (Test-Path -LiteralPath $app) { throw 'Same-version bundle uninstall left the application.' }
+        if (@(Get-RelatedMsiProducts $sameVersionUpgradeCode).Count -ne 0) { throw 'Same-version bundle recovery left a registered MSI product.' }
+        Assert-BundleCount 0
+        Assert-DataPreserved
+        $sameVersionReceipt['BaselineApplicationSha256'] = $baselineAppHash
+        $sameVersionReceipt['InstalledApplicationSha256'] = $candidateAppHash
+        $sameVersionReceipt['InstalledProductVersion'] = $candidateProductVersion
+        $sameVersionReceipt['MsiReplacementPassed'] = $true
+        $sameVersionReceipt['BundleReplacementPassed'] = $true
+        $sameVersionReceipt['UserDataPreserved'] = $true
+        $sameVersionReceipt | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $testRoot 'same-version-result.json') -Encoding utf8
+        Write-Output 'Same-version smoke passed: exact MSI/bundle replacement, one registered product, one bundle entry and preserved data.'
+    }
     Write-Output 'Installer smoke passed: fresh install, launch, running-app repair/removal, previous-version upgrade, and user-data preservation.'
 } finally {
-    foreach ($diagnosticRoot in @($env:RDRIVE_DATA_DIR, (Join-Path $env:LOCALAPPDATA 'rdrive'))) {
-        foreach ($relative in @('logs\resodrive-ui.log', 'updates\installer-preparation.json')) {
-            $diagnostic = Join-Path $diagnosticRoot $relative
-            if (Test-Path -LiteralPath $diagnostic) {
-                $prefix = if ($diagnosticRoot -eq $env:RDRIVE_DATA_DIR) { 'isolated-' } else { 'default-' }
-                Copy-Item -LiteralPath $diagnostic -Destination (Join-Path $testRoot ($prefix + [IO.Path]::GetFileName($diagnostic) + '.log'))
+    try {
+        foreach ($diagnosticRoot in @($env:RDRIVE_DATA_DIR, (Join-Path $env:LOCALAPPDATA 'rdrive'))) {
+            foreach ($relative in @('logs\resodrive-ui.log', 'updates\installer-preparation.json')) {
+                $diagnostic = Join-Path $diagnosticRoot $relative
+                if (Test-Path -LiteralPath $diagnostic) {
+                    $prefix = if ($diagnosticRoot -eq $env:RDRIVE_DATA_DIR) { 'isolated-' } else { 'default-' }
+                    Copy-Item -LiteralPath $diagnostic -Destination (Join-Path $testRoot ($prefix + [IO.Path]::GetFileName($diagnostic) + '.log'))
+                }
             }
         }
-    }
-    $env:RDRIVE_DATA_DIR = $oldDataRoot
+    } finally { $env:RDRIVE_DATA_DIR = $oldDataRoot }
 }

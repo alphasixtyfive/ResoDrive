@@ -22,24 +22,40 @@ MSI is hidden. Direct MSI deployments retain their standard Windows Installer UI
 and launch checkbox. Silent deployments never launch the application.
 
 The MSI and bundle `UpgradeCode` values are permanent product-family identities.
-Never change them after publication. Every release must increase
-`VersionPrefix` in `Directory.Build.props`; Windows Installer versions use the
-`major.minor.build` format.
+Never change them after publication. Normal releases increase `VersionPrefix` in
+`Directory.Build.props`; Windows Installer versions use the `major.minor.build`
+format. The owner-approved 0.3.7 and 0.3.19 replacements are narrow exceptions:
+their MSI permits equal-version replacement without retaining a second product.
+WiX 5's bundle also replaces related bundles of the same version. These replacements
+require a manual Setup download because the application's update comparison still
+requires a newer version.
 
 During an upgrade, maintenance reinstall, or uninstall, ResoDrive first asks the background
-host to stop its managed work. Preparation has a 30-second deadline and its failure
+host to stop its managed work. Preparation has a 60-second deadline and its failure
 blocks maintenance. Version 0.3.7 and later reject this request when rclone reports
 pending uploads or cache errors. Close documents and resolve the displayed condition
 before retrying. Earlier installed versions cannot provide this check. A host belonging
 to a separate portable installation is left alone. The installer then closes only the
 `resodrive.exe` process running directly from this product's install directory.
-Portable copies and unrelated processes elsewhere are left running. The fallback
-wait for each process is bounded to ten seconds. Close documents before starting
+Portable copies and unrelated processes elsewhere are left running. A confirmed
+different-account installed process gets up to 42 seconds to exit naturally; a
+remaining or unverifiable process blocks maintenance. Close documents before starting
 maintenance; cached data is preserved, and setup does not guarantee that pending
 uploads have reached the server. Launching ResoDrive afterward restores drives configured
 to mount when the application starts; interrupted sync jobs are not resumed.
 
 `tests/installer-smoke.ps1` runs only on disposable GitHub-hosted Windows runners.
 CI and the release workflow verify fresh installation, application startup, repair
-and removal while running, upgrade from 0.3.6, and preservation of settings and a
-local-cache marker. Installer logs are retained even when these checks fail.
+and removal while running, upgrade from the latest earlier public version, and
+preservation of settings, a local-cache marker and a managed-copy marker. Installer
+logs are retained even when these checks fail.
+
+For a same-version recovery, additionally pass `-SameVersionBaselineMsiPath`,
+`-SameVersionBaselineSetupPath` and `-CandidateMsiPath`, with `-SetupPath` pointing
+to the candidate setup. Each installer must have its original matching `.sha256`
+sidecar. The optional gate verifies the exact frozen baseline assets before any
+installation, then exercises both MSI-to-MSI and setup-to-setup replacement. It
+checks exact installed executable hashes, a single registered MSI product and
+bundle, and unchanged disposable data. `same-version-result.json` records the
+asset hashes and product identities. The runner restriction still applies; this
+does not replace desktop UAC and prior-version updater acceptance.

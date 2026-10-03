@@ -131,11 +131,14 @@ public sealed class RcloneSyncCoordinatorTests
         var (mount, job) = CreateDefinition(enabled: false);
         using var coordinator = CreateCoordinator(mount, runner);
 
+        coordinator.MarkQueued(mount.Id, job.Id);
         var result = await coordinator.RunAsync(mount.Id, job.Id);
 
         Assert.False(result.Succeeded);
         Assert.Equal("sync.disabled", result.Error?.Code);
         Assert.Equal(0, runner.CallCount);
+        Assert.Equal(SyncLifecycle.Failed, Assert.Single(coordinator.GetSnapshots()).Lifecycle);
+        Assert.NotNull(Assert.Single(coordinator.GetSnapshots()).CompletedAt);
     }
 
     [Fact]
@@ -256,10 +259,13 @@ public sealed class RcloneSyncCoordinatorTests
         mount = mount with { Target = new MountTarget.Drive('C') };
         using var coordinator = CreateCoordinator(mount, runner);
 
+        coordinator.MarkQueued(mount.Id, job.Id);
         var result = await coordinator.RunAsync(mount.Id, job.Id);
 
         Assert.Equal("sync.recursive_path", result.Error?.Code);
         Assert.Equal(0, runner.CallCount);
+        Assert.Equal(SyncLifecycle.Failed, Assert.Single(coordinator.GetSnapshots()).Lifecycle);
+        Assert.NotNull(Assert.Single(coordinator.GetSnapshots()).CompletedAt);
     }
 
     [Fact]

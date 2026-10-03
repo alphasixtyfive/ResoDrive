@@ -62,9 +62,10 @@ internal sealed class MountOwnershipStore : IDisposable
 
     public static Process? TryOpenVerified(OwnedMount owned)
     {
+        Process? process = null;
         try
         {
-            var process = Process.GetProcessById(owned.ProcessId);
+            process = Process.GetProcessById(owned.ProcessId);
             var executable = process.MainModule?.FileName;
             if (Math.Abs((process.StartTime.ToUniversalTime() - owned.StartTimeUtc).TotalSeconds) >= 1 ||
                 !IsSameExecutablePath(executable, owned.ExecutablePath))
@@ -76,7 +77,23 @@ internal sealed class MountOwnershipStore : IDisposable
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
+            process?.Dispose();
             return null;
+        }
+    }
+
+    internal static bool IsDefinitelyGone(OwnedMount owned)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(owned.ProcessId);
+            return process.HasExited ||
+                Math.Abs((process.StartTime.ToUniversalTime() - owned.StartTimeUtc).TotalSeconds) >= 1;
+        }
+        catch (ArgumentException) { return true; }
+        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return false;
         }
     }
 
@@ -115,7 +132,10 @@ internal sealed class MountOwnershipStore : IDisposable
             return primary;
 
         var backup = await TryReadAsync(_backupPath, cancellationToken).ConfigureAwait(false);
-        return backup ?? Array.Empty<OwnedMount>();
+        if (backup is not null) return backup;
+        if (File.Exists(_path) || File.Exists(_backupPath))
+            throw new IOException("The recorded drive processes could not be read. Preserve the cache and repair the ownership records before continuing.");
+        return [];
     }
 
     private static async Task<IReadOnlyList<OwnedMount>?> TryReadAsync(
@@ -133,8 +153,14 @@ internal sealed class MountOwnershipStore : IDisposable
                 FileShare.Read,
                 16 * 1024,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
-            return await JsonSerializer.DeserializeAsync<OwnedMount[]>(stream, Options, cancellationToken).ConfigureAwait(false)
-                ?? Array.Empty<OwnedMount>();
+            if (stream.Length > 1024 * 1024) throw new IOException("Drive process records exceed the inspection limit.");
+            var mounts = await JsonSerializer.DeserializeAsync<OwnedMount[]>(stream, Options, cancellationToken).ConfigureAwait(false);
+            if (mounts is null || mounts.Any(mount => mount is null || mount.MountId == Guid.Empty ||
+                    mount.ProcessId <= 0 || mount.StartTimeUtc == default || string.IsNullOrWhiteSpace(mount.ExecutablePath) ||
+                    string.IsNullOrWhiteSpace(mount.Source) || string.IsNullOrWhiteSpace(mount.Target)) ||
+                mounts.Select(mount => mount.MountId).Distinct().Count() != mounts.Length)
+                throw new JsonException("Invalid drive process records.");
+            return mounts;
         }
         catch (Exception exception) when (exception is IOException or JsonException)
         {

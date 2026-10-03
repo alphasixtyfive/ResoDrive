@@ -5,6 +5,51 @@ namespace ResoDrive.Windows.Tests;
 
 public sealed class ManagedSyncCoordinatorTests : IDisposable
 {
+    [Theory]
+    [InlineData(SyncMode.CopyFromRemote)]
+    [InlineData(SyncMode.SyncFromRemote)]
+    public async Task ExternalDownloadCannotFollowNestedJunctionOutsideItsDestination(SyncMode mode)
+    {
+        var (mount, job) = CreateDefinition(mode);
+        var destination = Path.Combine(_fixtureRoot, "downloads");
+        Directory.CreateDirectory(destination);
+        var sentinel = Path.Combine(_paths.Root, "keep.txt");
+        await File.WriteAllTextAsync(sentinel, "protected account data");
+        var junction = Path.Combine(destination, "redirected");
+        await CreateJunctionAsync(junction, _paths.Root);
+        job = job with { ManagedLocalCopy = false, LocalPath = destination };
+        mount = mount with { SyncJobs = [job] };
+        try
+        {
+            var runner = new RecordingRunner();
+            using var coordinator = CreateCoordinator([mount], runner);
+            var result = await coordinator.RunAsync(mount.Id, job.Id);
+            Assert.Equal("sync.launch_failed", result.Error?.Code);
+            Assert.Equal(0, runner.CallCount);
+            Assert.Equal("protected account data", await File.ReadAllTextAsync(sentinel));
+        }
+        finally { Directory.Delete(junction); }
+    }
+
+    [Fact]
+    public async Task OrdinarySyncRootCannotAliasProtectedDataThroughAJunction()
+    {
+        var (mount, job) = CreateDefinition();
+        var junction = Path.Combine(_fixtureRoot, "ordinary-folder");
+        await CreateJunctionAsync(junction, _paths.Root);
+        job = job with { ManagedLocalCopy = false, LocalPath = junction };
+        mount = mount with { SyncJobs = [job] };
+        var runner = new RecordingRunner();
+        using var coordinator = CreateCoordinator([mount], runner);
+        try
+        {
+            var result = await coordinator.RunAsync(mount.Id, job.Id);
+            Assert.False(result.Succeeded);
+            Assert.Equal(0, runner.CallCount);
+            Assert.Equal(SyncLifecycle.Failed, Assert.Single(coordinator.GetSnapshots()).Lifecycle);
+        }
+        finally { Directory.Delete(junction); }
+    }
     private readonly string _fixtureRoot = Path.Combine(
         Path.GetTempPath(), "resodrive-managed-sync-tests", Guid.NewGuid().ToString("N"));
     private readonly ApplicationPaths _paths;

@@ -1,5 +1,6 @@
 using System.IO.Pipes;
 using System.Net;
+using System.Reflection;
 using System.Text.Json;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -170,7 +171,80 @@ public sealed class HostInitializationStatusTests : IDisposable
         }
     }
 
-    private async Task<HostResponse> SendAsync(string command, CancellationToken token)
+    [Fact]
+    public async Task PendingRecoveryAllowsExplicitUserExitWhileInstallerShutdownStaysStrict()
+    {
+        _paths.EnsureCreated();
+        await File.WriteAllTextAsync(_paths.SettingsFile, "{invalid settings");
+        var definition = new MountDefinition { Id = MountId.New(), DisplayName = "Disposable drive", RemoteName = "remote", Target = new MountTarget.Drive('R') };
+        using (var recovery = new MountRecoveryStore(_paths))
+            await recovery.RecordAsync(definition, null, CancellationToken.None);
+        using var http = new HttpClient(new NoNetworkHandler());
+        using var worker = new Worker(_paths, NullLogger<Worker>.Instance, new TestLifetime(), new RemoteWipeClient(http));
+        await worker.StartAsync(CancellationToken.None);
+        try
+        {
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while ((await SendAsync("status", deadline.Token)).InitializationErrorCode is null)
+                await Task.Delay(25, deadline.Token);
+            Assert.False((await SendRequestAsync(new HostRequest("shutdown", Confirmed: true), deadline.Token)).Succeeded);
+            Assert.False((await SendRequestAsync(new HostRequest("exit", Confirmed: true), deadline.Token)).Succeeded);
+            var invalid = await SendRequestAsync(new HostRequest("shutdown", Confirmed: true, AllowPendingUploads: true), deadline.Token);
+            Assert.Equal("host.invalid_override", invalid.ErrorCode);
+            invalid = await SendRequestAsync(new HostRequest("exit", AllowPendingUploads: true), deadline.Token);
+            Assert.Equal("host.invalid_override", invalid.ErrorCode);
+            Assert.True((await SendRequestAsync(new HostRequest("exit", Confirmed: true, AllowPendingUploads: true), deadline.Token)).Succeeded);
+            using var preserved = new MountRecoveryStore(_paths);
+            Assert.Single(preserved.GetEntries());
+        }
+        finally { await worker.StopAsync(CancellationToken.None); }
+    }
+
+    private Task<HostResponse> SendAsync(string command, CancellationToken token) =>
+        SendRequestAsync(new HostRequest(command), token);
+
+    [Fact]
+    public async Task AcceptedShutdownStopsHostWhenClientDisconnectsBeforeReply()
+    {
+        _paths.EnsureCreated();
+        using var http = new HttpClient(new NoNetworkHandler());
+        var lifetime = new TestLifetime();
+        using var worker = new Worker(_paths, NullLogger<Worker>.Instance, lifetime, new RemoteWipeClient(http));
+        await worker.StartAsync(CancellationToken.None);
+        try
+        {
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (!HostStatusPresentation.HasUsableMountStatus(await SendAsync("status", deadline.Token)))
+                await Task.Delay(25, deadline.Token);
+
+            // Keep the handler waiting after it reads the complete request, then
+            // disconnect before releasing it to accept shutdown and write its reply.
+            var gate = (SemaphoreSlim)typeof(Worker).GetField("_reloadGate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(worker)!;
+            await gate.WaitAsync(deadline.Token);
+            try
+            {
+                using var pipe = new NamedPipeClientStream(".", HostProtocol.GetPipeName(_paths),
+                    PipeDirection.InOut, PipeOptions.Asynchronous);
+                await pipe.ConnectAsync(deadline.Token);
+                await HostProtocol.WriteAsync(pipe, new HostRequest("shutdown", Confirmed: true,
+                    ExpectedHostBaseDirectory: AppContext.BaseDirectory), deadline.Token);
+                var drained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                // Pipe drain blocks; use a dedicated thread so a one-CPU worker
+                // pool remains free to read and process the server request.
+                new Thread(() =>
+                {
+                    try { pipe.WaitForPipeDrain(); drained.TrySetResult(); }
+                    catch (Exception exception) { drained.TrySetException(exception); }
+                }) { IsBackground = true }.Start();
+                await drained.Task.WaitAsync(deadline.Token);
+            }
+            finally { gate.Release(); }
+            await lifetime.Stopping.Task.WaitAsync(deadline.Token);
+        }
+        finally { await worker.StopAsync(CancellationToken.None); }
+    }
+
+    private async Task<HostResponse> SendRequestAsync(HostRequest request, CancellationToken token)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
@@ -178,7 +252,7 @@ public sealed class HostInitializationStatusTests : IDisposable
             PipeDirection.InOut, PipeOptions.Asynchronous);
         await pipe.ConnectAsync(timeout.Token);
         await HostProtocol.WriteAsync(pipe,
-            new HostRequest(command, ExpectedHostBaseDirectory: AppContext.BaseDirectory),
+            request with { ExpectedHostBaseDirectory = AppContext.BaseDirectory },
             timeout.Token);
         return (await HostProtocol.ReadAsync<HostResponse>(pipe, timeout.Token))!;
     }
@@ -198,9 +272,10 @@ public sealed class HostInitializationStatusTests : IDisposable
 
     private sealed class TestLifetime : IHostApplicationLifetime
     {
+        public TaskCompletionSource Stopping { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public CancellationToken ApplicationStarted => CancellationToken.None;
         public CancellationToken ApplicationStopping => CancellationToken.None;
         public CancellationToken ApplicationStopped => CancellationToken.None;
-        public void StopApplication() { }
+        public void StopApplication() => Stopping.TrySetResult();
     }
 }

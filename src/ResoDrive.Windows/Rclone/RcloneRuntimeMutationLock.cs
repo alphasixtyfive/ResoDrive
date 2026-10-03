@@ -28,7 +28,7 @@ internal static class RcloneRuntimeMutationLock
                         FileOptions.Asynchronous);
                     return new Releaser(stream, lockPath);
                 }
-                catch (IOException)
+                catch (IOException exception) when ((exception.HResult & 0xFFFF) is 32 or 33)
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken)
                         .ConfigureAwait(false);
