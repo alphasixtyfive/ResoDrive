@@ -1,5 +1,6 @@
 using System.IO.Pipes;
 using System.Net;
+using System.Reflection;
 using System.Text.Json;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -213,14 +214,31 @@ public sealed class HostInitializationStatusTests : IDisposable
         try
         {
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            using (var pipe = new NamedPipeClientStream(".", HostProtocol.GetPipeName(_paths),
-                PipeDirection.InOut, PipeOptions.Asynchronous))
+            while (!HostStatusPresentation.HasUsableMountStatus(await SendAsync("status", deadline.Token)))
+                await Task.Delay(25, deadline.Token);
+
+            // Keep the handler waiting after it reads the complete request, then
+            // disconnect before releasing it to accept shutdown and write its reply.
+            var gate = (SemaphoreSlim)typeof(Worker).GetField("_reloadGate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(worker)!;
+            await gate.WaitAsync(deadline.Token);
+            try
             {
+                using var pipe = new NamedPipeClientStream(".", HostProtocol.GetPipeName(_paths),
+                    PipeDirection.InOut, PipeOptions.Asynchronous);
                 await pipe.ConnectAsync(deadline.Token);
-                await HostProtocol.WriteAsync(pipe,
-                    new HostRequest("shutdown", Confirmed: true, ExpectedHostBaseDirectory: AppContext.BaseDirectory),
-                    deadline.Token);
+                await HostProtocol.WriteAsync(pipe, new HostRequest("shutdown", Confirmed: true,
+                    ExpectedHostBaseDirectory: AppContext.BaseDirectory), deadline.Token);
+                var drained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                // Pipe drain blocks; use a dedicated thread so a one-CPU worker
+                // pool remains free to read and process the server request.
+                new Thread(() =>
+                {
+                    try { pipe.WaitForPipeDrain(); drained.TrySetResult(); }
+                    catch (Exception exception) { drained.TrySetException(exception); }
+                }) { IsBackground = true }.Start();
+                await drained.Task.WaitAsync(deadline.Token);
             }
+            finally { gate.Release(); }
             await lifetime.Stopping.Task.WaitAsync(deadline.Token);
         }
         finally { await worker.StopAsync(CancellationToken.None); }

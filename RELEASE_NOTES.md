@@ -1,4 +1,4 @@
-Explorer can finish copying a file before it reaches the server. ResoDrive 0.3.19 makes that remaining work easier to see: click the tray icon for a small upload flyout with file progress, speed and queued files. Right-click the icon to open ResoDrive or use its usual commands.
+Explorer can finish copying a file before it reaches the server. ResoDrive 0.3.20 makes that remaining work easier to see: click the tray icon for a small upload flyout with file progress, speed and queued files. Right-click the icon to open ResoDrive or use its usual commands.
 
 You get a warning before disconnecting or exiting with unfinished uploads. If you choose to leave anyway, files already in the local cache stay there for the next connection. Updates wait until uploads can be verified as complete. Windows shutdown and automatic sleep protection also stay active while work is pending.
 

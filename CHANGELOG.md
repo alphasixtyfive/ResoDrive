@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.19] - 2026-10-03
+## [0.3.20] - 2026-10-03
 
 - Click the tray icon to see a compact upload progress flyout. It sizes to the queue, keeps scrolling out of the way, and shows when a file is waiting to close or retry.
 - Keep pending uploads visible after Explorer finishes copying. Preserve cached files when a drive disconnects or ResoDrive exits, and recover interrupted uploads with their original connection.
