@@ -47,7 +47,7 @@ New-Item -ItemType Directory -Path (Split-Path -Parent $managedCopy) -Force | Ou
 [IO.File]::WriteAllText($managedCopy, 'Managed copies survive upgrades and uninstall; only an accepted remote wipe removes them.')
 $managedCopyHash = (Get-FileHash -LiteralPath $managedCopy).Hash
 
-function Invoke-Installer([string]$Executable, [string]$Arguments) {
+function Invoke-Installer([string]$Executable, [string]$Arguments, [switch]$ExpectFailure) {
     # Windows Installer's service does not inherit process-local RDRIVE_DATA_DIR.
     # Pass the isolated root through the supported bundle/MSI property instead.
     if ([IO.Path]::GetFileName($Executable) -ieq 'msiexec.exe') {
@@ -58,7 +58,11 @@ function Invoke-Installer([string]$Executable, [string]$Arguments) {
     $process = Start-Process -FilePath $Executable -ArgumentList $Arguments -WindowStyle Hidden -PassThru
     try {
         if (-not $process.WaitForExit(180000)) { throw "Installer timed out: $Arguments" }
-        if ($process.ExitCode -notin @(0,3010)) { throw "Installer failed ($($process.ExitCode)): $Arguments" }
+        if ($ExpectFailure) {
+            if ($process.ExitCode -in @(0,3010)) { throw "Installer unexpectedly accepted an unsupported operation: $Arguments" }
+        } elseif ($process.ExitCode -notin @(0,3010)) {
+            throw "Installer failed ($($process.ExitCode)): $Arguments"
+        }
     } finally { $process.Dispose() }
 }
 function Assert-DataPreserved {
@@ -159,6 +163,16 @@ function Assert-BundleCount([int]$Expected) {
     if ($entries.Count -ne $Expected) { throw "Expected $Expected related bundle entries, found: $($entries -join ', ')." }
 }
 
+function Assert-OneRemovableAppEntry {
+    Assert-OneRelatedMsiProduct $candidateProductCode
+    Assert-BundleCount 0
+    $entry = Get-ItemProperty -LiteralPath "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$candidateProductCode"
+    $hidden = $entry.PSObject.Properties['SystemComponent']
+    if (($null -ne $hidden -and $hidden.Value -eq 1) -or $entry.DisplayVersion -ne $expectedVersion) {
+        throw 'The current MSI is not a visible, correctly versioned Windows app entry.'
+    }
+}
+
 function Assert-VerifiedAsset([string]$Path) {
     $checksum = [IO.File]::ReadAllText($Path + '.sha256').Trim()
     $match = [regex]::Match($checksum, '\A([0-9a-fA-F]{64})\s+\*?(.+)\z')
@@ -179,6 +193,10 @@ function Assert-CandidateInstalled {
 $sameVersionPaths = @($SameVersionBaselineMsiPath, $SameVersionBaselineSetupPath, $CandidateMsiPath)
 $sameVersionRecovery = @($sameVersionPaths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -gt 0
 $bundleUpgradeCode = '{5B94F457-820F-4B41-B609-071179764B08}'
+$msiexec = Join-Path ([Environment]::SystemDirectory) 'msiexec.exe'
+$candidateMsi = Join-Path ([IO.Path]::GetDirectoryName($setup)) "resodrive-win-x64-$expectedVersion.msi"
+$candidateProductCode = Get-MsiProperty $candidateMsi 'ProductCode'
+$sameVersionUpgradeCode = Get-MsiProperty $candidateMsi 'UpgradeCode'
 $sameVersionReceipt = $null
 try {
     if ($sameVersionRecovery) {
@@ -217,14 +235,20 @@ try {
     $candidateAppHash = (Get-FileHash -LiteralPath $app -Algorithm SHA256).Hash
     $candidateProductVersion = (Get-Item -LiteralPath $app).VersionInfo.ProductVersion
     if (($candidateProductVersion -split '\+', 2)[0] -cne $expectedVersion) { throw 'Fresh installation has an unexpected product version.' }
+    Assert-OneRemovableAppEntry
+    Invoke-Installer $setup "/uninstall /quiet /norestart /log `"$testRoot\unsupported-setup-uninstall.log`"" -ExpectFailure
+    Assert-CandidateInstalled
+    Assert-OneRemovableAppEntry
     $running = Start-TestApplication
     Invoke-Installer $setup "/repair /quiet /norestart /log `"$testRoot\repair.log`""
     Assert-Stopped $running
+    Assert-OneRemovableAppEntry
     Assert-DataPreserved
     $running = Start-TestApplication
-    Invoke-Installer $setup "/uninstall /quiet /norestart /log `"$testRoot\uninstall.log`""
+    Invoke-Installer $msiexec "/x $candidateProductCode /quiet /norestart /l*v `"$testRoot\uninstall.log`""
     Assert-Stopped $running
     if (Test-Path -LiteralPath $app) { throw 'Uninstall left the application executable.' }
+    Assert-BundleCount 0
     Assert-DataPreserved
 
     # Upgrade the preceding public MSI while its application is running.
@@ -237,17 +261,55 @@ try {
     $match = [regex]::Match($checksum.Trim(), '\A([0-9a-fA-F]{64})\s+\*?(.+)\z')
     if (-not $match.Success -or $match.Groups[2].Value -cne $name -or
         (Get-FileHash -LiteralPath $previous).Hash -ine $match.Groups[1].Value) { throw 'Previous installer checksum is invalid.' }
-    $msiexec = Join-Path ([Environment]::SystemDirectory) 'msiexec.exe'
     Invoke-Installer $msiexec "/i `"$previous`" /quiet /norestart /l*v `"$testRoot\previous.log`""
     $running = Start-TestApplication
-    Invoke-Installer $setup "/install /quiet /norestart /log `"$testRoot\upgrade.log`""
+    Invoke-Installer $msiexec "/i `"$candidateMsi`" /quiet /norestart /l*v `"$testRoot\upgrade.log`""
     Assert-Stopped $running
     Assert-CandidateInstalled
+    Assert-OneRemovableAppEntry
     Assert-DataPreserved
     $running = Start-TestApplication
-    Invoke-Installer $setup "/uninstall /quiet /norestart /log `"$testRoot\upgrade-uninstall.log`""
+    Invoke-Installer $msiexec "/x $candidateProductCode /quiet /norestart /l*v `"$testRoot\upgrade-uninstall.log`""
     Assert-Stopped $running
     if (Test-Path -LiteralPath $app) { throw 'Upgraded application was not removed.' }
+    Assert-DataPreserved
+
+    # A legacy Setup owns a hidden MSI. Reject MSI-only migration before any
+    # preparation or replacement, then let native Burn remove its own old entry.
+    $previousSetupName = "resodrive-win-x64-$PreviousVersion-setup.exe"
+    $previousSetup = Join-Path $testRoot $previousSetupName
+    $previousSetupUrl = "https://github.com/alphasixtyfive/ResoDrive/releases/download/v$PreviousVersion/$previousSetupName"
+    Invoke-WebRequest -Uri $previousSetupUrl -OutFile $previousSetup
+    Invoke-WebRequest -Uri "$previousSetupUrl.sha256" -OutFile ($previousSetup + '.sha256')
+    Assert-VerifiedAsset $previousSetup | Out-Null
+    Invoke-Installer $previousSetup "/install /quiet /norestart /log `"$testRoot\legacy-setup.log`""
+    Assert-BundleCount 1
+    $legacyHash = (Get-FileHash -LiteralPath $app).Hash
+    $running = Start-TestApplication
+    $blockedLog = Join-Path $testRoot 'legacy-msi-blocked.log'
+    Invoke-Installer $msiexec "/i `"$candidateMsi`" /quiet /norestart /l*v `"$blockedLog`"" -ExpectFailure
+    if ((Get-FileHash -LiteralPath $app).Hash -ine $legacyHash -or $running.HasExited) {
+        throw 'The rejected MSI migration changed or stopped the legacy installation.'
+    }
+    if (-not (Select-String -LiteralPath $blockedLog -Pattern 'Use ResoDrive-Setup\.exe to update this installation' -Quiet) -or
+        (Select-String -LiteralPath $blockedLog -Pattern 'Doing action: PrepareInstalledResoDriveForUpgrade' -Quiet)) {
+        throw 'MSI-only legacy migration did not stop at its actionable launch condition.'
+    }
+    Assert-BundleCount 1
+    Assert-DataPreserved
+    Invoke-Installer $setup "/install /quiet /norestart /log `"$testRoot\legacy-setup-migration.log`""
+    Assert-Stopped $running
+    Assert-CandidateInstalled
+    Assert-OneRemovableAppEntry
+    Assert-DataPreserved
+    $running = Start-TestApplication
+    Invoke-Installer $msiexec "/fa $candidateProductCode /quiet /norestart /l*v `"$testRoot\migrated-msi-repair.log`""
+    Assert-Stopped $running
+    Assert-OneRemovableAppEntry
+    Assert-DataPreserved
+    Invoke-Installer $msiexec "/x $candidateProductCode /quiet /norestart /l*v `"$testRoot\migrated-msi-uninstall.log`""
+    if (Test-Path -LiteralPath $app) { throw 'The migrated MSI could not remove the application.' }
+    Assert-BundleCount 0
     Assert-DataPreserved
     if ($sameVersionRecovery) {
         # Direct MSI recovery and Burn bundle recovery must each replace the old
@@ -278,9 +340,9 @@ try {
         Assert-Stopped $running
         Assert-CandidateInstalled
         Assert-OneRelatedMsiProduct $candidateProductCode
-        Assert-BundleCount 1
+        Assert-BundleCount 0
         Assert-DataPreserved
-        Invoke-Installer $setup "/uninstall /quiet /norestart /log `"$testRoot\same-version-bundle-uninstall.log`""
+        Invoke-Installer $msiexec "/x $candidateProductCode /quiet /norestart /l*v `"$testRoot\same-version-bundle-uninstall.log`""
         if (Test-Path -LiteralPath $app) { throw 'Same-version bundle uninstall left the application.' }
         if (@(Get-RelatedMsiProducts $sameVersionUpgradeCode).Count -ne 0) { throw 'Same-version bundle recovery left a registered MSI product.' }
         Assert-BundleCount 0
@@ -292,9 +354,21 @@ try {
         $sameVersionReceipt['BundleReplacementPassed'] = $true
         $sameVersionReceipt['UserDataPreserved'] = $true
         $sameVersionReceipt | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $testRoot 'same-version-result.json') -Encoding utf8
-        Write-Output 'Same-version smoke passed: exact MSI/bundle replacement, one registered product, one bundle entry and preserved data.'
+        Write-Output 'Same-version smoke passed: exact MSI/Setup replacement, one removable MSI entry and preserved data.'
     }
-    Write-Output 'Installer smoke passed: fresh install, launch, running-app repair/removal, previous-version upgrade, and user-data preservation.'
+    [ordered]@{
+        Passed = $true
+        Version = $expectedVersion
+        PreviousPublicVersion = $PreviousVersion
+        OneRemovableMsiEntry = $true
+        RetainedSetupBundleEntries = 0
+        DirectMsiUpgradePassed = $true
+        LegacyMsiUpgradeRejectedBeforePreparation = $true
+        LegacySetupMigrationPassed = $true
+        RunningAppRepairAndRemovalPassed = $true
+        UserDataPreserved = $true
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $testRoot 'installer-ownership-result.json') -Encoding utf8
+    Write-Output 'Installer smoke passed: one removable app entry, fresh install, running-app repair/removal, direct MSI upgrade, blocked legacy MSI migration, native Setup migration and preserved user data.'
 } finally {
     try {
         foreach ($diagnosticRoot in @($env:RDRIVE_DATA_DIR, (Join-Path $env:LOCALAPPDATA 'rdrive'))) {

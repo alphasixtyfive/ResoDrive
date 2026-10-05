@@ -37,14 +37,47 @@ public sealed class InstallerPackageTests
     }
 
     [Fact]
-    public void SetupUsesBrandedNativeThemeAndOwnsInstalledAppsEntry()
+    public void SetupUsesBrandedNativeTheme()
     {
         XNamespace bal = "http://wixtoolset.org/schemas/v4/wxs/bal";
         var document = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Bundle.wxs"));
         var application = Assert.Single(document.Descendants(bal + "WixStandardBootstrapperApplication"));
         Assert.Equal("SetupTheme.xml", (string?)application.Attribute("ThemeFile"));
         Assert.Equal("[ProgramFiles64Folder]rdrive\\resodrive.exe", (string?)application.Attribute("LaunchTarget"));
-        Assert.Equal("no", (string?)Assert.Single(document.Descendants(Wix + "MsiPackage")).Attribute("Visible"));
+    }
+
+    [Fact]
+    public void SetupLeavesInstalledAppsAndProductMaintenanceToTheMsi()
+    {
+        var document = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Bundle.wxs"));
+        var bundle = Assert.Single(document.Descendants(Wix + "Bundle"));
+        var chain = Assert.Single(bundle.Elements(Wix + "Chain"));
+        var packages = chain.Elements().Where(element => element.Name.LocalName.EndsWith("Package", StringComparison.Ordinal)).ToArray();
+        var application = Assert.Single(packages, package => package.Name == Wix + "MsiPackage");
+
+        Assert.Equal("yes", (string?)application.Attribute("Visible"));
+        Assert.Equal("yes", (string?)application.Attribute("Vital"));
+        Assert.Same(application, packages[^1]);
+        Assert.All(packages, package => Assert.Equal("yes", (string?)package.Attribute("Permanent")));
+        Assert.Null(bundle.Attribute("DisableModify"));
+        Assert.Null(bundle.Attribute("DisableRemove"));
+
+        var fromSetup = Assert.Single(application.Elements(Wix + "MsiProperty"), property =>
+            (string?)property.Attribute("Name") == "RDRIVE_FROM_SETUP");
+        Assert.Equal("1", (string?)fromSetup.Attribute("Value"));
+        Assert.Null(fromSetup.Attribute("Condition"));
+    }
+
+    [Fact]
+    public void SetupRejectsAppRemovalBeforePlanningAndExplainsWindowsRemoval()
+    {
+        XNamespace bal = "http://wixtoolset.org/schemas/v4/wxs/bal";
+        var document = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Bundle.wxs"));
+        var condition = Assert.Single(document.Descendants(bal + "Condition"));
+
+        Assert.Equal("WixBundleCommandLineAction <> 4", (string?)condition.Attribute("Condition"));
+        Assert.Contains("Windows Settings > Apps > Installed apps", (string?)condition.Attribute("Message"));
+        Assert.Contains("Uninstall", (string?)condition.Attribute("Message"));
     }
 
     [Fact]

@@ -10,6 +10,11 @@
     UpgradeCode="$(var.ResoDriveBundleUpgradeCode)"
     IconSourceFile="$(var.IconSource)"
   >
+    <!-- WiX 5 checks BA conditions before planning; its command-line Uninstall action is 4. -->
+    <bal:Condition
+      Condition="WixBundleCommandLineAction &lt;&gt; 4"
+      Message="To remove ResoDrive, open Windows Settings &gt; Apps &gt; Installed apps and choose Uninstall."
+    />
     <BootstrapperApplication>
       <bal:WixStandardBootstrapperApplication
         Theme="hyperlinkLicense" ThemeFile="SetupTheme.xml"
@@ -46,7 +51,9 @@
           Size="$(var.DotNetDesktopRuntimeSize)"
         />
       </ExePackage>
-      <MsiPackage SourceFile="$(var.MsiSource)" Compressed="yes" Vital="yes" Visible="no">
+      <!-- Windows Installer owns app maintenance; Burn only installs this final package. -->
+      <MsiPackage SourceFile="$(var.MsiSource)" Compressed="yes" Vital="yes" Permanent="yes" Visible="yes">
+        <MsiProperty Name="RDRIVE_FROM_SETUP" Value="1" />
         <MsiProperty Name="RDRIVE_DATA_ROOT" Value="[ResoDriveDataRoot]" Condition="ResoDriveDataRoot" />
       </MsiPackage>
     </Chain>

@@ -31,6 +31,10 @@ public repository before publishing.
    update other release-facing documentation as needed.
 3. Run `./build.ps1` on Windows and smoke-test the setup executable, portable
    package, and MSI. Complete the UAC upgrade checks below before publishing.
+   Verify that Setup leaves one visible, removable MSI entry and no retained
+   bundle entry. Cover both a previous direct-MSI installation and an older
+   Setup-owned installation: reject the latter's MSI-only upgrade before
+   preparation, then migrate it through Setup and verify repair/removal.
 4. Commit the release and create an annotated tag matching the version exactly,
    for example `git tag -a v0.3.0 -m "ResoDrive 0.3.0"`.
 5. Push the commit and tag. The Release workflow rebuilds and tests from the tag,
@@ -40,6 +44,9 @@ public repository before publishing.
    desktop UAC and actual prior-version updater checks using those exact assets.
    Record installer outcome, installed commit and preservation of account data.
    Do not rebuild or replace the accepted assets.
+   Use the exact Setup as well when a legacy bundle remains on the test PC.
+   Confirm its native migration removes the old bundle without removing the
+   current MSI, changing user data, or retaining its own bundle registration.
 7. Publish the accepted draft and mark it latest. Confirm that Settings >
    Components > ResoDrive discovers the published version.
 

@@ -23,6 +23,19 @@
 
     <Icon Id="resodrive.ico" SourceFile="$(var.IconSource)" />
     <Property Id="ARPPRODUCTICON" Value="resodrive.ico" />
+    <Property Id="RDRIVE_FROM_SETUP" Secure="yes" />
+    <!-- A legacy hidden MSI still has a visible Burn owner. Let Setup migrate
+         that owner natively; an MSI-only update would leave two removable entries. -->
+    <Property Id="RDRIVE_PREVIOUS_SYSTEM_COMPONENT" Secure="yes">
+      <RegistrySearch
+        Id="PreviousSystemComponent"
+        Root="HKLM"
+        Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\[WIX_UPGRADE_DETECTED]"
+        Name="SystemComponent"
+        Type="raw"
+        Bitness="always64"
+      />
+    </Property>
     <Property Id="RDRIVE_DATA_ROOT" Secure="yes" />
     <SetProperty Id="RDRIVE_DATA_ROOT" Value="[LocalAppDataFolder]rdrive" Before="CostFinalize" Sequence="execute" Condition="NOT RDRIVE_DATA_ROOT" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
@@ -37,6 +50,10 @@
     <Launch
       Condition="Installed OR DOTNET_DESKTOP_RUNTIME_CHECK = 0"
       Message="$(var.ResoDriveProductName) requires the .NET 10 Desktop Runtime. Run ResoDrive-Setup.exe to install it automatically."
+    />
+    <Launch
+      Condition="Installed OR NOT WIX_UPGRADE_DETECTED OR RDRIVE_FROM_SETUP = &quot;1&quot; OR (RDRIVE_PREVIOUS_SYSTEM_COMPONENT &lt;&gt; &quot;#1&quot; AND NOT (WIX_UPGRADE_DETECTED &gt;&lt; &quot;;&quot;))"
+      Message="Use ResoDrive-Setup.exe to update this installation. Setup will replace its older installer entry and preserve your settings."
     />
 
     <StandardDirectory Id="ProgramFiles64Folder">
@@ -108,7 +125,12 @@
       Impersonate="yes"
     />
 
+    <InstallUISequence>
+      <FindRelatedProducts Before="AppSearch" />
+    </InstallUISequence>
+
     <InstallExecuteSequence>
+      <FindRelatedProducts Before="AppSearch" />
       <!--
         Drain work before replacing or removing installed files. Match processes
         by installation path so portable copies are never stopped.

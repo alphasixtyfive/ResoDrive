@@ -1,5 +1,26 @@
 # September 2026: immediate update failure (1603 / 1722)
 
+## October 2026: duplicate Windows app entries
+
+Desktop acceptance found that the public MSI updater could upgrade an app
+installed by Setup while leaving the older visible Burn entry behind. The new
+MSI was also visible, so Windows listed two versions of ResoDrive. Hiding the
+new MSI would be worse: the old bundle can remove only its old ProductCode and
+would leave the current application without a visible removal entry.
+
+The MSI now owns repair/removal. Setup keeps a permanent prerequisite chain,
+with the visible, vital application MSI last; WiX removes the temporary bundle
+registration after successful completion. Keep native reboot/resume state intact.
+An older hidden MSI must be upgraded through Setup once, so Burn can retire its
+related bundle natively. An MSI-only attempt stops at an actionable launch
+condition before preparation or file replacement. The explicit Setup property
+does not bypass authenticated shutdown or upload protection.
+
+Test this ownership through real installs: fresh Setup, direct MSI updates,
+blocked legacy MSI migration, native legacy Setup migration, running-app repair
+and removal, one visible removable entry, and preserved user-data hashes. Never
+delete installer registry keys or force-remove cached bundles to pass a check.
+
 ## Confirmed cause
 
 The installed application was still **0.3.6**, even after attempts to install

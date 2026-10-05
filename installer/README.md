@@ -16,10 +16,36 @@ Windows Installed apps, and preserves all per-user data in
 `%LOCALAPPDATA%\rdrive` during upgrades and uninstall.
 
 The setup EXE uses a branded native WiX theme with the ResoDrive logo, installation
-progress, repair/removal pages, a setup-log link on failure, and an **Open ResoDrive**
-button after installation. The bundle owns the Installed apps entry; its embedded
-MSI is hidden. Direct MSI deployments retain their standard Windows Installer UI
-and launch checkbox. Silent deployments never launch the application.
+progress, a setup-log link on failure, and an **Open ResoDrive** button after
+installation. It is a temporary prerequisite launcher: the visible MSI owns the
+Installed apps entry whether installed directly or through Setup. Both chained
+packages are permanent from Burn's perspective, so Burn removes its own
+registration after completion. An interrupted installation or initiated restart
+can retain temporary registration for recovery. Do not hide a retained bundle
+registration with `DisableModify` or `DisableRemove`.
+
+Repair and remove ResoDrive through Windows or the MSI. Burn's `Permanent="yes"`
+does not make the MSI itself permanent or prevent Windows Installer from removing
+it. Keep the application MSI last and vital: its own transaction still rolls back
+on failure, but Burn will not remove a successfully installed permanent package
+if a later chain step fails. Direct MSI deployments retain their standard Windows
+Installer UI and launch checkbox. Silent deployments never launch the application.
+
+Setup rejects `/uninstall` with instructions to remove ResoDrive through Windows
+Installed apps. Its full-UI `/repair` can open the installation page because the
+completed bundle is no longer registered; use Windows or the MSI for interactive
+repair. An automated Setup repair needs `/repair /passive /norestart` or quiet
+mode so WixStdBA retains the requested repair action.
+
+A legacy installation with a hidden MSI and a visible setup bundle needs one
+upgrade through the newer Setup to transfer maintenance to the visible MSI and
+remove the older bundle through Burn. Direct MSI upgrades of those installations
+are blocked with an instruction to use Setup. Merely carrying the old MSI's
+hidden state forward would leave the old bundle unable to remove the upgraded app.
+
+These ownership rules follow the pinned WiX 5.0.2 engine's
+[package registration flags](https://github.com/wixtoolset/wix/blob/v5.0.2/src/burn/engine/package.cpp)
+and [final registration calculation](https://github.com/wixtoolset/wix/blob/v5.0.2/src/burn/engine/apply.cpp).
 
 MSI or the setup bundle owns routine installation progress. Preparation runs in
 the background under the existing MSI action text and must not open a second
@@ -63,6 +89,8 @@ to the candidate setup. Each installer must have its original matching `.sha256`
 sidecar. The optional gate verifies the exact frozen baseline assets before any
 installation, then exercises both MSI-to-MSI and setup-to-setup replacement. It
 checks exact installed executable hashes, a single registered MSI product and
-bundle, and unchanged disposable data. `same-version-result.json` records the
+visible Installed apps entry, native removal of older bundle registrations, no
+retained completed candidate bundle, and unchanged disposable data.
+`same-version-result.json` records the
 asset hashes and product identities. The runner restriction still applies; this
 does not replace desktop UAC and prior-version updater acceptance.

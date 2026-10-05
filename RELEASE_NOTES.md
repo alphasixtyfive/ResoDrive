@@ -6,7 +6,8 @@ This update cleans up drive settings, transfer status and the log, and fixes a f
 - Setup and sync catch invalid inputs before connecting or saving. Errors appear beside the relevant controls, and custom values are preserved when an option is switched off.
 - The log shows compact entries with timestamps, useful details and room for the scrollbar. Extra event popups and oversized blocks are gone.
 - Installation and updates use one progress window. Pending uploads still block installation and explain what needs attention.
+- Windows keeps one app entry for repair and removal. Setup no longer leaves a separate entry behind after installing the app.
 
-This release includes all of the changes from the withdrawn 0.3.25 release, along with the fixes reviewed in the local 0.3.26 test build.
+This release includes all of the changes from the withdrawn 0.3.25 update and the fixes reviewed in the local test builds.
 
-Download **ResoDrive-Setup.exe** below, or check for updates in ResoDrive Settings. Upgrading preserves your settings and cache.
+Download **ResoDrive-Setup.exe** below. If an older version was installed using Setup, run this download once to replace its old installer entry; its in-app updater will direct you to Setup for this update. After that, you can use the in-app updater normally. Upgrading preserves your settings and cache.
