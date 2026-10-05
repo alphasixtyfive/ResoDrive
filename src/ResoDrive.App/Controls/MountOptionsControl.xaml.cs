@@ -1,4 +1,3 @@
-using System.Windows;
 using System.Windows.Controls;
 using ResoDrive.Core.Validation;
 using WpfComboBox = System.Windows.Controls.ComboBox;
@@ -11,8 +10,8 @@ public partial class MountOptionsControl : System.Windows.Controls.UserControl
     private bool _loading;
     private static readonly Choice[] Modes =
     [
-        new("Read and write cache (recommended)", "full"),
-        new("Writes only", "writes"), new("Minimal caching", "minimal"), new("No disk cache", "off")
+        new("Read and write", "full"),
+        new("Writes only", "writes"), new("Minimal", "minimal"), new("Off", "off")
     ];
     private static readonly Choice[] Sizes =
     [
@@ -28,10 +27,6 @@ public partial class MountOptionsControl : System.Windows.Controls.UserControl
         ModeBox.ItemsSource = Modes;
         SizeBox.ItemsSource = Sizes;
         AgeBox.ItemsSource = Ages;
-        SizeBox.AddHandler(System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent,
-            new TextChangedEventHandler(Options_TextChanged));
-        AgeBox.AddHandler(System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent,
-            new TextChangedEventHandler(Options_TextChanged));
         LoadArguments([], newMount: true);
     }
 
@@ -74,41 +69,19 @@ public partial class MountOptionsControl : System.Windows.Controls.UserControl
         box.SelectedItem is Choice choice && box.Text == choice.Label ? choice.Value : box.Text.Trim();
 
     private void Option_Changed(object sender, SelectionChangedEventArgs e) => UpdateHints();
-    private void Options_TextChanged(object sender, TextChangedEventArgs e) => UpdateSummary();
-    private void Summary_Expanded(object sender, RoutedEventArgs e) => UpdateSummary();
 
     private void UpdateHints()
     {
-        if (_loading || ModeHint is null || SizeBox is null || AgeBox is null) return;
+        if (_loading || ModeBox is null || SizeBox is null || AgeBox is null) return;
         var mode = ModeBox.SelectedValue as string;
         SizeBox.IsEnabled = AgeBox.IsEnabled = mode != "off";
-        ModeHint.Text = mode switch
+        ModeBox.ToolTip = mode switch
         {
-            "full" => "Caches downloaded data locally for repeated access, as well as files being written.",
-            "writes" when _options.UsesLegacyCacheDefault => "Legacy default. Select Read and write cache to cache downloads as well.",
-            "writes" => "Files opened read-only are read from the server without a disk read cache.",
-            "minimal" => "Uses disk caching for files opened for both reading and writing. Some applications may not work correctly.",
-            _ => "Disables disk caching. Some applications may not work correctly. Size and retention settings are retained."
+            "full" => "Caches reads and writes locally.",
+            "writes" => "Caches writes. Reads come from the server.",
+            "minimal" => "Caches files opened for both reading and writing. Some apps may be incompatible.",
+            _ => "Disables disk caching. Some apps may be incompatible."
         };
-        UpdateSummary();
-    }
-
-    private void UpdateSummary()
-    {
-        if (_loading || SummaryBox is null || ArgumentsBox is null || ModeBox.SelectedValue is null) return;
-        if (!TryGetArguments(_options.NetworkMode, out var arguments, out var error))
-        {
-            SummaryBox.Text = error;
-            return;
-        }
-        var cache = new RcloneMountOptions(arguments);
-        SummaryBox.Text = string.Join(Environment.NewLine,
-            "Cache mode: " + cache.CacheMode,
-            "Cache size target: " + cache.CacheSize,
-            "Cache retention: " + cache.CacheAge,
-            "Directory cache: " + (RcloneMountOptions.Value(arguments, "--dir-cache-time") ?? "5m (rclone default)"),
-            "Connection timeout: " + (RcloneMountOptions.Value(arguments, "--contimeout") ?? "1m (rclone default)"),
-            "I/O idle timeout: " + (RcloneMountOptions.Value(arguments, "--timeout") ?? "5m (rclone default)"));
     }
 
     private sealed record Choice(string Label, string Value);

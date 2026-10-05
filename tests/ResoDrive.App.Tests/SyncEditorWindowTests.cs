@@ -37,6 +37,8 @@ public sealed class SyncEditorWindowTests
                 VerifyExistingExternalJob(paths, enrolled, registered);
                 VerifyExistingManagedJob(paths, enrolled, registered);
                 TransfersWindowTests.VerifyWithApplicationResources();
+                MountEditorWindowTests.VerifyWithApplicationResources();
+                LogWindowTests.VerifyWithApplicationResources();
                 Assert.False(Directory.Exists(paths.Root));
             }
             catch (Exception exception)

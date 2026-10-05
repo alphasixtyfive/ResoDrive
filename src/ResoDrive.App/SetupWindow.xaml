@@ -102,7 +102,7 @@
         <Border Style="{StaticResource Card}" Padding="12">
           <Grid>
             <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="118" />
+              <ColumnDefinition Width="130" />
               <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
@@ -196,12 +196,10 @@
                 Content="Network drive"
                 Margin="16,0,0,0"
                 VerticalAlignment="Center"
-                ToolTip="Tell Windows this is remote storage. Turning this off presents a local drive."
+                ToolTip="Show as remote storage in Windows. Turn off to show as a local drive."
                 AutomationProperties.Name="Present as a network drive"
               />
             </StackPanel>
-            <TextBlock Text="Network mode tells Windows this is remote storage. Local mode can attract installer temporary files. Office may create temporary files in either mode."
-                       TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,6,0,0" />
             </StackPanel>
 
             <Expander
@@ -211,7 +209,7 @@
               Header="Advanced"
               Margin="0,8,0,0"
             >
-              <controls:MountOptionsControl x:Name="OptionsEditor" Margin="0,4,0,0" />
+              <controls:MountOptionsControl x:Name="OptionsEditor" />
             </Expander>
           </Grid>
         </Border>

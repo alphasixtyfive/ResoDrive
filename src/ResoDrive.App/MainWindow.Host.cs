@@ -49,7 +49,7 @@ public partial class MainWindow
             {
                 if (_hostUnavailableReported)
                 {
-                    _model.AddLogEntry("\uE73E", "Background host connected", "Status updates resumed");
+                    _model.AddLogEntry("Background host connected", "Status updates resumed", LogSeverity.Success);
                     _hostUnavailableReported = false;
                 }
                 ShowHostConnected();
@@ -65,10 +65,9 @@ public partial class MainWindow
                 if (!_hostUnavailableReported)
                 {
                     _model.AddLogEntry(
-                        "\uE783",
                         "Status delayed",
                         detail ?? "Host unavailable",
-                        true
+                        LogSeverity.Error
                     );
                     _hostUnavailableReported = true;
                 }
@@ -123,7 +122,7 @@ public partial class MainWindow
                 ApplyTransferStatus(response);
                 UpdateTrayStatus();
                 if (_hostUnavailableReported)
-                    _model.AddLogEntry("\uE73E", "Background host connected", "Status updates resumed");
+                    _model.AddLogEntry("Background host connected", "Status updates resumed", LogSeverity.Success);
                 _hostUnavailableReported = false;
                 ShowHostConnected();
                 return;
@@ -142,7 +141,7 @@ public partial class MainWindow
                 exception.Message,
                 recoveryExhausted: attempt >= MaximumAutomaticHostRecoveryAttempts);
             if (attempt >= MaximumAutomaticHostRecoveryAttempts)
-                _model.AddLogEntry("\uE783", "Host recovery paused", exception.Message, true);
+                _model.AddLogEntry("Host recovery paused", exception.Message, LogSeverity.Error);
         }
         finally
         {

@@ -87,7 +87,7 @@ public partial class MainWindow : WpfWindow
             RefreshTrayAsync,
             RestoreWindow,
             ExitApplication,
-            exception => _model.AddLogEntry("\uE783", "Tray action failed", exception.Message, true),
+            exception => _model.AddLogEntry("Tray action failed", exception.Message, LogSeverity.Error),
             ShowTransfers);
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
@@ -179,10 +179,9 @@ public partial class MainWindow : WpfWindow
             ? outcome.Message
             : "The previous update handoff did not finish. ResoDrive reopened safely; check the update log for details.";
         _model.AddLogEntry(
-            failed || !outcome.Finalized ? "\uE783" : "\uE73E",
             outcome.Finalized ? "Application update result" : "Application update interrupted",
             message,
-            failed || !outcome.Finalized);
+            failed || !outcome.Finalized ? LogSeverity.Error : LogSeverity.Success);
         if (failed || !outcome.Finalized)
             ShowError("Previous update did not finish", message);
         ApplicationUpdateHandoff.DeleteOutcome(_paths.Updates);
@@ -205,7 +204,7 @@ public partial class MainWindow : WpfWindow
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            _model.AddLogEntry("\uE783", "Welcome state was not saved", exception.Message, true);
+            _model.AddLogEntry("Welcome state was not saved", exception.Message, LogSeverity.Error);
         }
     }
 
@@ -244,12 +243,17 @@ public partial class MainWindow : WpfWindow
         {
             await RefreshStatusAsync();
         }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested) { }
         catch (Exception exception)
         {
             _model.ApplyHostUnavailable();
             MarkTransfersUnavailable();
             UpdateTrayStatus();
-            _model.AddLogEntry("\uE783", "Status refresh failed", exception.Message, true);
+            if (!_hostUnavailableReported)
+            {
+                _model.AddLogEntry("Status refresh failed", exception.Message, LogSeverity.Error);
+                _hostUnavailableReported = true;
+            }
         }
     }
 
@@ -276,10 +280,9 @@ public partial class MainWindow : WpfWindow
             var detail = response.InitializationErrorMessage ?? response.ErrorMessage;
             ShowHostInterrupted(detail, recoveryExhausted: false);
             _model.AddLogEntry(
-                "\uE783",
                 "Background host unavailable",
                 detail ?? "The host did not respond.",
-                true
+                LogSeverity.Error
             );
         }
         else
@@ -398,10 +401,9 @@ public partial class MainWindow : WpfWindow
         if (!current.Succeeded)
         {
             _model.AddLogEntry(
-                "\uE783",
                 "Windows startup task could not be checked",
                 current.Error?.Message ?? "The startup task could not be read.",
-                true);
+                LogSeverity.Error);
             return;
         }
         if (current.Value == _settings.Application.StartWithWindows)
@@ -413,10 +415,9 @@ public partial class MainWindow : WpfWindow
         if (!changed.Succeeded)
         {
             _model.AddLogEntry(
-                "\uE783",
                 "Windows startup task was not reconciled",
                 changed.Error?.Message ?? "The startup task could not be updated.",
-                true);
+                LogSeverity.Error);
         }
     }
 
@@ -497,10 +498,9 @@ public partial class MainWindow : WpfWindow
         catch (Exception exception)
         {
             _model.AddLogEntry(
-                "\uE783",
                 "Connection details unavailable",
                 exception.Message,
-                true);
+                LogSeverity.Error);
         }
     }
 
@@ -871,9 +871,8 @@ public partial class MainWindow : WpfWindow
             }
 
             _model.AddLogEntry(
-                "\uE77B",
                 "Drive added",
-                $"{provisioning.NewMount.DisplayName} · {provisioning.ConnectionSummary}");
+                $"{provisioning.NewMount.DisplayName} · {provisioning.ConnectionSummary}", LogSeverity.Success);
             return true;
         }
         finally
@@ -1327,13 +1326,30 @@ public partial class MainWindow : WpfWindow
 
     private async Task EditMountAsync(MountRow row)
     {
-        var editor = new MountEditorWindow(
-            row.Settings,
-            row.Settings.RemoteName
-        )
+        if (!await EnterSettingsMutationAsync()) return;
+        MountEditorWindow? editor = null;
+        try
         {
-            Owner = this,
-        };
+            var current = _settings.Mounts.FirstOrDefault(mount => mount.Id == row.Id);
+            if (current is null) return;
+            editor = new MountEditorWindow(
+                current, current.RemoteName, _paths,
+                _settings.Mounts.Select(mount => mount.Target.DriveLetter)
+                    .Where(letter => letter.HasValue).Select(letter => letter!.Value))
+            {
+                Owner = this,
+            };
+        }
+        finally
+        {
+            _settingsMutationGate.Release();
+        }
+        if (editor is null) return;
+        if (!CanInteractWithHost)
+        {
+            editor.Close();
+            return;
+        }
         if (editor.ShowDialog() != true)
             return;
         var mounts = editor.DeleteRequested
@@ -1442,7 +1458,7 @@ public partial class MainWindow : WpfWindow
         catch (Exception exception)
         {
             if (!CanInteractWithHost) return;
-            _model.AddLogEntry("\uE783", heading, exception.Message, true);
+            _model.AddLogEntry(heading, exception.Message, LogSeverity.Error);
             ShowError(heading, exception.Message);
         }
         finally
@@ -1610,7 +1626,7 @@ public partial class MainWindow : WpfWindow
             UploadPresentation.PendingCount(mounts),
             _powerProtectionUnavailable || (_mountUploadStatusUnavailable && _model.Mounts.Any(mount => mount.ShouldStop || mount.NeedsHostRecovery)) || mounts.Any(mount => mount.UploadNeedsAttention &&
                 ((mount.UploadStatus?.UploadStatusStale == true && !mount.UploadStatus.UploadStatusChecking)
-                    || mount.UploadStatus?.UploadErrors > 0 || mount.UploadStatus?.UploadRecoveryRequired == true)));
+                    || UploadPresentation.Errors(mount.UploadStatus) > 0 || mount.UploadStatus?.UploadRecoveryRequired == true)));
     }
 
     private void OpenAbout_Click(object sender, RoutedEventArgs e) =>

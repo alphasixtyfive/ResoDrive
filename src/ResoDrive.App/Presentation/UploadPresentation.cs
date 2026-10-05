@@ -7,7 +7,8 @@ internal static class UploadPresentation
 {
     internal static bool HasPending(HostMountStatus? status) => status is not null &&
         (status.UploadsQueued > 0 || status.UploadsInProgress > 0 || status.UploadsDirty > 0 ||
-         status.UploadErrors > 0 || status.UploadRecoveryRequired);
+         status.UploadErrors > 0 || status.UploadRecoveryRequired || status.Uploads?.Count > 0 ||
+         status.UploadDetailsTruncated);
 
     internal static long PendingCount(IReadOnlyList<MountRow> mounts)
     {
@@ -15,10 +16,10 @@ internal static class UploadPresentation
         foreach (var mount in mounts)
         {
             var status = mount.UploadStatus;
-            Add(status?.UploadsQueued);
-            Add(status?.UploadsInProgress);
-            Add(status?.UploadsDirty);
-            if (status?.UploadStatusChecking == true || mount.IsTransient) Add(1);
+            if (status is null) continue;
+            Add(ObservedCount(status, MountUploadState.Queued, status.UploadsQueued));
+            Add(ObservedCount(status, MountUploadState.Uploading, status.UploadsInProgress));
+            Add(ObservedCount(status, MountUploadState.WaitingForClose, status.UploadsDirty));
         }
         return total;
 
@@ -32,17 +33,28 @@ internal static class UploadPresentation
     internal static string Activity(HostMountStatus? status)
     {
         if (status is null) return string.Empty;
-        if (status.UploadStatusChecking) return "Checking uploads…";
+        if (status.UploadStatusChecking) return HasPending(status) ? "Waiting for upload status" : string.Empty;
         if (status.UploadStatusStale) return "Upload status unavailable";
+        var uploading = ObservedCount(status, MountUploadState.Uploading, status.UploadsInProgress);
+        var queued = ObservedCount(status, MountUploadState.Queued, status.UploadsQueued);
+        var dirty = ObservedCount(status, MountUploadState.WaitingForClose, status.UploadsDirty);
+        var errors = Errors(status);
         return string.Join(" · ", new[]
         {
-            status.UploadsInProgress > 0 ? $"{status.UploadsInProgress} uploading" : null,
-            status.UploadsQueued > 0 ? $"{status.UploadsQueued} queued" : null,
-            status.UploadsDirty > 0 ? $"{status.UploadsDirty} waiting for close" : null,
-            status.UploadErrors > 0 ? ErrorCount(status.UploadErrors.Value) : null,
+            uploading > 0 ? $"{uploading} uploading" : null,
+            queued > 0 ? $"{queued} queued" : null,
+            dirty > 0 ? $"{dirty} waiting for close" : null,
+            errors > 0 ? ErrorCount(errors) : null,
             status.UploadRecoveryRequired ? "Cache recovery required" : null,
         }.Where(value => value is not null));
     }
+
+    private static long ObservedCount(HostMountStatus status, MountUploadState state, long? aggregate) =>
+        Math.Max(Math.Max(0, aggregate ?? 0), status.Uploads?.LongCount(file =>
+            file.State == state || (state == MountUploadState.Queued && file.State == MountUploadState.Retrying)) ?? 0);
+
+    internal static long Errors(HostMountStatus? status) => status is null ? 0
+        : ObservedCount(status, MountUploadState.Retrying, status.UploadErrors);
 
     internal static string ErrorCount(long count) => $"{count} upload {(count == 1 ? "error" : "errors")}";
 

@@ -48,7 +48,7 @@ internal sealed class TransferRow(string key) : NotifyBase
 
 internal sealed class TransfersViewModel : NotifyBase
 {
-    private string _summary = "Checking transfers…";
+    private string _summary = "No transfers detected.";
     public string Summary { get => _summary; private set => Set(ref _summary, value); }
     public ObservableCollection<TransferRow> Transfers { get; } = [];
 
@@ -60,30 +60,32 @@ internal sealed class TransfersViewModel : NotifyBase
         var unknown = hostUnavailable || !syncStatusAvailable;
         var needsAttention = false;
         var pending = false;
+        var observing = false;
         foreach (var mount in mounts)
         {
             var status = mount.UploadStatus;
             var changingMount = mount.IsTransient;
             if (!mount.ShouldStop && status?.UploadRecoveryRequired != true && !changingMount) continue;
-            unknown |= status is null || status.UploadStatusStale || status.UploadStatusChecking || changingMount;
-            needsAttention |= status?.UploadErrors > 0 || status?.UploadRecoveryRequired == true;
-            if (status is null || status.UploadStatusStale || status.UploadStatusChecking || status.UploadRecoveryRequired || changingMount)
-                rows.Add(new($"{mount.Id}:status", mount.Name, status?.UploadStatusChecking == true
-                    ? "Checking changed files. Keep the PC running while uploads are checked."
-                    : changingMount ? "Checking drive state. Keep the PC running while the drive connects or disconnects."
-                    : status is null || status.UploadStatusStale
-                    ? "Upload status unavailable. Keep ResoDrive running until it reconnects."
-                    : RcloneErrorMessage.Clean(status.Status,
-                        "Cached files need recovery. Restore this drive to finish uploading.")));
+            var checking = status?.UploadStatusChecking == true || changingMount;
+            observing |= checking;
+            unknown |= !checking && (status is null || status.UploadStatusStale);
+            needsAttention |= UploadPresentation.Errors(status) > 0 || status?.UploadRecoveryRequired == true;
+            if (status?.UploadRecoveryRequired == true)
+                rows.Add(new($"{mount.Id}:status", mount.Name,
+                    "Cached files need recovery. Restore this drive to finish uploading."));
+            else if (!checking && (status is null || status.UploadStatusStale))
+                rows.Add(new($"{mount.Id}:status", mount.Name,
+                    "Upload status unavailable. Keep ResoDrive running until it reconnects."));
             if (status is null) continue;
             pending |= UploadPresentation.HasPending(status);
             var files = status.Uploads ?? [];
             var visibleFiles = files.OrderBy(file => file.State == MountUploadState.Uploading ? 0 : 1).Take(5).ToArray();
             var fileStatusUnavailable = hostUnavailable || status.UploadStatusStale || status.UploadStatusChecking ||
                 status.UploadRecoveryRequired || changingMount;
-            if (files.Count == 0 && !fileStatusUnavailable &&
+            if (files.Count == 0 &&
                 (status.UploadsQueued > 0 || status.UploadsInProgress > 0 || status.UploadsDirty > 0))
-                rows.Add(new($"{mount.Id}:activity", mount.Name, UploadPresentation.Activity(status)));
+                rows.Add(new($"{mount.Id}:activity", mount.Name, fileStatusUnavailable
+                    ? "Uploads pending. Waiting for upload status." : UploadPresentation.Activity(status)));
             foreach (var file in visibleFiles)
                 rows.Add(new($"file:{mount.Id}:{file.RelativePath}", $"{mount.Name} · {file.RelativePath}",
                     fileStatusUnavailable ? "Waiting for upload status" : UploadPresentation.FileState(file),
@@ -91,8 +93,9 @@ internal sealed class TransfersViewModel : NotifyBase
                     !fileStatusUnavailable && file.State == MountUploadState.Uploading));
             if (status.UploadDetailsTruncated || files.Count > visibleFiles.Length)
                 rows.Add(new($"{mount.Id}:more", mount.Name, "More files pending"));
-            if (status.UploadErrors > 0 && !visibleFiles.Any(file => file.State == MountUploadState.Retrying))
-                rows.Add(new($"{mount.Id}:errors", mount.Name, $"{UploadPresentation.ErrorCount(status.UploadErrors.Value)}. Keep the cached files and check the connection."));
+            var errors = UploadPresentation.Errors(status);
+            if (errors > 0 && !visibleFiles.Any(file => file.State == MountUploadState.Retrying))
+                rows.Add(new($"{mount.Id}:errors", mount.Name, $"{UploadPresentation.ErrorCount(errors)}. Keep the cached files and check the connection."));
         }
         var jobs = syncJobs ?? [];
         var freshActive = jobs.Count(job => job.IsBusy && !job.StatusUnavailable);
@@ -159,11 +162,12 @@ internal sealed class TransfersViewModel : NotifyBase
             else if (Transfers.IndexOf(target) != index) Transfers.Move(Transfers.IndexOf(target), index);
             target.Update(row);
         }
-        Summary = unknown ? "Checking transfers…"
-            : powerProtectionUnavailable ? "Windows power protection needs attention."
+        Summary = powerProtectionUnavailable ? "Windows power protection needs attention."
             : needsAttention ? "Some transfers need attention."
+            : unknown ? "Transfer status unavailable."
             : pending ? string.Empty
             : rows.Count > 0 ? "Some transfers need attention."
+            : observing ? "No transfers detected."
             : "No active transfers.";
     }
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.24] - 2026-10-05
+
+- Keep routine upload checks quiet while showing detected transfers, pending files and errors.
+- Show the configured server address and port in a clearly disabled drive setting.
+- Simplify caching labels and hints, add space around form fields, and align Advanced headings.
+- Avoid conflicting drive-letter choices and folder edits during setup; improve focus and truncated-text tooltips.
+- Open drive settings immediately with a compact loading message; keep field positions stable and Cancel available.
+- Use Fluent-style expanders and consistent disabled controls; preserve custom cache values while typing.
+- Give drives a separate activity row that stays hidden during idle checks and retains meaningful warnings; keep drag insertion markers aligned when rows change height.
+- Show informative log entries directly, with timestamps, severity and wrapped event text; record observed drive outcomes and component updates, suppress repeated polling failures and sort sync results by their actual time.
+- Remove the duplicate performance summary, oversized log tooltips and event popups; keep the interface compact and straightforward.
+
 ## [0.3.20] - 2026-10-03
 
 - Show active sync jobs alongside uploads in the compact tray popup, with direction, file counts, progress, speed and remaining time. Keep queued jobs visible and remove completed jobs.

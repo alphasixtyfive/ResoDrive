@@ -77,6 +77,42 @@ public sealed class RcloneRemoteConfigurationIntegrationTests
         }
     }
 
+    [RcloneFixtureFact]
+    public async Task RealRclone_MetadataIncludesTheSelectedServerAndPortWithoutChangingConfig()
+    {
+        var paths = new ApplicationPaths(Path.Combine(Path.GetTempPath(), $"rdrive-metadata-{Guid.NewGuid():N}"));
+        paths.EnsureCreated();
+        try
+        {
+            await File.WriteAllTextAsync(paths.ConfigFile, """
+                [cloud]
+                type = webdav
+                url = https://example.test:8443/remote.php/dav/files/test-user
+                user = test-user
+                [other]
+                type = sftp
+                host = files.example.test
+                port = 2222
+                """);
+            var original = await File.ReadAllBytesAsync(paths.ConfigFile);
+            var executable = Environment.GetEnvironmentVariable("RDRIVE_TEST_RCLONE")!;
+            var selected = await RcloneConnectionMetadataService.ReadAsync(executable, paths, remoteName: "cloud");
+            Assert.True(selected.Succeeded);
+            var connection = Assert.Single(selected.Value!);
+            Assert.Equal("cloud", connection.Key);
+            Assert.Equal("example.test", connection.Value.Host);
+            Assert.Equal("https://example.test:8443", connection.Value.Address);
+            var all = await RcloneConnectionMetadataService.ReadAsync(executable, paths);
+            Assert.True(all.Succeeded);
+            Assert.Equal("sftp://files.example.test:2222", all.Value!["other"].Address);
+            Assert.Equal(original, await File.ReadAllBytesAsync(paths.ConfigFile));
+        }
+        finally
+        {
+            Directory.Delete(paths.Root, recursive: true);
+        }
+    }
+
     private sealed class RcloneFixtureFactAttribute : FactAttribute
     {
         public RcloneFixtureFactAttribute()

@@ -1,7 +1,7 @@
-Uploads and sync jobs now share the same small tray popup. Click the ResoDrive icon to see an upload, a download or a queued sync, with progress and speed where available. Completed jobs disappear, and Open ResoDrive and Settings stay in the footer.
+Drive settings open immediately while connection details load. The server address and port are clearly read-only, drive-letter choices exclude letters already in use, and caching settings use shorter labels with more space around the fields.
 
-The tray icon also animates while sync jobs are active. The popup keeps old speeds and percentages out of view when the connection is interrupted, and refreshes promptly when a job starts or stops.
+Routine upload checks stay quiet. Drive cards show a separate status row only for meaningful activity or warnings, and keep their layout stable as status changes.
 
-Queued and running sync jobs use the same Windows shutdown and automatic-sleep protection as uploads. The shutdown warning now says “transfers” so it makes sense for downloads too. Windows can still override that protection with Shut down anyway.
+The log is a simple list of timestamped events, with full messages shown inline. It records drive, sync and component outcomes without repeating background checks or opening detail popups.
 
-Download **ResoDrive-Setup.exe** below, or check for updates in ResoDrive Settings. This is a new version, so installations of .19 can discover it normally.
+Download **ResoDrive-Setup.exe** below, or check for updates in ResoDrive Settings. Your existing settings and cache are preserved during upgrade.

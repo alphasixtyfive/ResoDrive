@@ -75,9 +75,12 @@ public partial class MainWindow
         RefreshTransfersPresentation();
     }
 
-    private void RefreshTransfersPresentation() =>
+    private void RefreshTransfersPresentation()
+    {
+        if (!_model.IsInitialized) return;
         _transfersModel.Update(UploadMountRows(), _mountUploadStatusUnavailable,
             _model.Jobs, _hostActiveSyncJobs, _powerProtectionUnavailable, _syncStatusAvailable);
+    }
 
     private int ActiveSyncJobCount => Math.Max(_hostActiveSyncJobs,
         _model.Jobs.Count(job => job.IsBusy && (!_syncStatusAvailable || !job.StatusUnavailable)));

@@ -94,7 +94,7 @@ public sealed class UploadPresentationTests
     }
 
     [Fact]
-    public void PendingTrayCountCombinesDrivesAndCountsEachChangingDriveOnce()
+    public void PendingTrayCountCombinesObservedWorkWithoutCountingChecksOrDriveChanges()
     {
         var first = Mount();
         var second = Mount();
@@ -112,7 +112,7 @@ public sealed class UploadPresentationTests
             }),
         };
 
-        Assert.Equal(14, UploadPresentation.PendingCount(rows));
+        Assert.Equal(11, UploadPresentation.PendingCount(rows));
     }
 
     [Theory]
@@ -152,7 +152,7 @@ public sealed class UploadPresentationTests
             }),
         };
 
-        Assert.Equal(3, UploadPresentation.PendingCount(rows));
+        Assert.Equal(2, UploadPresentation.PendingCount(rows));
     }
 
     [Fact]
@@ -170,7 +170,7 @@ public sealed class UploadPresentationTests
     }
 
     [Fact]
-    public void CheckingCacheChangesDoesNotClaimCleanOrReportConnectionFailure()
+    public void CheckingOnlyIsQuietWithoutClaimingACleanObservation()
     {
         var mount = Mount();
         var row = new MountRow(mount, new HostMountStatus(mount.Id, "Mounted", "Mounted", 0, 0, UploadStatusStale: true)
@@ -180,9 +180,26 @@ public sealed class UploadPresentationTests
         var model = new TransfersViewModel();
         model.Update([row], false);
 
-        Assert.Equal("Checking uploads…", row.UploadActivityText);
-        Assert.Contains("Checking changed files", Assert.Single(model.Transfers).Detail, StringComparison.Ordinal);
-        Assert.DoesNotContain("No active transfers", model.Summary, StringComparison.Ordinal);
+        Assert.Empty(row.UploadActivityText);
+        Assert.Empty(model.Transfers);
+        Assert.Equal("No transfers detected.", model.Summary);
+        Assert.Equal(0, UploadPresentation.PendingCount([row]));
+        Assert.True(row.UploadNeedsAttention);
+
+        row.ApplyStatus(row.UploadStatus! with
+        {
+            UploadStatusChecking = false, UploadStatusStale = false, UploadsInProgress = 1,
+            Uploads = [new MountUploadFile { RelativePath = "report.docx", State = MountUploadState.Uploading,
+                BytesTransferred = 40, TotalBytes = 100 }],
+        });
+        model.Update([row], false);
+        Assert.Equal(40, Assert.Single(model.Transfers).Percent);
+        Assert.Empty(model.Summary);
+
+        row.ApplyStatus(new HostMountStatus(mount.Id, "Mounted", "Mounted", 0, 0));
+        model.Update([row], false);
+        Assert.Empty(model.Transfers);
+        Assert.Equal("No active transfers.", model.Summary);
     }
 
     [Fact]
@@ -237,8 +254,8 @@ public sealed class UploadPresentationTests
         model.Update([row], false);
 
         Assert.True(row.UploadNeedsAttention);
-        Assert.Contains("connects or disconnects", Assert.Single(model.Transfers).Detail, StringComparison.Ordinal);
-        Assert.DoesNotContain("No active transfers", model.Summary, StringComparison.Ordinal);
+        Assert.Empty(model.Transfers);
+        Assert.Equal("No transfers detected.", model.Summary);
         row.ApplyStatus(new HostMountStatus(mount.Id, "Stopped", "Stopped", 0, 0));
         model.Update([row], false);
         Assert.Empty(model.Transfers);
@@ -274,13 +291,15 @@ public sealed class UploadPresentationTests
         Assert.Equal("More files pending", model.Transfers[^1].Detail);
     }
 
-    [Fact]
-    public void RetryOutsideTheVisibleFilesDoesNotHideTheUploadError()
+    [Theory]
+    [InlineData(null)]
+    [InlineData(1L)]
+    public void RetryOutsideTheVisibleFilesDoesNotHideTheUploadError(long? reportedErrors)
     {
         var mount = Mount();
         var row = new MountRow(mount, new HostMountStatus(mount.Id, "Mounted", "Mounted", 5, 0)
         {
-            UploadErrors = 1,
+            UploadErrors = reportedErrors,
             Uploads = [.. Enumerable.Range(0, 5).Select(index => new MountUploadFile { RelativePath = $"queued-{index}.txt" }),
                 new MountUploadFile { RelativePath = "retry.txt", State = MountUploadState.Retrying }],
         });
@@ -290,6 +309,8 @@ public sealed class UploadPresentationTests
         Assert.Equal("Some transfers need attention.", model.Summary);
         Assert.Contains(model.Transfers, file => file.Detail.Contains("upload error", StringComparison.Ordinal));
         Assert.DoesNotContain(model.Transfers, file => file.Name.Contains("retry.txt", StringComparison.Ordinal));
+        Assert.Equal(6, UploadPresentation.PendingCount([row]));
+        Assert.Equal("↑ 6 queued · 1 upload error", row.UploadActivityText);
     }
 
     [Theory]
@@ -381,6 +402,61 @@ public sealed class UploadPresentationTests
     public void SpeedWithoutAByteObservationDoesNotStartWithASeparator()
     {
         Assert.Equal("256 B/s", UploadPresentation.Progress(null, null, 256));
+    }
+
+    [Fact]
+    public void CheckingRetainsKnownPendingCountsWithoutInventingProgress()
+    {
+        var mount = Mount();
+        var row = new MountRow(mount, new HostMountStatus(mount.Id, "Mounted", "Mounted", 2, 0)
+        {
+            UploadStatusChecking = true, UploadStatusStale = true,
+        });
+        var model = new TransfersViewModel();
+        model.Update([row], false);
+
+        var transfer = Assert.Single(model.Transfers);
+        Assert.Equal("Uploads pending. Waiting for upload status.", transfer.Detail);
+        Assert.Equal(System.Windows.Visibility.Collapsed, transfer.ProgressVisibility);
+        Assert.Equal(System.Windows.Visibility.Collapsed, transfer.ProgressTextVisibility);
+        Assert.Equal(2, UploadPresentation.PendingCount([row]));
+        Assert.Empty(model.Summary);
+    }
+
+    [Fact]
+    public void ConcreteUploadDetailsCountAsActivityWhenAggregateCountsAreUnknown()
+    {
+        var mount = Mount();
+        var row = new MountRow(mount, new HostMountStatus(mount.Id, "Mounted", "Mounted")
+        {
+            Uploads = [new MountUploadFile { RelativePath = "empty.txt", State = MountUploadState.Uploading,
+                BytesTransferred = 0, TotalBytes = 0 }],
+        });
+        var model = new TransfersViewModel();
+        model.Update([row], false);
+
+        Assert.True(row.HasPendingUploads);
+        Assert.Equal(1, UploadPresentation.PendingCount([row]));
+        Assert.Equal("↑ 1 uploading", row.UploadActivityText);
+        Assert.Equal("Waiting for server confirmation", Assert.Single(model.Transfers).Detail);
+        Assert.Empty(model.Summary);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void UploadErrorsRemainProminentDuringChecksAndHostLoss(bool checking)
+    {
+        var mount = Mount();
+        var row = new MountRow(mount, new HostMountStatus(mount.Id, "Mounted", "Mounted", 0, 0)
+        {
+            UploadErrors = 1, UploadStatusChecking = checking, UploadStatusStale = true,
+        });
+        var model = new TransfersViewModel();
+        model.Update([row], !checking);
+
+        Assert.Equal("Some transfers need attention.", model.Summary);
+        Assert.Contains(model.Transfers, transfer => transfer.Detail.Contains("1 upload error", StringComparison.Ordinal));
     }
 
     private static MountSettings Mount() => new()

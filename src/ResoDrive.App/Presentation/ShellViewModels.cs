@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Windows.Media;
 using ResoDrive.Core.Domain;
@@ -20,8 +21,8 @@ internal static class HostStatusPresentation
 
 public sealed class ShellViewModel : NotifyBase
 {
-    private readonly HashSet<(Guid JobId, DateTimeOffset CompletedAt)> _loggedSyncRuns = [];
-    private readonly Queue<(Guid JobId, DateTimeOffset CompletedAt)> _loggedSyncRunOrder = [];
+    private readonly Dictionary<Guid, DateTimeOffset> _loggedSyncRuns = [];
+    private readonly Dictionary<Guid, MountLogObservation> _mountLogObservations = [];
     private string _mountSummary = "Loading…";
     private string _jobSummary = "Loading…";
     private bool _isInitialized;
@@ -59,10 +60,17 @@ public sealed class ShellViewModel : NotifyBase
         );
         Mounts.Clear();
         Jobs.Clear();
+        var mountIds = settings.Mounts.Select(mount => mount.Id).ToHashSet();
+        foreach (var id in _mountLogObservations.Keys.Where(id => !mountIds.Contains(id)).ToArray())
+            _mountLogObservations.Remove(id);
+        var jobIds = settings.Mounts.SelectMany(mount => mount.SyncJobs).Select(job => job.Id).ToHashSet();
+        foreach (var id in _loggedSyncRuns.Keys.Where(id => !jobIds.Contains(id)).ToArray())
+            _loggedSyncRuns.Remove(id);
         foreach (var mount in settings.Mounts)
         {
             statusMap.TryGetValue(mount.Id, out var status);
             Mounts.Add(new MountRow(mount, status, hostUnavailable || (mountStatusTruncated && status is null)));
+            if (!hostUnavailable) ObserveMountStatus(mount, status);
             foreach (var job in mount.SyncJobs)
             {
                 syncMap.TryGetValue((mount.Id, job.Id), out var syncStatus);
@@ -71,9 +79,7 @@ public sealed class ShellViewModel : NotifyBase
                 Jobs.Add(row);
             }
         }
-        foreach (var status in (syncStatuses ?? [])
-                     .Where(IsTerminalSyncStatus)
-                     .OrderBy(item => item.CompletedAt))
+        foreach (var status in (syncStatuses ?? []).Where(IsTerminalSyncStatus))
         {
             AddSyncOutcome(status);
         }
@@ -112,6 +118,7 @@ public sealed class ShellViewModel : NotifyBase
             map.TryGetValue(mount.Id, out var status);
             if (statusTruncated && status is null) mount.MarkHostUnavailable();
             else mount.ApplyStatus(status);
+            ObserveMountStatus(mount.Settings, status);
         }
         Refresh();
     }
@@ -142,26 +149,58 @@ public sealed class ShellViewModel : NotifyBase
     }
 
     public void AddLogEntry(
-        string glyph,
         string title,
         string detail,
-        bool error = false,
-        DateTimeOffset? occurredAt = null,
-        MediaBrush? brush = null)
+        LogSeverity severity = LogSeverity.Information,
+        DateTimeOffset? occurredAt = null)
     {
-        Log.Insert(
-            0,
-            new LogRow(
-                glyph,
-                title,
-                detail,
-                DisplayFormatting.Timestamp(occurredAt?.LocalDateTime ?? DateTime.Now),
-                brush ?? (error ? StatusPalette.Error : StatusPalette.Success)
-            )
-        );
+        var entry = new LogRow(title, detail, occurredAt ?? DateTimeOffset.Now, severity);
+        var index = 0;
+        while (index < Log.Count && Log[index].OccurredAt > entry.OccurredAt) index++;
+        Log.Insert(index, entry);
         while (Log.Count > 100)
             Log.RemoveAt(Log.Count - 1);
     }
+
+    private void ObserveMountStatus(MountSettings mount, HostMountStatus? status)
+    {
+        if (status is null || !Enum.TryParse<MountLifecycle>(status.Lifecycle, true, out var lifecycle) ||
+            !Enum.IsDefined(lifecycle)) return;
+        _mountLogObservations.TryGetValue(mount.Id, out var previous);
+        var location = mount.Target.DriveLetter is char letter ? $"{letter}:" : mount.RemoteName;
+        var detail = $"{location} · {status.Status}";
+        var errors = UploadPresentation.Errors(status) > 0;
+        var recovery = status.UploadRecoveryRequired;
+        if (status.UploadStatusChecking || status.UploadStatusStale)
+        {
+            errors |= previous?.UploadErrors == true;
+            recovery |= previous?.RecoveryRequired == true;
+        }
+        if (previous?.Lifecycle != lifecycle)
+        {
+            var outcome = lifecycle switch
+            {
+                MountLifecycle.Mounted when previous is not null => ("Mounted", LogSeverity.Success),
+                MountLifecycle.Stopped when previous?.Lifecycle is MountLifecycle.Mounted or MountLifecycle.Degraded or MountLifecycle.Stopping or MountLifecycle.WaitingToRestart =>
+                    ("Stopped", LogSeverity.Information),
+                MountLifecycle.Failed => ("Drive failed", LogSeverity.Error),
+                MountLifecycle.Degraded when !errors && !recovery => ("Drive needs attention", LogSeverity.Warning),
+                MountLifecycle.WaitingToRestart => ("Reconnecting", LogSeverity.Warning),
+                _ => (string.Empty, LogSeverity.Information)
+            };
+            if (outcome.Item1.Length > 0)
+                AddLogEntry($"{outcome.Item1} · {mount.DisplayName}", detail, outcome.Item2);
+        }
+        if (recovery && previous?.RecoveryRequired != true)
+            AddLogEntry($"Cache recovery · {mount.DisplayName}",
+                $"{location} · Cached uploads need attention. Open Transfers to review them.", severity: LogSeverity.Warning);
+        else if (errors && previous?.UploadErrors != true && !recovery)
+            AddLogEntry($"Upload error · {mount.DisplayName}",
+                $"{location} · Open Transfers for affected files and retry details.", severity: LogSeverity.Error);
+        _mountLogObservations[mount.Id] = new(lifecycle, recovery, errors);
+    }
+
+    private sealed record MountLogObservation(MountLifecycle Lifecycle, bool RecoveryRequired, bool UploadErrors);
 
     private static bool IsTerminalSyncStatus(HostSyncStatus status) =>
         status.CompletedAt is not null &&
@@ -171,25 +210,22 @@ public sealed class ShellViewModel : NotifyBase
     private void AddSyncOutcome(HostSyncStatus status)
     {
         if (status.CompletedAt is not { } completedAt ||
-            !_loggedSyncRuns.Add((status.SyncJobId, completedAt)))
+            (_loggedSyncRuns.TryGetValue(status.SyncJobId, out var loggedAt) && loggedAt >= completedAt))
         {
             return;
         }
-        _loggedSyncRunOrder.Enqueue((status.SyncJobId, completedAt));
-        while (_loggedSyncRunOrder.Count > 256)
-            _loggedSyncRuns.Remove(_loggedSyncRunOrder.Dequeue());
-
         var job = Jobs.FirstOrDefault(item => item.Id == status.SyncJobId);
         if (job is null || !Enum.TryParse(status.Lifecycle, true, out SyncLifecycle lifecycle))
         {
             return;
         }
+        _loggedSyncRuns[status.SyncJobId] = completedAt;
 
         var title = lifecycle switch
         {
-            SyncLifecycle.Succeeded => $"{job.Name} completed",
-            SyncLifecycle.Failed => $"{job.Name} failed",
-            SyncLifecycle.Cancelled => $"{job.Name} cancelled",
+            SyncLifecycle.Succeeded => $"Sync completed · {job.Name}",
+            SyncLifecycle.Failed => $"Sync failed · {job.Name}",
+            SyncLifecycle.Cancelled => $"Sync cancelled · {job.Name}",
             _ => job.Name
         };
         var details = new List<string> { job.MountName };
@@ -205,17 +241,15 @@ public sealed class ShellViewModel : NotifyBase
             details.Add($"{status.Errors} error{(status.Errors == 1 ? string.Empty : "s")}");
 
         AddLogEntry(
-            job.DirectionGlyph,
             title,
             string.Join(" · ", details),
-            error: lifecycle == SyncLifecycle.Failed,
-            occurredAt: completedAt,
-            brush: lifecycle switch
+            lifecycle switch
             {
-                SyncLifecycle.Succeeded => StatusPalette.Success,
-                SyncLifecycle.Failed => StatusPalette.Error,
-                _ => StatusPalette.Muted
-            });
+                SyncLifecycle.Succeeded => LogSeverity.Success,
+                SyncLifecycle.Failed => LogSeverity.Error,
+                _ => LogSeverity.Information
+            },
+            completedAt);
     }
 
     public void Refresh()
@@ -266,7 +300,10 @@ public sealed class MountRow : NotifyBase
     private string _status = "Not mounted";
     private string _errorDetail = string.Empty;
     private bool _hasStatus;
+    private bool _hasRecognizedStatus;
     private bool _hostUnavailable;
+    private string _statusLine = string.Empty;
+    private MediaBrush _statusLineBrush = StatusPalette.Muted;
 
     public MountRow(MountSettings settings, HostMountStatus? status, bool hostUnavailable = false)
     {
@@ -284,19 +321,22 @@ public sealed class MountRow : NotifyBase
     public char Drive => Settings.Target.DriveLetter ?? '?';
     public string DriveDisplay => $"{Drive}:";
     public string ConnectionHostDisplay => Settings.ConnectionHost?.Trim() ?? string.Empty;
-    public string UploadActivityText => !ShouldStop
-        ? string.Empty
-        : UploadStatus?.UploadStatusChecking == true ? "Checking uploads…"
-        : UploadStatus?.UploadStatusStale == true ? "Upload status unavailable"
-        : UploadPresentation.Activity(UploadStatus) is { Length: > 0 } activity ? "↑ " + activity : string.Empty;
+    public string UploadActivityText
+    {
+        get
+        {
+            if (UploadStatus?.UploadRecoveryRequired == true) return "Cache recovery required";
+            if (!ShouldStop) return HasPendingUploads ? UploadAttentionText : string.Empty;
+            var activity = UploadPresentation.Activity(UploadStatus);
+            if (UploadStatus?.UploadStatusChecking == true || UploadStatus?.UploadStatusStale == true)
+                return UploadPresentation.Errors(UploadStatus) > 0
+                    ? JoinStatus(UploadAttentionText, activity) : activity;
+            return activity.Length > 0 ? "↑ " + activity : HasPendingUploads ? "Uploads pending" : string.Empty;
+        }
+    }
     public bool HasPendingUploads => UploadPresentation.HasPending(UploadStatus);
     public bool UploadNeedsAttention => HasPendingUploads || IsTransient ||
         (ShouldStop && (UploadStatus is null || UploadStatus.UploadStatusStale));
-    public string UploadActivitySuffix => UploadActivityText.Length == 0 ? string.Empty
-        : (ConnectionHostDisplay.Length > 0 ? "  ·  " : string.Empty) + UploadActivityText;
-    public System.Windows.Visibility ConnectionDetailVisibility =>
-        ConnectionHostDisplay.Length > 0 || UploadActivityText.Length > 0
-            ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
     public string ConnectionTypeDisplay => Settings.ConnectionType?.Trim().ToLowerInvariant() switch
     {
         "webdav" => "WebDAV",
@@ -314,10 +354,10 @@ public sealed class MountRow : NotifyBase
     public string LocationDisplay => string.IsNullOrWhiteSpace(Settings.ConnectionHost)
         ? string.IsNullOrWhiteSpace(Settings.ConnectionType)
             ? DriveDisplay
-            : $"{DriveDisplay}  ·  {ConnectionTypeDisplay}"
+            : $"{DriveDisplay}  {ConnectionTypeDisplay}"
         : string.IsNullOrWhiteSpace(Settings.ConnectionType)
-            ? $"{DriveDisplay}  ·  {ConnectionHostDisplay}"
-            : $"{DriveDisplay}  ·  {ConnectionHostDisplay}  ·  {ConnectionTypeDisplay}";
+            ? $"{DriveDisplay}  {ConnectionHostDisplay}"
+            : $"{DriveDisplay}  {ConnectionHostDisplay}  ·  {ConnectionTypeDisplay}";
     public bool IsMounted => _lifecycle == MountLifecycle.Mounted;
     public bool IsTransient =>
         (Enabled && IsAutomaticMount && !_hasStatus && !_hostUnavailable) ||
@@ -326,20 +366,23 @@ public sealed class MountRow : NotifyBase
     public bool ShouldStop =>
         IsMounted || _lifecycle is MountLifecycle.Starting or MountLifecycle.Degraded or MountLifecycle.WaitingToRestart;
     public string StatusText => _status;
+    public string StatusLine => _statusLine;
+    public MediaBrush StatusLineBrush => _statusLineBrush;
+    public string StatusToolTip => _lifecycle == MountLifecycle.Degraded && StatusText != StatusLine
+        ? $"{StatusLine}\n{StatusText}" : StatusLine;
     public string ErrorDetail => _errorDetail;
     public System.Windows.Visibility ErrorVisibility =>
         _lifecycle == MountLifecycle.Failed && _errorDetail.Length > 0
             ? System.Windows.Visibility.Visible
             : System.Windows.Visibility.Collapsed;
     public System.Windows.Visibility StatusVisibility =>
-        (!_hasStatus && Enabled) ||
-        _lifecycle is MountLifecycle.Failed or MountLifecycle.Degraded or MountLifecycle.WaitingToRestart
-        || (!Enabled && !ShouldStop)
+        _statusLine.Length > 0
             ? System.Windows.Visibility.Visible
             : System.Windows.Visibility.Collapsed;
     public MediaBrush StatusBrush =>
-        !_hasStatus && Enabled
-            ? _hostUnavailable ? StatusPalette.Warning : StatusPalette.Info
+        _lifecycle == MountLifecycle.Failed ? StatusPalette.Error
+            : HostOutageAffectsDrive ? StatusPalette.Warning : !_hasStatus && Enabled
+            ? StatusPalette.Info
             : _lifecycle switch
         {
             MountLifecycle.Mounted => StatusPalette.Success,
@@ -378,9 +421,9 @@ public sealed class MountRow : NotifyBase
     public bool CanOpen => IsMounted;
     public bool CanAct =>
         NeedsHostRecovery ||
-        (_hasStatus && (Enabled || ShouldStop) &&
+        (_hasStatus && _hasRecognizedStatus && (Enabled || ShouldStop) &&
             _lifecycle is not MountLifecycle.Starting and not MountLifecycle.Stopping);
-    public string DetailText => $"{StatusText}  ·  {LocationDisplay}  ·  {Source}";
+    public string DetailText => $"{(StatusLine.Length > 0 ? StatusLine : StatusText)}  ·  {LocationDisplay}  ·  {Source}";
     public string OptionsAccessibleName => $"Open settings for {Name}";
     public string OpenAccessibleName => $"Open {Name} ({DriveDisplay}) in File Explorer";
     public string ActionAccessibleName => $"{ActionText} {Name}";
@@ -396,7 +439,8 @@ public sealed class MountRow : NotifyBase
         var hostWasUnavailable = _hostUnavailable;
         _hasStatus = status is not null;
         _hostUnavailable = false;
-        var recognized = Enum.TryParse(status?.Lifecycle, true, out MountLifecycle lifecycle);
+        var recognized = Enum.TryParse(status?.Lifecycle, true, out MountLifecycle lifecycle) && Enum.IsDefined(lifecycle);
+        _hasRecognizedStatus = recognized;
         var nextLifecycle = recognized ? lifecycle : MountLifecycle.Stopped;
         var previousLifecycle = _lifecycle;
         _lifecycle = nextLifecycle;
@@ -433,13 +477,15 @@ public sealed class MountRow : NotifyBase
 
     private void ChangedState()
     {
+        (_statusLine, _statusLineBrush) = PresentStatusLine();
         Changed(nameof(StatusText));
+        Changed(nameof(StatusLine));
+        Changed(nameof(StatusLineBrush));
+        Changed(nameof(StatusToolTip));
         Changed(nameof(UploadActivityText));
         Changed(nameof(UploadStatus));
         Changed(nameof(HasPendingUploads));
         Changed(nameof(UploadNeedsAttention));
-        Changed(nameof(UploadActivitySuffix));
-        Changed(nameof(ConnectionDetailVisibility));
         Changed(nameof(StatusVisibility));
         Changed(nameof(ErrorDetail));
         Changed(nameof(ErrorVisibility));
@@ -454,6 +500,60 @@ public sealed class MountRow : NotifyBase
         Changed(nameof(NeedsHostRecovery));
         Changed(nameof(ActionAccessibleName));
     }
+
+    private string UploadAttentionText => UploadStatus?.UploadRecoveryRequired == true
+        ? "Cache recovery required"
+        : UploadPresentation.Errors(UploadStatus) is > 0 and var errors
+            ? UploadPresentation.ErrorCount(errors)
+            : HasPendingUploads ? "Uploads pending" : string.Empty;
+
+    private bool HostOutageAffectsDrive => _hostUnavailable &&
+        (ShouldStop || IsTransient || NeedsHostRecovery || HasPendingUploads ||
+         _lifecycle == MountLifecycle.Failed || (_hasStatus && !_hasRecognizedStatus));
+
+    private (string Text, MediaBrush Brush) PresentStatusLine()
+    {
+        if (_hostUnavailable)
+        {
+            if (_lifecycle == MountLifecycle.Failed)
+                return (JoinStatus(JoinStatus("Mount failed", "Background host unavailable"), UploadAttentionText), StatusPalette.Error);
+            if (_hasStatus && !_hasRecognizedStatus)
+                return (JoinStatus(JoinStatus("Unknown mount state", "Background host unavailable"), UploadAttentionText), StatusPalette.Warning);
+            return HostOutageAffectsDrive
+                ? (JoinStatus("Background host unavailable", UploadAttentionText), StatusPalette.Warning)
+                : (string.Empty, StatusPalette.Muted);
+        }
+        if (!_hasStatus)
+            return (string.Empty, StatusPalette.Muted);
+        if (!_hasRecognizedStatus)
+            return (JoinStatus("Unknown mount state", UploadAttentionText), StatusPalette.Warning);
+        if (_lifecycle == MountLifecycle.Degraded)
+        {
+            var reason = StatusText.Split('·', 2)[0].Trim();
+            if (reason.Contains("Checking", StringComparison.OrdinalIgnoreCase))
+                reason = HasPendingUploads ? UploadAttentionText : "Uploads could not be verified";
+            else if (reason.Length == 0 || reason == "Recovered drive")
+                reason = "Drive is not ready";
+            var warning = UploadStatus?.UploadRecoveryRequired == true || UploadPresentation.Errors(UploadStatus) > 0
+                ? UploadAttentionText : string.Empty;
+            return (JoinStatus(reason, warning), StatusPalette.Warning);
+        }
+        if (_lifecycle is MountLifecycle.Failed or MountLifecycle.WaitingToRestart)
+            return (JoinStatus(_lifecycle == MountLifecycle.Failed ? "Mount failed" : StatusText, UploadAttentionText),
+                _lifecycle == MountLifecycle.Failed ? StatusPalette.Error : StatusPalette.Warning);
+        if (_lifecycle is MountLifecycle.Starting or MountLifecycle.Stopping)
+            return (JoinStatus(StatusText.Length > 0 ? StatusText : ActionText, UploadAttentionText),
+                UploadStatus?.UploadRecoveryRequired == true || UploadPresentation.Errors(UploadStatus) > 0
+                    ? StatusPalette.Warning : StatusPalette.Info);
+
+        var needsAttention = !ShouldStop || UploadStatus?.UploadRecoveryRequired == true ||
+            UploadPresentation.Errors(UploadStatus) > 0 || UploadStatus?.UploadStatusStale == true;
+        return (UploadActivityText, needsAttention ? StatusPalette.Warning : StatusPalette.Info);
+    }
+
+    private static string JoinStatus(string primary, string secondary) =>
+        secondary.Length == 0 || primary == secondary ? primary
+            : primary.Length == 0 ? secondary : $"{primary} · {secondary}";
 }
 
 public sealed class SyncRow : NotifyBase
@@ -592,13 +692,33 @@ public sealed class SyncRow : NotifyBase
     }
 }
 
+public enum LogSeverity { Information, Success, Warning, Error }
+
 public sealed record LogRow(
-    string Glyph,
     string Title,
     string Detail,
-    string Time,
-    MediaBrush Brush
-);
+    DateTimeOffset OccurredAt,
+    LogSeverity Severity
+)
+{
+    public string Time => OccurredAt.LocalDateTime.ToString("dd MMM HH:mm:ss", CultureInfo.CurrentCulture);
+    public string FullTime => OccurredAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture);
+    public string AccessibleName => $"{FullTime} · {Severity} · {Title} · {Detail}";
+    public MediaBrush Brush => Severity switch
+    {
+        LogSeverity.Error => StatusPalette.Error,
+        LogSeverity.Warning => StatusPalette.Warning,
+        LogSeverity.Success => StatusPalette.Success,
+        _ => StatusPalette.Muted
+    };
+    public string SeverityGlyph => Severity switch
+    {
+        LogSeverity.Error => "\uE783",
+        LogSeverity.Warning => "\uE7BA",
+        LogSeverity.Success => "\uE73E",
+        _ => "\uE946"
+    };
+}
 
 public abstract class NotifyBase : INotifyPropertyChanged
 {

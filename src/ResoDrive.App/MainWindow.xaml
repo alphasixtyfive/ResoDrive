@@ -59,6 +59,23 @@
         </Setter.Value>
       </Setter>
     </Style>
+    <Style x:Key="LogItem" TargetType="ListBoxItem">
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="Focusable" Value="True" />
+      <Setter Property="FocusVisualStyle" Value="{StaticResource FocusStyle}" />
+      <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListBoxItem">
+            <Border x:Name="Chrome" Background="Transparent" CornerRadius="4"><ContentPresenter /></Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{StaticResource ControlHoverBrush}" /></Trigger>
+              <Trigger Property="IsSelected" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{StaticResource BadgeBrush}" /></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
     <GeometryGroup x:Key="DriveOrderGripGlyph">
       <EllipseGeometry Center="1,1" RadiusX="1" RadiusY="1"/>
       <EllipseGeometry Center="5,1" RadiusX="1" RadiusY="1"/>
@@ -258,6 +275,10 @@
                 AutomationProperties.Name="{Binding DetailText}"
               >
                 <Grid>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="62" />
+                    <RowDefinition Height="Auto" />
+                  </Grid.RowDefinitions>
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="3" />
                     <ColumnDefinition Width="24" />
@@ -292,10 +313,10 @@
                     <Grid.RowDefinitions>
                       <RowDefinition Height="Auto" />
                       <RowDefinition Height="Auto" />
-                      <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <TextBlock
                       Text="{Binding Name}"
+                      ToolTip="{Binding Name}"
                       FontWeight="SemiBold"
                       FontSize="13"
                       Padding="0"
@@ -307,14 +328,21 @@
                     <Grid Grid.Row="1" Margin="0,2,0,0" ToolTip="{Binding LocationDisplay}">
                       <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                       </Grid.ColumnDefinitions>
                       <TextBlock Text="{Binding DriveDisplay}" Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center" />
-                      <TextBlock Grid.Column="1" Text="  ·  " Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center" Visibility="{Binding ConnectionDetailVisibility}" />
-                      <TextBlock Grid.Column="2" Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Visibility="{Binding ConnectionDetailVisibility}" ToolTip="{Binding StatusText}"><Run Text="{Binding ConnectionHostDisplay, Mode=OneWay}" /><Run Text="{Binding UploadActivitySuffix, Mode=OneWay}" Foreground="{StaticResource AccentHoverBrush}" /></TextBlock>
+                      <TextBlock Grid.Column="1" Margin="8,0,0,0" Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Visibility="{Binding ConnectionHostVisibility}" Text="{Binding ConnectionHostDisplay}" />
                     </Grid>
-                    <TextBlock Grid.Row="2" Text="{Binding StatusText}" Foreground="{Binding StatusBrush}" FontSize="11" Padding="0" Margin="0,3,0,0" HorizontalAlignment="Left" TextAlignment="Left" TextTrimming="CharacterEllipsis" ToolTip="{Binding StatusText}" Visibility="{Binding StatusVisibility}" />
+                  </Grid>
+                  <Grid Grid.Row="1" Grid.Column="3" Grid.ColumnSpan="3" Margin="8,0,12,0" Visibility="{Binding StatusVisibility}">
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="1" />
+                      <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Border Background="{StaticResource BorderBrush}" Opacity="0.55" />
+                    <TextBlock Grid.Row="1" Margin="0,5,0,7" Text="{Binding StatusLine}"
+                               Foreground="{Binding StatusLineBrush}" FontSize="11" LineHeight="14"
+                               TextTrimming="CharacterEllipsis" ToolTip="{Binding StatusToolTip}" />
                   </Grid>
                   <Border Grid.Column="4" Style="{StaticResource ConnectionBadge}" Visibility="{Binding ConnectionTypeVisibility}" ToolTip="{Binding ConnectionTypeDisplay}" AutomationProperties.Name="{Binding ConnectionTypeDisplay}">
                     <TextBlock Style="{StaticResource ConnectionBadgeText}" Text="{Binding ConnectionTypeDisplay}" />
@@ -490,43 +518,31 @@
           </Button>
         </Grid>
         <Border Grid.Row="1" Style="{StaticResource Card}" Padding="0">
-          <ListBox Style="{StaticResource Rows}" ItemsSource="{Binding Log}">
+          <ListBox x:Name="LogRows" Style="{StaticResource Rows}" ItemsSource="{Binding Log}"
+                   ItemContainerStyle="{StaticResource LogItem}" SelectionMode="Single"
+                   VirtualizingPanel.ScrollUnit="Pixel" Margin="4" Padding="0">
             <ListBox.ItemTemplate>
               <DataTemplate DataType="{x:Type local:LogRow}">
-                <Border MinHeight="48" Padding="12,8" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+                <Border MinHeight="36" Padding="10,8" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
                 <Grid>
                   <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="28" />
+                    <ColumnDefinition Width="116" />
+                    <ColumnDefinition Width="24" />
                     <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="128" />
                   </Grid.ColumnDefinitions>
+                  <TextBlock Text="{Binding Time}" Foreground="{StaticResource MutedBrush}" FontSize="11"
+                             VerticalAlignment="Top" Margin="0,2,0,0" ToolTip="{Binding FullTime}" />
                   <TextBlock
-                    Text="{Binding Glyph}"
+                    Grid.Column="1" Text="{Binding SeverityGlyph}"
                     FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                     Foreground="{Binding Brush}"
                     FontSize="14"
-                    VerticalAlignment="Center"
+                    VerticalAlignment="Top" Margin="0,1,0,0"
                   />
-                  <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="12" />
-                    <TextBlock
-                      Text="{Binding Detail}"
-                      Foreground="{StaticResource MutedBrush}"
-                      FontSize="12"
-                      Margin="0,3,0,0"
-                      TextTrimming="CharacterEllipsis"
-                      ToolTip="{Binding Detail}"
-                    />
-                  </StackPanel>
-                  <TextBlock
-                    Grid.Column="2"
-                    Text="{Binding Time}"
-                    Foreground="{StaticResource MutedBrush}"
-                    FontSize="11"
-                    HorizontalAlignment="Right"
-                    VerticalAlignment="Center"
-                    ToolTip="{Binding Time}"
-                  />
+                  <TextBlock Grid.Column="2" FontSize="12" TextWrapping="Wrap">
+                    <Run Text="{Binding Title, Mode=OneWay}" FontWeight="SemiBold" /><Run Text="  " />
+                    <Run Text="{Binding Detail, Mode=OneWay}" Foreground="{StaticResource MutedBrush}" />
+                  </TextBlock>
                 </Grid>
                 </Border>
               </DataTemplate>

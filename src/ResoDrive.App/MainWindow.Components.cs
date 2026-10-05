@@ -47,7 +47,7 @@ public partial class MainWindow
                 StatusVisuals.Apply(WinFspStatusIcon, success: false, error: true);
                 SetLiveText(WinFspStatusText, "WinFsp could not be inspected");
             }
-            _model.AddLogEntry("\uE783", "Component check failed", exception.Message, true);
+            _model.AddLogEntry("Component check failed", exception.Message, LogSeverity.Error);
         }
     }
 
@@ -478,6 +478,8 @@ public partial class MainWindow
             if (!result.Succeeded || result.Value is null)
             {
                 SetRcloneStatusDetail(result.Error?.Message ?? "rclone could not be updated.");
+                _model.AddLogEntry("rclone update failed",
+                    result.Error?.Message ?? "rclone could not be updated.", LogSeverity.Error);
                 return;
             }
 
@@ -494,6 +496,8 @@ public partial class MainWindow
             SetRcloneStatusDetail(status);
             if (result.Value.Updated)
             {
+                _model.AddLogEntry($"rclone {status.ToLowerInvariant()}",
+                    $"Installed {result.Value.CurrentVersion}", severity: LogSeverity.Success);
                 var reload = await HostClient.SendAsync(
                     new HostRequest("activate-runtime"),
                     _lifetimeCancellation.Token);
@@ -501,6 +505,8 @@ public partial class MainWindow
                 {
                     SetRcloneStatusDetail(
                         $"{status}. {reload.ErrorMessage ?? $"Restart {ProductInfo.Name} to activate it."}");
+                    _model.AddLogEntry("rclone activation pending",
+                        reload.ErrorMessage ?? $"Restart {ProductInfo.Name} to activate it.", severity: LogSeverity.Warning);
                 }
                 await RefreshStatusAsync();
             }

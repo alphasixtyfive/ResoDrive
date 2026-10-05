@@ -152,7 +152,7 @@ public sealed class SyncTransferPresentationTests
         Assert.Equal(Visibility.Collapsed, row.ProgressVisibility);
         Assert.Equal(Visibility.Collapsed, row.ProgressTextVisibility);
         Assert.Empty(row.ProgressText);
-        Assert.Equal("Checking transfers…", model.Summary);
+        Assert.Equal("Transfer status unavailable.", model.Summary);
 
         job.ApplyStatus(current);
         model.Update([], false, [job], 1);
@@ -171,7 +171,7 @@ public sealed class SyncTransferPresentationTests
         model.Update([], true, [job], 1, syncStatusAvailable: true);
 
         Assert.Equal(Visibility.Visible, Assert.Single(model.Transfers).ProgressVisibility);
-        Assert.Equal("Checking transfers…", model.Summary);
+        Assert.Equal("Transfer status unavailable.", model.Summary);
     }
 
     [Fact]
@@ -205,7 +205,7 @@ public sealed class SyncTransferPresentationTests
         var fallback = Assert.Single(model.Transfers, row => row.Key == "sync:unrepresented");
         Assert.Contains("2 active sync jobs", fallback.Detail, StringComparison.Ordinal);
         Assert.Equal(Visibility.Collapsed, fallback.ProgressVisibility);
-        Assert.Equal("Checking transfers…", model.Summary);
+        Assert.Equal("Transfer status unavailable.", model.Summary);
         Assert.DoesNotContain(model.Transfers, row => row.Name.Contains(omitted.Name, StringComparison.Ordinal));
 
         model.Update([], false, activeSyncJobs: 1);
@@ -224,7 +224,7 @@ public sealed class SyncTransferPresentationTests
         model.Update([], true, [job], 0, syncStatusAvailable: false);
 
         Assert.Single(model.Transfers);
-        Assert.Equal("Checking transfers…", model.Summary);
+        Assert.Equal("Transfer status unavailable.", model.Summary);
     }
 
     [Fact]

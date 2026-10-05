@@ -32,6 +32,7 @@ public partial class MainWindow
     private DriveDragPreviewAdorner? _driveOrderPreview;
     private ScrollViewer? _driveOrderScrollViewer;
     private int _driveOrderScrollDirection;
+    private bool _driveOrderPointerInside;
 
     private bool CanChangeDriveOrder => _store is not null && _model.Mounts.Count > 1 &&
         !_settingsClosing && !IsClosing && !_exitChecking && !_settingsSaveBusy &&
@@ -87,6 +88,7 @@ public partial class MainWindow
             scrolling.Stop();
             scrolling.Tick -= DriveOrder_AutoScroll;
             _driveOrderScrollDirection = 0;
+            _driveOrderPointerInside = false;
             _driveOrderScrollViewer = null;
             _driveOrderDragging = false;
             _driveOrderDraggingMountId = null;
@@ -194,12 +196,14 @@ public partial class MainWindow
             e.Effects = WpfDragDropEffects.None;
             e.Handled = true;
             _driveOrderScrollDirection = 0;
+            _driveOrderPointerInside = false;
             _driveOrderPreview?.Hide();
             ClearDriveOrderIndicator();
             return;
         }
         var point = e.GetPosition(MountRows);
         _driveOrderLastPoint = point;
+        _driveOrderPointerInside = DriveOrderViewport.Contains(DriveOrderViewport.Bounds(MountRows), point);
         _driveOrderScrollDirection = DriveOrderViewport.ScrollDirection(MountRows, point);
         var target = FindDriveDropTarget(point);
         e.Effects = target is not null ? WpfDragDropEffects.Move : WpfDragDropEffects.None;
@@ -220,6 +224,7 @@ public partial class MainWindow
         if (!DriveOrderViewport.Contains(DriveOrderViewport.Bounds(MountRows), point))
         {
             _driveOrderScrollDirection = 0;
+            _driveOrderPointerInside = false;
             _driveOrderPreview?.Hide();
             ClearDriveOrderIndicator();
         }
@@ -229,6 +234,7 @@ public partial class MainWindow
     {
         e.Handled = true;
         _driveOrderScrollDirection = 0;
+        _driveOrderPointerInside = false;
         ClearDriveOrderPreview();
         ClearDriveOrderIndicator();
         if (!TryReadDriveDrag(e, out var dragging) || FindDriveDropTarget(e.GetPosition(MountRows)) is not { } target)
@@ -262,7 +268,7 @@ public partial class MainWindow
 
     private void DriveOrder_AutoScroll(object? sender, EventArgs e)
     {
-        if (!CanChangeDriveOrder || !IsVisible || !MountRows.IsVisible)
+        if (!CanChangeDriveOrder || !IsVisible || !MountRows.IsVisible || !_driveOrderPointerInside)
         {
             _driveOrderScrollDirection = 0;
             _driveOrderPreview?.Hide();
@@ -273,22 +279,21 @@ public partial class MainWindow
             _driveOrderScrollViewer?.LineUp();
         else if (_driveOrderScrollDirection > 0)
             _driveOrderScrollViewer?.LineDown();
-        if (_driveOrderScrollDirection != 0)
+        // Status footers can change row heights while the pointer is stationary.
+        // Re-hit the current layout on every active drag tick, not only scrolling.
+        MountRows.UpdateLayout();
+        if (FindDriveDropTarget(_driveOrderLastPoint) is { } target)
         {
-            MountRows.UpdateLayout();
-            if (FindDriveDropTarget(_driveOrderLastPoint) is { } target)
-            {
-                _driveOrderPreview?.SetPosition(_driveOrderLastPoint);
-                if (_driveOrderDraggingMountId is Guid sourceId && target.Row.Id != sourceId)
-                    ShowDriveOrderIndicator(target.Container, target.After);
-                else
-                    ClearDriveOrderIndicator();
-            }
+            _driveOrderPreview?.SetPosition(_driveOrderLastPoint);
+            if (_driveOrderDraggingMountId is Guid sourceId && target.Row.Id != sourceId)
+                ShowDriveOrderIndicator(target.Container, target.After);
             else
-            {
-                _driveOrderPreview?.Hide();
                 ClearDriveOrderIndicator();
-            }
+        }
+        else
+        {
+            _driveOrderPreview?.Hide();
+            ClearDriveOrderIndicator();
         }
     }
 
@@ -409,8 +414,11 @@ public partial class MainWindow
 
         public void SetPosition(double x, double y, double width)
         {
-            _start = new WpfPoint(x, y);
-            _end = new WpfPoint(x + width, y);
+            var start = new WpfPoint(x, y);
+            var end = new WpfPoint(x + width, y);
+            if (_start == start && _end == end) return;
+            _start = start;
+            _end = end;
             InvalidateVisual();
         }
 

@@ -206,6 +206,36 @@ public sealed class DriveDragPreviewTests
     });
 
     [Fact]
+    public Task StationaryPointerUsesCurrentRowGeometryAfterStatusHeightChanges() => RunOnStaAsync(() =>
+    {
+        var (decorator, list) = ListScene(2);
+        // Leave room for the logical fixture at high display scaling.
+        using var host = new HwndSource(new HwndSourceParameters("Drive status height regression")
+        {
+            Width = 600, Height = 400, PositionX = -10_000, PositionY = -10_000, WindowStyle = 0,
+        }) { RootVisual = decorator };
+        Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.Background);
+        decorator.UpdateLayout();
+        var first = Assert.IsType<ListBoxItem>(list.ItemContainerGenerator.ContainerFromIndex(0));
+        var second = Assert.IsType<ListBoxItem>(list.ItemContainerGenerator.ContainerFromIndex(1));
+        var point = second.TranslatePoint(new WpfPoint(20, 8), list);
+        var initial = DriveOrderViewport.FindDropTarget(list, point);
+        Assert.NotNull(initial);
+        Assert.Same(second, initial.Value.Container);
+        first.Height += 28; // A conditional status footer expands above the pointer.
+        decorator.UpdateLayout();
+        var expanded = DriveOrderViewport.FindDropTarget(list, point);
+        Assert.NotNull(expanded);
+        Assert.Same(first, expanded.Value.Container);
+        Assert.True(expanded.Value.After);
+        first.Height -= 28;
+        decorator.UpdateLayout();
+        var collapsed = DriveOrderViewport.FindDropTarget(list, point);
+        Assert.NotNull(collapsed);
+        Assert.Same(second, collapsed.Value.Container);
+    });
+
+    [Fact]
     public Task UnrealizedRowsCannotBecomeDropTargets() => RunOnStaAsync(() =>
     {
         var (_, list) = ListScene(80);

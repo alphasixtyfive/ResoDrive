@@ -84,7 +84,9 @@ internal sealed class DriveDragPreviewAdorner : Adorner, IDisposable
     {
         if (_disposed)
             return;
-        _top = point.Y - _pointerOffset + 4;
+        var top = point.Y - _pointerOffset + 4;
+        if (_top == top && Visibility == Visibility.Visible) return;
+        _top = top;
         Visibility = Visibility.Visible;
         InvalidateVisual();
     }

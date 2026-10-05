@@ -586,6 +586,7 @@ public partial class SetupWindow : WpfWindow
         UsernameBox.IsEnabled = !running;
         PasswordBox.IsEnabled = !running;
         DisplayNameBox.IsEnabled = !running;
+        RemotePathBox.IsEnabled = !running;
         DriveBox.IsEnabled = !running;
         NetworkModeBox.IsEnabled = !running;
         AdvancedBox.IsEnabled = !running;

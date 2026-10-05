@@ -114,8 +114,9 @@ public sealed class TransfersWindowTests
         row.ApplyStatus(row.UploadStatus! with { UploadStatusChecking = true });
         model.Update([row], false);
         RefreshLayout(layout);
-        Assert.Equal(Visibility.Visible, summary.Visibility);
-        Assert.Equal("Checking transfers…", summary.Text);
+        Assert.Equal(Visibility.Collapsed, summary.Visibility);
+        Assert.Equal(Visibility.Visible, files.Visibility);
+        Assert.Equal("Uploads pending. Waiting for upload status.", Assert.Single(model.Transfers).Detail);
 
         row.ApplyStatus(new HostMountStatus(mount.Id, "Mounted", "Mounted", 0, 0) { UploadErrors = 1 });
         model.Update([row], false);

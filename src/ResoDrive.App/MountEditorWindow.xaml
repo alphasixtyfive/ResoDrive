@@ -5,7 +5,7 @@
   xmlns:local="clr-namespace:ResoDrive.App"
   xmlns:controls="clr-namespace:ResoDrive.App.Controls"
   Title="Drive settings"
-  Width="520"
+  Width="540"
   Height="540"
   MinWidth="480"
   MinHeight="500"
@@ -26,6 +26,8 @@
       <TextBlock
         x:Name="ConnectionText"
         Text="Mount another folder from your configured storage."
+        TextTrimming="CharacterEllipsis"
+        ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
         Foreground="{StaticResource MutedBrush}"
         Margin="0,3,0,0"
       />
@@ -39,34 +41,43 @@
     >
       <Grid Margin="0,0,8,0">
         <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="116" />
+          <ColumnDefinition Width="130" />
           <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
-          <RowDefinition Height="Auto" MinHeight="40" />
-          <RowDefinition Height="Auto" MinHeight="40" />
-          <RowDefinition Height="Auto" MinHeight="40" />
-          <RowDefinition Height="Auto" MinHeight="40" />
-          <RowDefinition Height="Auto" MinHeight="40" />
-          <RowDefinition Height="Auto" MinHeight="40" />
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" MinHeight="44" />
+          <RowDefinition Height="Auto" MinHeight="44" />
+          <RowDefinition Height="Auto" MinHeight="44" />
+          <RowDefinition Height="Auto" MinHeight="44" />
+          <RowDefinition Height="Auto" MinHeight="44" />
+          <RowDefinition Height="Auto" MinHeight="44" />
           <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <TextBlock Text="Name" VerticalAlignment="Center" />
-        <TextBox x:Name="NameBox" Grid.Column="1" Style="{StaticResource EditorTextBox}" AutomationProperties.Name="Drive name" />
+        <TextBlock Text="Server address" VerticalAlignment="Center" Margin="0,0,0,8" />
+        <TextBox x:Name="ServerAddressBox" Grid.Column="1" Margin="0,0,0,8"
+                 Style="{StaticResource EditorTextBox}" IsReadOnly="True" IsEnabled="False"
+                 Foreground="{StaticResource MutedBrush}"
+                 ToolTipService.ShowOnDisabled="True"
+                 ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
+                 AutomationProperties.Name="Server address (read-only)" />
 
-        <TextBlock Grid.Row="1" Text="Folder" VerticalAlignment="Center" />
+        <TextBlock Grid.Row="1" Text="Name" VerticalAlignment="Center" />
+        <TextBox x:Name="NameBox" Grid.Row="1" Grid.Column="1" Style="{StaticResource EditorTextBox}" AutomationProperties.Name="Drive name" />
+
+        <TextBlock Grid.Row="2" Text="Folder" VerticalAlignment="Center" />
         <TextBox
           x:Name="RemotePathBox"
-          Grid.Row="1"
+          Grid.Row="2"
           Grid.Column="1"
           Style="{StaticResource EditorTextBox}"
           ToolTip="Optional folder inside the storage connection. Leave empty for its root."
           AutomationProperties.Name="Remote folder"
         />
 
-        <TextBlock Grid.Row="2" Text="Drive letter" VerticalAlignment="Center" />
-        <StackPanel Grid.Row="2" Grid.Column="1" Margin="0,4,0,8">
+        <TextBlock Grid.Row="3" Text="Drive letter" VerticalAlignment="Center" />
+        <StackPanel Grid.Row="3" Grid.Column="1" Margin="0,4,0,8">
           <Grid>
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="88" />
@@ -76,45 +87,34 @@
                       AutomationProperties.Name="Drive letter" />
             <CheckBox x:Name="NetworkModeBox" Grid.Column="1" Content="Network drive"
                       Margin="12,0,0,0" VerticalAlignment="Center"
-                      ToolTip="Tell Windows this is remote storage. Turning this off presents a local drive."
+                      ToolTip="Show as remote storage in Windows. Turn off to show as a local drive."
                       AutomationProperties.Name="Present as a network drive" />
           </Grid>
-          <TextBlock
-            x:Name="DriveStatusText"
-            Text="Checking…"
-            Foreground="{StaticResource MutedBrush}"
-            Margin="0,4,0,0"
-            TextWrapping="Wrap"
-            VerticalAlignment="Center"
-            AutomationProperties.LiveSetting="Polite"
-          />
-          <TextBlock Text="Network mode tells Windows this is remote storage. Local mode can attract installer temporary files. Office may create temporary files in either mode."
-                     TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,6,0,0" />
         </StackPanel>
 
-        <TextBlock Grid.Row="3" Text="Availability" VerticalAlignment="Center" />
+        <TextBlock Grid.Row="4" Text="Availability" VerticalAlignment="Center" />
         <CheckBox
           x:Name="EnabledBox"
-          Grid.Row="3"
+          Grid.Row="4"
           Grid.Column="1"
           Content="Enabled"
           AutomationProperties.Name="Drive enabled"
           VerticalAlignment="Center"
         />
 
-        <TextBlock Grid.Row="4" Text="Startup" VerticalAlignment="Center" />
+        <TextBlock Grid.Row="5" Text="Startup" VerticalAlignment="Center" />
         <CheckBox
           x:Name="AutoMountBox"
-          Grid.Row="4"
+          Grid.Row="5"
           Grid.Column="1"
           Content="{x:Static local:ProductInfo.MountOnStartText}"
           AutomationProperties.Name="{x:Static local:ProductInfo.MountOnStartText}"
           VerticalAlignment="Center"
         />
 
-        <TextBlock Grid.Row="5" Text="Recovery" VerticalAlignment="Center" />
+        <TextBlock Grid.Row="6" Text="Recovery" VerticalAlignment="Center" />
         <StackPanel
-          Grid.Row="5"
+          Grid.Row="6"
           Grid.Column="1"
           Orientation="Horizontal"
           VerticalAlignment="Center"
@@ -127,37 +127,45 @@
             Unchecked="Restart_Changed"
             AutomationProperties.Name="Reconnect automatically"
           />
-          <TextBlock Text="up to" VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}" />
+          <TextBlock Text="Attempts" VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}" />
           <TextBox
             x:Name="AttemptsBox"
             Style="{StaticResource EditorTextBox}"
-            Width="48"
+            Width="88"
             Margin="8,0"
-            ToolTip="Maximum reconnect attempts; 0 keeps trying"
-            AutomationProperties.Name="Maximum reconnect attempts; 0 keeps trying"
+            ToolTip="Maximum reconnect attempts, or Unlimited to keep trying"
+            AutomationProperties.Name="Maximum reconnect attempts, or Unlimited to keep trying"
           />
-          <TextBlock Text="times (0 keeps trying)" VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}" />
         </StackPanel>
 
         <Expander
-          Grid.Row="6"
+          Grid.Row="7"
           Grid.ColumnSpan="2"
           Header="Advanced"
           Margin="0,7,0,0"
         >
-          <controls:MountOptionsControl x:Name="OptionsEditor" Margin="0,6,0,0" />
+          <controls:MountOptionsControl x:Name="OptionsEditor" />
         </Expander>
       </Grid>
     </ScrollViewer>
 
     <Grid Grid.Row="2" Margin="0,14,0,0">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="24" />
+        <RowDefinition Height="Auto" />
+      </Grid.RowDefinitions>
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="*" />
         <ColumnDefinition Width="Auto" />
         <ColumnDefinition Width="Auto" />
       </Grid.ColumnDefinitions>
+      <TextBlock x:Name="LoadingText" Grid.ColumnSpan="2" Text="Loading settings…"
+                 Foreground="{StaticResource MutedBrush}" FontSize="12"
+                 TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
+                 AutomationProperties.LiveSetting="Polite" />
       <Button
         x:Name="DeleteButton"
+        Grid.Row="1"
         Style="{StaticResource DangerButton}"
         HorizontalAlignment="Left"
         Click="Delete_Click"
@@ -168,7 +176,7 @@
           <TextBlock Text="Delete" VerticalAlignment="Center" />
         </StackPanel>
       </Button>
-      <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+      <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
         <Button
           Style="{StaticResource ButtonStyle}"
           Content="Cancel"
@@ -183,7 +191,7 @@
           Click="Save_Click"
         />
       </StackPanel>
-      <controls:ScrollBarGutter Grid.Column="2" ScrollOwner="{Binding ElementName=EditorScrollViewer}" />
+      <controls:ScrollBarGutter Grid.Row="1" Grid.Column="2" ScrollOwner="{Binding ElementName=EditorScrollViewer}" />
     </Grid>
   </Grid>
 </Window>
