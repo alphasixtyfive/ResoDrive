@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.24] - 2026-10-05
+## [0.3.25] - 2026-10-05
 
 - Keep routine upload checks quiet while showing detected transfers, pending files and errors.
 - Show the configured server address and port in a clearly disabled drive setting.

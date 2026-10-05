@@ -9,7 +9,7 @@ using ResoDrive.Windows;
 
 namespace ResoDrive.App.Tests;
 
-[Collection("Sync editor application")]
+[Collection(WpfUiTestsGroup.Name)]
 public sealed class TransfersWindowTests
 {
     [Theory]

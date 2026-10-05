@@ -7,10 +7,7 @@ using ResoDrive.Windows;
 
 namespace ResoDrive.App.Tests;
 
-[CollectionDefinition("Sync editor application", DisableParallelization = true)]
-public sealed class SyncEditorApplicationTestsGroup;
-
-[Collection("Sync editor application")]
+[Collection(WpfUiTestsGroup.Name)]
 public sealed class SyncEditorWindowTests
 {
     [Fact]

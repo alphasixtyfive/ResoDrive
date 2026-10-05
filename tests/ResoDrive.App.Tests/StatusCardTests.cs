@@ -7,6 +7,7 @@ using ResoDrive.App.Controls;
 
 namespace ResoDrive.App.Tests;
 
+[Collection(WpfUiTestsGroup.Name)]
 public sealed class StatusCardTests
 {
     [Theory]

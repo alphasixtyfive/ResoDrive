@@ -14,6 +14,7 @@ using WpfSize = System.Windows.Size;
 
 namespace ResoDrive.App.Tests;
 
+[Collection(WpfUiTestsGroup.Name)]
 public sealed class DriveDragPreviewTests
 {
     [Theory]

@@ -31,7 +31,8 @@ public sealed class LogPresentationTests
         Assert.Equal(LogSeverity.Error, entry.Severity);
         Assert.Contains("Error · Drive failed", entry.AccessibleName, StringComparison.Ordinal);
         Assert.Contains(entry.Detail, entry.AccessibleName, StringComparison.Ordinal);
-        Assert.Contains("09:00:03", entry.Time, StringComparison.Ordinal);
+        Assert.Contains(occurred.LocalDateTime.ToString("HH:mm:ss", System.Globalization.CultureInfo.CurrentCulture),
+            entry.Time, StringComparison.Ordinal);
         Assert.Contains(entry.FullTime, entry.AccessibleName, StringComparison.Ordinal);
     }
 
