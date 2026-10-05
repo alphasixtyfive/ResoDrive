@@ -107,6 +107,11 @@ alignment, wrapping, disabled appearance, scrolling, keyboard focus, and the
 positions of Cancel and Save. A mockup, XML assertion, or passing parser test is
 not a substitute for this visual check. Record which checks actually ran.
 
+Check every sidebar icon together, including selected items and the compact
+sidebar. Center the visible icon in a consistent box; centering an icon
+font's line box does not establish visible alignment. Verify icon centers, label
+starts and spacing at each display scale rather than approving a single row.
+
 ## Publication gate
 
 Follow [the release procedure](RELEASING.md). When the user asks to see the UI

@@ -5,6 +5,7 @@ This update cleans up drive settings, transfer status and the log, and fixes a f
 - Settings have more breathing room, shorter labels and consistent Advanced sections. Reconnect attempts use an Unlimited checkbox or a numeric limit from 1 to 100.
 - Setup and sync catch invalid inputs before connecting or saving. Errors appear beside the relevant controls, and custom values are preserved when an option is switched off.
 - The log shows compact entries with timestamps, useful details and room for the scrollbar. Extra event popups and oversized blocks are gone.
+- Sidebar icons line up consistently with their labels, including Settings.
 - Installation and updates use one progress window. Pending uploads still block installation and explain what needs attention.
 - Windows keeps one app entry for repair and removal. Setup no longer leaves a separate entry behind after installing the app.
 

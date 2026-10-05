@@ -1,11 +1,16 @@
 # Changelog
 
-## [0.3.29] - 2026-10-05
+## [0.3.30] - 2026-10-05
 
 - Combine the reviewed drive settings, quieter status and compact log changes with the input-validation and single-progress-window fixes.
 - Make the MSI the sole removable Windows app entry. Setup installs prerequisites and the app without retaining a second entry; migrate older Setup installations through one native Setup upgrade.
 - Direct older Setup-owned installations to Setup before an MSI-only update can create duplicate entries. Keep repair, removal and upload protection intact.
 - Update the test coverage collector to 10.1.0 and refresh all affected lock files.
+- Align sidebar icons consistently with their labels, including Settings.
+
+## [0.3.29] - 2026-10-05 (unpublished acceptance build)
+
+- Pass the full native installer gate and desktop upgrade checks. Native Setup removes the older duplicate entry while preserving the accepted MSI and account files.
 
 ## [0.3.28] - 2026-10-05 (unpublished acceptance build)
 
