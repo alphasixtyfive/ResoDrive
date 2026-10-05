@@ -10,4 +10,4 @@ This update cleans up drive settings, transfer status and the log, and fixes a f
 
 This release includes all of the changes from the withdrawn 0.3.25 update and the fixes reviewed in the local test builds.
 
-Download **ResoDrive-Setup.exe** below. If an older version was installed using Setup, run this download once to replace its old installer entry; its in-app updater will direct you to Setup for this update. After that, you can use the in-app updater normally. Upgrading preserves your settings and cache.
+Download **ResoDrive-Setup.exe** below. If an older version was installed using Setup, use this download for this update. It replaces the old installer entry and preserves your settings and cache. After that, you can use the in-app updater normally.
