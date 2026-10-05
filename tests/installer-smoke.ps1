@@ -303,7 +303,9 @@ try {
     Assert-OneRemovableAppEntry
     Assert-DataPreserved
     $running = Start-TestApplication
-    Invoke-Installer $msiexec "/fa $candidateProductCode /quiet /norestart /l*v `"$testRoot\migrated-msi-repair.log`""
+    # /f ignores command-line properties, including this fixture's custom root.
+    # Reinstall maintenance accepts the root and exercises the same native repair.
+    Invoke-Installer $msiexec "/i `"$candidateMsi`" REINSTALL=ALL REINSTALLMODE=amus /quiet /norestart /l*v `"$testRoot\migrated-msi-repair.log`""
     Assert-Stopped $running
     Assert-OneRemovableAppEntry
     Assert-DataPreserved

@@ -104,7 +104,7 @@
       "resodrive.windows": {
         "type": "Project",
         "dependencies": {
-          "ResoDrive.Core": "[0.3.28, )",
+          "ResoDrive.Core": "[0.3.29, )",
           "System.Management": "[10.0.11, )"
         }
       },

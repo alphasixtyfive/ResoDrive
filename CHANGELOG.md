@@ -1,11 +1,15 @@
 # Changelog
 
-## [0.3.28] - 2026-10-05
+## [0.3.29] - 2026-10-05
 
 - Combine the reviewed drive settings, quieter status and compact log changes with the input-validation and single-progress-window fixes.
 - Make the MSI the sole removable Windows app entry. Setup installs prerequisites and the app without retaining a second entry; migrate older Setup installations through one native Setup upgrade.
 - Direct older Setup-owned installations to Setup before an MSI-only update can create duplicate entries. Keep repair, removal and upload protection intact.
 - Update the test coverage collector to 10.1.0 and refresh all affected lock files.
+
+## [0.3.28] - 2026-10-05 (unpublished acceptance build)
+
+- Validate native installer ownership and older Setup migration. The custom-root repair check exposed that Windows ignores property arguments with `/f`; correct the gate to use reinstall maintenance before publication.
 
 ## [0.3.27] - 2026-10-05 (unpublished acceptance build)
 

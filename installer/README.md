@@ -37,6 +37,11 @@ completed bundle is no longer registered; use Windows or the MSI for interactive
 repair. An automated Setup repair needs `/repair /passive /norestart` or quiet
 mode so WixStdBA retains the requested repair action.
 
+For a nondefault data root, repair with the original MSI and
+`/i package.msi REINSTALL=ALL REINSTALLMODE=amus RDRIVE_DATA_ROOT="D:\path\to\data"`.
+Windows ignores command-line properties with `/f`; adding the root to that switch
+does not pass it to preparation. Keep the guarded shutdown and fail-closed behavior.
+
 A legacy installation with a hidden MSI and a visible setup bundle needs one
 upgrade through the newer Setup to transfer maintenance to the visible MSI and
 remove the older bundle through Burn. Direct MSI upgrades of those installations

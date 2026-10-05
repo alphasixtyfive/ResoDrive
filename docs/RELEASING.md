@@ -89,6 +89,9 @@ For a nondefault data directory, use `ResoDriveDataRoot="D:\path\to\data"` with
 the setup executable or `RDRIVE_DATA_ROOT="D:\path\to\data"` with msiexec. A
 process-local environment variable alone is not propagated through the Windows
 Installer service. The built-in updater passes the active data root explicitly.
+For a repair using that root, use `/i package.msi REINSTALL=ALL REINSTALLMODE=amus`
+with `RDRIVE_DATA_ROOT`; `/f` ignores property arguments. Inspect the helper's
+actual root in the MSI log rather than trusting the shell command.
 
 ## Signing
 
