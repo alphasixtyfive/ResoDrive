@@ -1,9 +1,12 @@
-Reconnect attempts now use a separate Unlimited checkbox and a numeric limit with inline validation. Setup and sync check inputs before saving or connecting, preserve disabled custom values, and report concise errors without crowding the buttons.
+This update cleans up drive settings, transfer status and the log, and fixes a few rough edges when setting up or updating ResoDrive.
 
-Installation and updates use the existing installer progress window. The duplicate preparation window is removed; blocked uploads still stop installation with a specific reason.
+- Routine upload checks stay quiet. Transfer progress appears when there is work to show, and drive cards give activity and warnings their own space.
+- Drive settings open straight away with a small loading message. The server address and port are clearly read-only, field values stay stable while loading, and drive-letter choices avoid letters already in use.
+- Settings have more breathing room, shorter labels and consistent Advanced sections. Reconnect attempts use an Unlimited checkbox or a numeric limit from 1 to 100.
+- Setup and sync catch invalid inputs before connecting or saving. Errors appear beside the relevant controls, and custom values are preserved when an option is switched off.
+- The log shows compact entries with timestamps, useful details and room for the scrollbar. Extra event popups and oversized blocks are gone.
+- Installation and updates use one progress window. Pending uploads still block installation and explain what needs attention.
 
-Drive settings open promptly with a loading message and a clearly read-only server address. Routine upload checks stay quiet, while drive cards and the compact inline log show meaningful activity and outcomes.
+This release includes all of the changes from the withdrawn 0.3.25 release, along with the fixes reviewed in the local 0.3.26 test build.
 
-This corrects the withdrawn 0.3.25 release. It uses a newer version so installations of 0.3.25 can discover the correction.
-
-Download **ResoDrive-Setup.exe** below, or check for updates in ResoDrive Settings. Your existing settings and cache are preserved during upgrade.
+Download **ResoDrive-Setup.exe** below, or check for updates in ResoDrive Settings. Upgrading preserves your settings and cache.

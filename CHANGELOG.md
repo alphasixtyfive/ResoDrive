@@ -1,6 +1,11 @@
 # Changelog
 
-## [0.3.26] - 2026-10-05
+## [0.3.27] - 2026-10-05
+
+- Bring together the drive settings, status and log improvements from withdrawn 0.3.25 and the input-validation and installer fixes reviewed in local 0.3.26.
+- Publish with a newer version so both earlier public installations and the local test build can upgrade normally.
+
+## [0.3.26] - 2026-10-05 (local review build)
 
 - Replace text-based Unlimited attempts with an explicit checkbox and a validated numeric limit; keep drafts when toggling and show inline errors.
 - Validate setup before connecting and all editor candidates before closing; reject missing modes, duplicate names, malformed paths, ports and control characters.
@@ -9,7 +14,7 @@
 - Let the installer own routine update/install progress, removing the duplicate preparation window while retaining upload blocking and its specific failure message.
 - Add input regression tests and an engineering guide requiring validation and compiled UI review before publication. Correct the withdrawn 0.3.25 release.
 
-## [0.3.25] - 2026-10-05
+## [0.3.25] - 2026-10-05 (withdrawn)
 
 - Keep routine upload checks quiet while showing detected transfers, pending files and errors.
 - Show the configured server address and port in a clearly disabled drive setting.
