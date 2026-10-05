@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Threading;
 using ResoDrive.App.Controls;
 using ResoDrive.Core.Settings;
+using ResoDrive.Core.Validation;
 using ResoDrive.Windows;
 
 namespace ResoDrive.App.Tests;
@@ -53,6 +54,7 @@ internal static class MountEditorWindowTests
                 Assert.Equal('S', drive.SelectedItem);
 
                 VerifyCustomCacheValues(Control<MountOptionsControl>(editor, "OptionsEditor"), settings.Arguments);
+                VerifyReconnectInputs(editor);
             }
             finally { editor.Close(); }
 
@@ -66,6 +68,20 @@ internal static class MountEditorWindowTests
                 Assert.Equal("Unavailable", Control<TextBox>(add, "ServerAddressBox").Text);
             }
             finally { add.Close(); }
+
+            var limitedSettings = settings with { Restart = settings.Restart with { MaximumAttempts = 37 } };
+            var limited = new MountEditorWindow(limitedSettings, "cloud", paths, letters, ["Another drive"]);
+            try
+            {
+                Assert.False(limited.TryBuildValue(out _, out _));
+                Complete(limited.PrepareAsync());
+                Assert.False(Control<CheckBox>(limited, "UnlimitedBox").IsChecked);
+                Assert.Equal("37", Control<TextBox>(limited, "AttemptsBox").Text);
+                Assert.True(limited.TryBuildValue(out var value, out var error), error);
+                Assert.Equal(37, value!.Restart.MaximumAttempts);
+                VerifyInvalidDriveValues(limited, limitedSettings);
+            }
+            finally { limited.Close(); }
 
             var cancelled = new MountEditorWindow(settings, "cloud", paths);
             try
@@ -85,6 +101,106 @@ internal static class MountEditorWindowTests
             Assert.False(Directory.Exists(paths.Root));
         }
         finally { SynchronizationContext.SetSynchronizationContext(previousContext); }
+    }
+
+    private static void VerifyReconnectInputs(MountEditorWindow editor)
+    {
+        var reconnect = Control<CheckBox>(editor, "RestartBox");
+        var unlimited = Control<CheckBox>(editor, "UnlimitedBox");
+        var attempts = Control<TextBox>(editor, "AttemptsBox");
+        var error = Control<TextBlock>(editor, "AttemptsError");
+        var save = Control<Button>(editor, "SaveButton");
+        Assert.True(unlimited.IsChecked);
+        Assert.False(attempts.IsEnabled);
+        Assert.True(editor.TryGetRestartSettings(out var restart));
+        Assert.Equal(0, restart.MaximumAttempts);
+        unlimited.IsChecked = false;
+        attempts.Text = "37";
+        Assert.True(attempts.IsEnabled);
+        Assert.True(editor.TryGetRestartSettings(out restart));
+        Assert.Equal(37, restart.MaximumAttempts);
+        unlimited.IsChecked = true;
+        Assert.False(attempts.IsEnabled);
+        unlimited.IsChecked = false;
+        Assert.Equal("37", attempts.Text);
+
+        // Exercise the routed paste handler without using the system clipboard.
+        attempts.SelectAll();
+        var rejected = new DataObjectPastingEventArgs(new DataObject(DataFormats.UnicodeText, "Unlimited456"),
+            false, DataFormats.UnicodeText);
+        attempts.RaiseEvent(rejected);
+        Assert.True(rejected.CommandCancelled);
+        var accepted = new DataObjectPastingEventArgs(new DataObject(DataFormats.UnicodeText, "1000"),
+            false, DataFormats.UnicodeText);
+        attempts.RaiseEvent(accepted);
+        Assert.False(accepted.CommandCancelled); // Range checking must reject 1000, never truncate it to 100.
+        Assert.Equal(0, attempts.MaxLength);
+
+        foreach (var invalid in new[] { "", "0", "101", "1000", "2147483648", "Unlimited456", "+5", "1.5", "5 " })
+        {
+            attempts.Text = invalid;
+            Assert.False(editor.TryGetRestartSettings(out _));
+            Assert.False(editor.TryBuildValue(out _, out _));
+            Assert.False(save.IsEnabled);
+            Assert.Equal(Visibility.Visible, error.Visibility);
+            reconnect.IsChecked = false;
+            Assert.False(attempts.IsEnabled);
+            Assert.False(unlimited.IsEnabled);
+            Assert.True(save.IsEnabled);
+            Assert.True(editor.TryGetRestartSettings(out restart));
+            Assert.False(restart.Enabled);
+            Assert.Equal(0, restart.MaximumAttempts);
+            reconnect.IsChecked = true;
+            Assert.Equal(invalid, attempts.Text);
+            Assert.False(save.IsEnabled);
+            unlimited.IsChecked = true;
+            Assert.True(save.IsEnabled);
+            Assert.Equal(Visibility.Collapsed, error.Visibility);
+            Assert.True(editor.TryGetRestartSettings(out restart));
+            Assert.Equal(0, restart.MaximumAttempts);
+            unlimited.IsChecked = false;
+        }
+        attempts.Text = "100";
+        Assert.True(editor.TryBuildValue(out var value, out var buildError), buildError);
+        Assert.Equal(100, value!.Restart.MaximumAttempts);
+        var preparation = editor.PrepareAsync();
+        Complete(preparation);
+        Assert.Equal("100", attempts.Text);
+
+        // An invalid handler invocation must keep the editor open and produce
+        // inline feedback even if a caller bypasses the disabled button.
+        attempts.Text = "101";
+        save.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Assert.Null(editor.Value);
+        Assert.Null(editor.DialogResult);
+        Assert.Equal(Visibility.Visible, Control<TextBlock>(editor, "FormError").Visibility);
+        attempts.Text = "37";
+        Assert.Equal(Visibility.Collapsed, Control<TextBlock>(editor, "FormError").Visibility);
+    }
+
+    private static void VerifyInvalidDriveValues(MountEditorWindow editor, MountSettings original)
+    {
+        var name = Control<TextBox>(editor, "NameBox");
+        foreach (var invalid in new[] { "", new string('x', 129), "Another drive", "name\n" })
+        {
+            name.Text = invalid;
+            Assert.False(editor.TryBuildValue(out _, out _));
+        }
+        name.Text = original.DisplayName;
+        var folder = Control<TextBox>(editor, "RemotePathBox");
+        foreach (var invalid in new[] { "../secret", "folder//file", "folder\\file", "folder\n" })
+        {
+            folder.Text = invalid;
+            Assert.False(editor.TryBuildValue(out _, out _));
+        }
+        folder.Text = "Documents";
+        Assert.True(editor.TryBuildValue(out var valid, out var error), error);
+        Assert.Equal("Documents", valid!.RemotePath);
+        var attempts = Control<TextBox>(editor, "AttemptsBox");
+        attempts.Text = "101";
+        Control<CheckBox>(editor, "RestartBox").IsChecked = false;
+        Assert.True(editor.TryBuildValue(out var disabled, out error), error);
+        Assert.Equal(37, disabled!.Restart.MaximumAttempts);
     }
 
     private static void VerifyCustomCacheValues(MountOptionsControl options, IReadOnlyList<string> original)
@@ -120,6 +236,57 @@ internal static class MountEditorWindowTests
         DrainDispatcher();
         Assert.Equal("2 GiB", size.Text);
         Assert.Equal("49h", age.Text);
+
+        foreach (var invalid in new[] { "", "banana", "2GB", "8E", "-1", "3G\n" })
+        {
+            size.Text = invalid;
+            DrainDispatcher();
+            Assert.False(options.TryGetArguments(false, out _, out error));
+            Assert.Contains(invalid.Any(char.IsControl) ? "control characters" : "--vfs-cache-max-size", error!, StringComparison.Ordinal);
+        }
+        size.Text = "3.25GiB";
+        foreach (var invalid in new[] { "", "banana", "1d2h", "9223372036854775808ns", "48h\n" })
+        {
+            age.Text = invalid;
+            DrainDispatcher();
+            Assert.False(options.TryGetArguments(false, out _, out error));
+            Assert.Contains(invalid.Any(char.IsControl) ? "control characters" : "--vfs-cache-max-age", error!, StringComparison.Ordinal);
+        }
+        age.Text = "48h";
+        Assert.True(options.TryGetArguments(false, out var custom, out error), error);
+        Assert.Contains("--vfs-cache-max-size=3.25GiB", custom);
+        Assert.Contains("--vfs-cache-max-age=48h", custom);
+        size.Text = "banana";
+        age.Text = "banana";
+        mode.SelectedValue = "off";
+        DrainDispatcher();
+        Assert.True(options.TryGetArguments(false, out var disabled, out error), error);
+        Assert.Equal(RcloneMountOptions.Value(original, RcloneMountOptions.CacheSizeOption),
+            RcloneMountOptions.Value(disabled, RcloneMountOptions.CacheSizeOption));
+        Assert.Equal(RcloneMountOptions.Value(original, RcloneMountOptions.CacheAgeOption),
+            RcloneMountOptions.Value(disabled, RcloneMountOptions.CacheAgeOption));
+        mode.SelectedValue = "full";
+        DrainDispatcher();
+        Assert.Equal("banana", size.Text);
+        Assert.Equal("banana", age.Text);
+        Assert.False(options.TryGetArguments(false, out _, out error));
+        size.Text = "3.25GiB";
+        age.Text = "48h";
+        mode.SelectedIndex = -1;
+        Assert.False(options.TryGetArguments(false, out _, out error));
+        Assert.Equal("Choose a caching mode.", error);
+        mode.SelectedValue = "full";
+        DrainDispatcher();
+        var additional = Control<TextBox>(options, "ArgumentsBox");
+        var savedAdditional = additional.Text;
+        additional.Text = string.Join(Environment.NewLine, Enumerable.Range(0, 64).Select(index => $"--unknown-option-{index}"));
+        Assert.False(options.TryGetArguments(false, out _, out error));
+        Assert.True(error!.Length < 120);
+        Assert.DoesNotContain('\n', error);
+        additional.Text = "--" + new string('x', 2046);
+        Assert.False(options.TryGetArguments(false, out _, out error));
+        Assert.True(error!.Length < 120);
+        additional.Text = savedAdditional;
     }
 
     private static T Control<T>(FrameworkElement owner, string name) where T : FrameworkElement =>

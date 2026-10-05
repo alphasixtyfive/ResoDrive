@@ -11,40 +11,45 @@ internal static class InstallerPreparation
 {
     internal const string ResultFileName = "installer-preparation.json";
 
-    internal static int Run(string installationDirectory, bool showProgress)
-    {
-        if (!showProgress)
-            return PrepareAsync(installationDirectory, null).GetAwaiter().GetResult().Succeeded ? 0 : 1;
+    internal static int Run(string installationDirectory, bool interactive) =>
+        Run(interactive, () => PrepareAsync(installationDirectory), ShowFailure);
 
+    internal static int Run(bool interactive, Func<Task<InstallerPreparationResult>> prepare, Action<string> showFailure)
+    {
+        ArgumentNullException.ThrowIfNull(prepare);
+        ArgumentNullException.ThrowIfNull(showFailure);
+        // MSI/Burn owns routine progress. Do not open a competing window just
+        // to perform a preparation stage that already has MSI ProgressText.
+        var result = prepare().GetAwaiter().GetResult();
+        if (result.Succeeded) return 0;
+        if (interactive) showFailure(result.Message);
+        return 1;
+    }
+
+    private static void ShowFailure(string message)
+    {
         var application = new System.Windows.Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         application.Resources.MergedDictionaries.Add(new ResourceDictionary
         {
             Source = new Uri("/resodrive;component/Themes/Controls.xaml", UriKind.Relative)
         });
-        var window = new InstallerPreparationWindow();
-        window.Loaded += async (_, _) =>
+        var dialog = new MessageDialog("Installation needs attention", message, MessageBoxButton.OK, MessageBoxImage.Warning)
         {
-            var result = await PrepareAsync(installationDirectory,
-                new Progress<string>(message => window.SetStage(message)));
-            if (result.Succeeded)
-            {
-                window.Finish();
-                application.Shutdown(0);
-            }
-            else
-                window.ShowFailure(result.Message);
+            Title = "ResoDrive Setup",
+            WindowStartupLocation = WindowStartupLocation.CenterScreen,
+            ShowInTaskbar = true,
         };
-        window.Closed += (_, _) => application.Shutdown(1);
-        return application.Run(window);
+        dialog.ShowDialog();
+        application.Shutdown(1);
     }
 
-    private static async Task<InstallerPreparationResult> PrepareAsync(string directory, IProgress<string>? progress)
+    private static async Task<InstallerPreparationResult> PrepareAsync(string directory)
     {
         InstallerPreparationResult result;
         try
         {
             UiDiagnosticLog.Current.Information("installer.prepare_started");
-            await new InstallationPreparationService().PrepareAsync(directory, progress).ConfigureAwait(false);
+            await new InstallationPreparationService().PrepareAsync(directory).ConfigureAwait(false);
             result = new(true, "ResoDrive stopped safely. Installation can continue.", DateTimeOffset.UtcNow);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or

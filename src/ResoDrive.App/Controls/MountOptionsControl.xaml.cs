@@ -44,6 +44,12 @@ public partial class MountOptionsControl : System.Windows.Controls.UserControl
 
     public bool TryGetArguments(bool networkMode, out string[] arguments, out string? error)
     {
+        if (ModeBox.SelectedValue is not string cacheMode || !Modes.Any(mode => mode.Value == cacheMode))
+        {
+            arguments = [];
+            error = "Choose a caching mode.";
+            return false;
+        }
         var additional = RcloneArgumentTextCodec.Parse(ArgumentsBox.Text);
         if (additional.Any(RcloneMountOptions.IsControlOption))
         {
@@ -51,10 +57,14 @@ public partial class MountOptionsControl : System.Windows.Controls.UserControl
             error = "Use the caching and network-drive controls for cache and network-mode options; remove those options from Additional rclone options.";
             return false;
         }
-        arguments = _options.Compose(ModeBox.SelectedValue as string ?? _options.CacheMode,
-            ChoiceValue(SizeBox), ChoiceValue(AgeBox), networkMode, additional);
+        arguments = _options.Compose(cacheMode,
+            CacheValue(SizeBox, RcloneMountOptions.CacheSizeOption, _options.CacheSize, cacheMode == "off"),
+            CacheValue(AgeBox, RcloneMountOptions.CacheAgeOption, _options.CacheAge, cacheMode == "off"),
+            networkMode, additional);
         var validation = RcloneArgumentPolicy.ValidateMount(arguments);
-        error = validation.IsValid ? null : string.Join(Environment.NewLine, validation.Issues.Select(issue => issue.Message));
+        // Keep feedback outside the scroll surface concise. The validator still
+        // checks every issue; users can correct one actionable error at a time.
+        error = validation.IsValid ? null : validation.Issues[0].Message;
         return validation.IsValid;
     }
 
@@ -66,7 +76,15 @@ public partial class MountOptionsControl : System.Windows.Controls.UserControl
     }
 
     private static string ChoiceValue(WpfComboBox box) =>
-        box.SelectedItem is Choice choice && box.Text == choice.Label ? choice.Value : box.Text.Trim();
+        box.SelectedItem is Choice choice && box.Text == choice.Label ? choice.Value :
+            box.Text.Any(char.IsControl) ? box.Text : box.Text.Trim();
+
+    private static string CacheValue(WpfComboBox box, string option, string storedValue, bool disabled)
+    {
+        var value = ChoiceValue(box);
+        return disabled && !RcloneArgumentPolicy.ValidateMount([option + "=" + value]).IsValid
+            ? storedValue : value;
+    }
 
     private void Option_Changed(object sender, SelectionChangedEventArgs e) => UpdateHints();
 

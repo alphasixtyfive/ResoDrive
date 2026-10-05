@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Windows;
 using ResoDrive.Core.Setup;
@@ -6,7 +7,6 @@ using ResoDrive.Core.Validation;
 using ResoDrive.Windows;
 using WpfComboBox = System.Windows.Controls.ComboBox;
 using WpfSelectionChangedEventArgs = System.Windows.Controls.SelectionChangedEventArgs;
-using WpfMessageBox = ResoDrive.App.ModernMessageBox;
 using WpfWindow = System.Windows.Window;
 
 namespace ResoDrive.App;
@@ -21,31 +21,46 @@ public partial class SetupWindow : WpfWindow
     private readonly ApplicationPaths _paths;
     private readonly bool _firstRun;
     private readonly IReadOnlySet<char> _reservedDriveLetters;
+    private readonly HashSet<string> _reservedDriveNames;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private SetupProfileCatalog? _catalog;
     private string _profileId = string.Empty;
     private bool _prerequisitesReady;
     private bool _running;
     private bool _manual;
+    private bool _inputError;
+    private FrameworkElement? _invalidInput;
     private CancellationTokenSource? _operationCancellation;
     private bool _closeAfterCancellation;
 
     public SetupWindow(
         ApplicationPaths paths,
         bool firstRun = false,
-        IEnumerable<char>? reservedDriveLetters = null)
+        IEnumerable<char>? reservedDriveLetters = null,
+        IEnumerable<string>? reservedDriveNames = null)
     {
         _paths = paths ?? throw new ArgumentNullException(nameof(paths));
         _firstRun = firstRun;
         _reservedDriveLetters = (reservedDriveLetters ?? [])
             .Select(char.ToUpperInvariant)
             .ToHashSet();
+        _reservedDriveNames = (reservedDriveNames ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase);
         InitializeComponent();
         ConnectionTypeBox.ItemsSource = ConnectionTypes;
         AuthenticationBox.ItemsSource = AuthenticationMethods;
         AuthenticationBox.SelectedIndex = 0;
         StartWithWindowsBox.Visibility = firstRun ? Visibility.Visible : Visibility.Collapsed;
         WindowAppearance.PrepareDialog(this);
+        SetupScrollViewer.AddHandler(System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent,
+            new System.Windows.Controls.TextChangedEventHandler(Input_Changed));
+        SetupScrollViewer.AddHandler(System.Windows.Controls.Primitives.Selector.SelectionChangedEvent,
+            new System.Windows.Controls.SelectionChangedEventHandler(Input_Changed));
+        SetupScrollViewer.AddHandler(System.Windows.Controls.Primitives.ToggleButton.CheckedEvent,
+            new RoutedEventHandler(Input_Changed));
+        SetupScrollViewer.AddHandler(System.Windows.Controls.Primitives.ToggleButton.UncheckedEvent,
+            new RoutedEventHandler(Input_Changed));
+        PasswordBox.PasswordChanged += Input_Changed;
+        System.Windows.DataObject.AddPastingHandler(PortBox, Port_Pasting);
         Loaded += SetupWindow_Loaded;
         Closing += SetupWindow_Closing;
         Closed += (_, _) => _lifetimeCancellation.Dispose();
@@ -339,60 +354,13 @@ public partial class SetupWindow : WpfWindow
             return;
         }
 
-        var username = UsernameBox.Text.Trim();
+        if (!TryPrepareSetup(out var provisioningCatalog, out var request)) return;
         var password = PasswordBox.Password;
-        var usesSftpKey = ConnectionTypeBox.SelectedItem as string == "SFTP" &&
-            AuthenticationBox.SelectedItem as string == "Private key";
-        if (!OptionsEditor.TryGetArguments(NetworkModeBox.IsChecked == true, out var mountArguments, out var argumentError))
-        {
-            WpfMessageBox.Show(
-                this,
-                argumentError ?? "Check the mount options.",
-                "Invalid advanced options",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-            return;
-        }
-        if (string.IsNullOrWhiteSpace(DisplayNameBox.Text) ||
-            username.Length == 0 || (!usesSftpKey && password.Length == 0) ||
-            (usesSftpKey && string.IsNullOrWhiteSpace(KeyFileBox.Text)) ||
-            DriveBox.SelectedItem is not char drive)
-        {
-            WpfMessageBox.Show(
-                this,
-                "Enter a drive name and connection details, then choose a free drive letter.",
-                Title,
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
-            return;
-        }
 
         SetRunning(true);
         _operationCancellation = new CancellationTokenSource();
         try
         {
-            var catalog = _catalog ?? throw new InvalidOperationException("Profiles are not loaded.");
-            ISetupProfileCatalog provisioningCatalog = catalog;
-            if (_manual)
-            {
-                var manual = CreateManualProfile();
-                provisioningCatalog = new SetupProfileCatalog(
-                    [manual],
-                    ProfileCatalogSource.UserFile);
-            }
-            var request = new ProfileSetupRequest
-            {
-                ProfileId = _profileId,
-                Username = username,
-                DisplayName = DisplayNameBox.Text.Trim(),
-                RemotePath = RemotePathBox.Text.Trim(),
-                DriveLetter = drive,
-                NetworkMode = NetworkModeBox.IsChecked == true,
-                AutoMountOnApplicationStart = AutoMountBox.IsChecked == true,
-                StartWithWindows = _firstRun && StartWithWindowsBox.IsChecked == true,
-                SftpKeyFilePath = usesSftpKey ? KeyFileBox.Text : string.Empty,
-                MountArguments = mountArguments
-            };
             var progress = new Progress<string>(message => StatusText.Text = message + "…");
             var result = await new ProfileProvisioningService(_paths, provisioningCatalog).ProvisionAsync(
                 request,
@@ -446,6 +414,178 @@ public partial class SetupWindow : WpfWindow
         }
     }
 
+    internal bool TryPrepareSetup(
+        [NotNullWhen(true)] out ISetupProfileCatalog? provisioningCatalog,
+        [NotNullWhen(true)] out ProfileSetupRequest? request)
+    {
+        provisioningCatalog = null;
+        request = null;
+        if (_catalog is null)
+            return ShowInputError(ProfileCombo, "Storage profiles are still loading.");
+        if (DriveBox.SelectedItem is not char drive || drive is < 'D' or > 'Z' ||
+            !DriveBox.Items.Contains(drive))
+            return ShowInputError(DriveBox, "Choose a free drive letter.");
+        if (UsernameBox.Text.Any(char.IsControl))
+            return ShowInputError(UsernameBox, "The username cannot contain control characters.");
+        if (DisplayNameBox.Text.Any(char.IsControl))
+            return ShowInputError(DisplayNameBox, "The drive name cannot contain control characters.");
+        if (RemotePathBox.Text.Any(char.IsControl))
+            return ShowInputError(RemotePathBox, "The folder cannot contain control characters.");
+
+        var catalog = _catalog;
+        if (_manual)
+        {
+            if (ServerBox.Text.Any(char.IsControl))
+                return ShowInputError(ServerBox, "The server address cannot contain control characters.");
+            if (ConnectionTypeBox.SelectedItem is not string connectionType ||
+                !ConnectionTypes.Contains(connectionType, StringComparer.Ordinal))
+                return ShowInputError(ConnectionTypeBox, "Choose a storage type.");
+            if (connectionType == "SFTP" &&
+                (AuthenticationBox.SelectedItem is not string authentication ||
+                 !AuthenticationMethods.Contains(authentication, StringComparer.Ordinal)))
+                return ShowInputError(AuthenticationBox, "Choose an authentication method.");
+            if (connectionType == "SFTP" && !SetupProfileValidator.IsValidSftpHost(ServerBox.Text.Trim()))
+                return ShowInputError(ServerBox, "Enter a valid SFTP host name or IP address.");
+            if (connectionType == "SFTP" && !TryReadPort(PortBox.Text, out _))
+                return ShowInputError(PortBox, "Enter a whole-number port from 1 to 65535.");
+            if (connectionType == "SFTP" && HostKeyBox.Text.Any(char.IsControl))
+                return ShowInputError(HostKeyBox, "The server host key cannot contain control characters.");
+            try
+            {
+                catalog = new SetupProfileCatalog([CreateManualProfile()], ProfileCatalogSource.UserFile);
+            }
+            catch (ArgumentException exception)
+            {
+                var input = connectionType == "SFTP" ? HostKeyBox : ServerBox;
+                return ShowInputError(input, exception.Message);
+            }
+        }
+        var profile = catalog.Find(_profileId);
+        if (profile is null)
+            return ShowInputError(ProfileCombo, "Choose a connection profile.");
+        var username = UsernameBox.Text.Trim();
+        try { SetupProfileValidator.ValidateUsername(username); }
+        catch (ArgumentException)
+        {
+            return ShowInputError(UsernameBox, "Enter a valid username, up to 256 characters.");
+        }
+        var usesSftpKey = profile.Connection is SftpConnectionDefinition
+            { Authentication: SftpAuthenticationMethod.PrivateKey };
+        if (usesSftpKey && string.IsNullOrWhiteSpace(KeyFileBox.Text))
+            return ShowInputError(BrowseKeyButton, "Choose a private key file.");
+        try
+        {
+            _ = profile.Connection switch
+            {
+                SftpConnectionDefinition { Authentication: SftpAuthenticationMethod.PrivateKey } =>
+                    ProfileProvisioningService.NormalizeOptionalSecret(PasswordBox.Password),
+                WebDavConnectionDefinition { Vendor: WebDavVendor.Nextcloud } =>
+                    ProfileProvisioningService.NormalizeAppPassword(PasswordBox.Password),
+                _ => ProfileProvisioningService.NormalizeExactPassword(PasswordBox.Password),
+            };
+        }
+        catch (ArgumentException)
+        {
+            return ShowInputError(PasswordBox, usesSftpKey
+                ? "Enter a valid key passphrase, up to 2048 characters."
+                : "Enter a valid password, up to 2048 characters.");
+        }
+        if (!OptionsEditor.TryGetArguments(NetworkModeBox.IsChecked == true, out var mountArguments, out var argumentError))
+        {
+            AdvancedBox.IsExpanded = true;
+            return ShowInputError(OptionsEditor, argumentError ?? "Check the mount options.");
+        }
+        var candidate = new ProfileSetupRequest
+        {
+            ProfileId = _profileId,
+            Username = username,
+            DisplayName = DisplayNameBox.Text.Trim(),
+            RemotePath = RemotePathBox.Text.Trim(),
+            DriveLetter = drive,
+            NetworkMode = NetworkModeBox.IsChecked == true,
+            AutoMountOnApplicationStart = AutoMountBox.IsChecked == true,
+            StartWithWindows = _firstRun && StartWithWindowsBox.IsChecked == true,
+            SftpKeyFilePath = usesSftpKey ? KeyFileBox.Text : string.Empty,
+            MountArguments = mountArguments,
+        };
+        var plan = ProfileSetupPlan.CreateMount(candidate, catalog, profile.RemoteName);
+        if (!plan.Succeeded)
+        {
+            var input = plan.Error?.Code.StartsWith("mount.displayName", StringComparison.Ordinal) == true
+                ? DisplayNameBox : RemotePathBox;
+            return ShowInputError(input, plan.Error?.Message ?? "Check the drive settings.");
+        }
+        if (_reservedDriveNames.Contains(candidate.DisplayName))
+            return ShowInputError(DisplayNameBox, "A drive with this name already exists.");
+        ClearInputError();
+        provisioningCatalog = catalog;
+        request = candidate;
+        return true;
+    }
+
+    private bool ShowInputError(FrameworkElement input, string message)
+    {
+        _inputError = true;
+        _invalidInput = input;
+        SetInputErrorMessage(message);
+        input.BringIntoView();
+        input.Focus();
+        return false;
+    }
+
+    private void SetInputErrorMessage(string message)
+    {
+        var changed = StatusText.Text != message;
+        StatusText.Text = message;
+        StatusText.Foreground = StatusPalette.Warning;
+        if (!changed) return;
+        var peer = System.Windows.Automation.Peers.UIElementAutomationPeer.FromElement(StatusText) ??
+            System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(StatusText);
+        peer?.RaiseAutomationEvent(System.Windows.Automation.Peers.AutomationEvents.LiveRegionChanged);
+    }
+
+    private void Input_Changed(object sender, RoutedEventArgs e)
+    {
+        // Expanding/collapsing a section changes its template's toggle button,
+        // not the input. Keep actionable feedback visible until input changes.
+        if (e.OriginalSource is System.Windows.Controls.Primitives.ToggleButton
+            { TemplatedParent: System.Windows.Controls.Expander }) return;
+        // Editable combo-box templates can initialize when Advanced first
+        // expands. Preserve its error while its actual values remain invalid.
+        if (_inputError && _invalidInput == OptionsEditor &&
+            !OptionsEditor.TryGetArguments(NetworkModeBox.IsChecked == true, out _, out var error))
+        {
+            SetInputErrorMessage(error ?? "Check the mount options.");
+            return;
+        }
+        ClearInputError();
+    }
+
+    private void ClearInputError()
+    {
+        if (!_inputError) return;
+        _inputError = false;
+        _invalidInput = null;
+        StatusText.Text = string.Empty;
+        StatusText.Foreground = (System.Windows.Media.Brush)FindResource("MutedBrush");
+    }
+
+    private static bool TryReadPort(string text, out int port) =>
+        NumericInput.TryGetPositiveInteger(text, 65_535, out port);
+
+    private void Port_PreviewTextInput(object sender, System.Windows.Input.TextCompositionEventArgs e) =>
+        e.Handled = !NumericInput.IsAsciiDigits(NumericInput.ReplaceSelection(
+            PortBox.Text, PortBox.SelectionStart, PortBox.SelectionLength, e.Text));
+
+    private void Port_Pasting(object sender, DataObjectPastingEventArgs e)
+    {
+        if (!e.DataObject.GetDataPresent(System.Windows.DataFormats.UnicodeText) ||
+            e.DataObject.GetData(System.Windows.DataFormats.UnicodeText) is not string text ||
+            !NumericInput.IsAsciiDigits(NumericInput.ReplaceSelection(
+                PortBox.Text, PortBox.SelectionStart, PortBox.SelectionLength, text)))
+            e.CancelCommand();
+    }
+
     private void Cancel_Click(object sender, RoutedEventArgs e)
     {
         if (!_running)
@@ -457,26 +597,24 @@ public partial class SetupWindow : WpfWindow
 
     private SetupProfile CreateManualProfile()
     {
-        var connectionType = ConnectionTypeBox.SelectedItem as string ?? ConnectionTypes[0];
+        var connectionType = ConnectionTypeBox.SelectedItem as string ??
+            throw new ArgumentException("Choose a storage type.");
         SetupConnectionDefinition connection = connectionType switch
         {
             "SFTP" => new SftpConnectionDefinition
             {
                 Host = ServerBox.Text.Trim(),
-                Port = int.TryParse(
-                    PortBox.Text,
-                    System.Globalization.NumberStyles.None,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out var port)
+                Port = TryReadPort(PortBox.Text, out var port)
                     ? port
-                    : 0,
+                    : throw new ArgumentException("Enter a whole-number port from 1 to 65535."),
                 KnownHost = HostKeyBox.Text.Trim(),
                 Authentication = AuthenticationBox.SelectedItem as string == "Private key"
                     ? SftpAuthenticationMethod.PrivateKey
                     : SftpAuthenticationMethod.Password,
             },
             "WebDAV" => CreateManualWebDav(nextcloud: false),
-            _ => CreateManualWebDav(nextcloud: true),
+            "Nextcloud" => CreateManualWebDav(nextcloud: true),
+            _ => throw new ArgumentException("Choose a storage type."),
         };
         var displayName = DisplayNameBox.Text.Trim();
         var profile = new SetupProfile
@@ -487,7 +625,8 @@ public partial class SetupWindow : WpfWindow
             RemoteName = CreateRemoteName(displayName, connectionType),
             Connection = connection,
             DefaultRemotePath = string.Empty,
-            DefaultDriveLetter = DriveBox.SelectedItem is char drive ? drive : 'U',
+            DefaultDriveLetter = DriveBox.SelectedItem is char drive ? drive :
+                throw new ArgumentException("Choose a free drive letter."),
             StartWithWindowsByDefault = StartWithWindowsBox.IsChecked == true,
         };
         var validation = SetupProfileValidator.Validate(profile);
@@ -498,7 +637,9 @@ public partial class SetupWindow : WpfWindow
 
     private WebDavConnectionDefinition CreateManualWebDav(bool nextcloud)
     {
-        if (!Uri.TryCreate(ServerBox.Text.Trim(), UriKind.Absolute, out var entered))
+        var server = ServerBox.Text.Trim();
+        if (server.Any(char.IsControl) || server.Contains('\\') ||
+            !Uri.TryCreate(server, UriKind.Absolute, out var entered))
             throw new ArgumentException("Enter a valid HTTPS server address.");
         if (!entered.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
             !string.IsNullOrEmpty(entered.UserInfo) ||

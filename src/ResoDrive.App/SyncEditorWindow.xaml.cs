@@ -1,6 +1,9 @@
 using System.Diagnostics;
 using System.IO;
 using System.Windows;
+using System.Windows.Automation.Peers;
+using System.Windows.Controls;
+using System.Windows.Input;
 using Microsoft.Win32;
 using ResoDrive.Core.Domain;
 using ResoDrive.Core.Settings;
@@ -32,6 +35,7 @@ public partial class SyncEditorWindow : WpfWindow
     private bool _updatingLocalCopyControls;
     private bool _managedCopyActive;
     private bool _managedChoiceChanged;
+    private FrameworkElement? _invalidInput;
 
     public SyncEditorWindow(
         ApplicationPaths paths,
@@ -42,6 +46,8 @@ public partial class SyncEditorWindow : WpfWindow
     )
     {
         ArgumentNullException.ThrowIfNull(paths);
+        ArgumentNullException.ThrowIfNull(mounts);
+        ArgumentNullException.ThrowIfNull(registeredMountIds);
         _existing = existing;
         _registeredMountIds = registeredMountIds;
         _jobId = existing?.Id ?? Guid.NewGuid();
@@ -53,7 +59,7 @@ public partial class SyncEditorWindow : WpfWindow
         ModeBox.DisplayMemberPath = nameof(SyncModeOption.Label);
         MountBox.SelectedItem =
             mounts.FirstOrDefault(mount => mount.Id == mountId)
-            ?? (mounts.Count > 0 ? mounts[0] : null);
+            ?? (existing is null && mountId is null && mounts.Count > 0 ? mounts[0] : null);
         DeleteButton.Visibility = existing is null ? Visibility.Collapsed : Visibility.Visible;
         Heading.Text = existing is null ? "New sync job" : "Edit sync job";
         if (existing is null)
@@ -68,8 +74,8 @@ public partial class SyncEditorWindow : WpfWindow
             RemotePathBox.Text = existing.RemotePath;
             LocalPathBox.Text = existing.LocalPath;
             ModeBox.SelectedItem = Enum.TryParse<SyncMode>(existing.Mode, true, out var existingMode)
-                ? Modes.FirstOrDefault(mode => mode.Value == existingMode) ?? Modes[0]
-                : Modes[0];
+                ? Modes.FirstOrDefault(mode => mode.Value == existingMode)
+                : null;
             EnabledBox.IsChecked = existing.Enabled;
             ScheduleBox.IsChecked = existing.Schedule.Enabled;
             RunOnStartBox.IsChecked = existing.Schedule.RunOnApplicationStart;
@@ -84,6 +90,12 @@ public partial class SyncEditorWindow : WpfWindow
         UpdateLocalCopyControls();
         UpdateMirrorWarning();
         UpdateScheduleControls();
+        UpdateIntervalFeedback();
+        if (ModeBox.SelectedItem is null)
+        {
+            _invalidInput = ModeBox;
+            SetInputFeedback("Choose a supported sync operation.");
+        }
     }
 
     public MountSettings? SelectedMount => MountBox.SelectedItem as MountSettings;
@@ -92,42 +104,75 @@ public partial class SyncEditorWindow : WpfWindow
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
+        if (!TryGetValue(out var value, out var error) || value is null)
+        {
+            SetInputFeedback(error ?? "Check the sync settings.");
+            if (_invalidInput is not null)
+            {
+                for (DependencyObject? parent = _invalidInput; parent is not null;
+                     parent = LogicalTreeHelper.GetParent(parent))
+                    if (parent is Expander expander) expander.IsExpanded = true;
+                _invalidInput.BringIntoView();
+                _invalidInput.Focus();
+            }
+            return;
+        }
+        var selectedMode = (SyncModeOption)ModeBox.SelectedItem;
+        if (selectedMode.Value.IsMirror() && (value.Schedule.Enabled || value.Schedule.RunOnApplicationStart) &&
+            !WpfMessageBox.Confirm(this,
+                $"This automatic mirror may delete destination-only files in:\n\n{MirrorDestination(selectedMode)}\n\nEnable automatic runs?",
+                "Confirm automatic mirror", "Enable automatic runs")) return;
+        Value = value;
+        DialogResult = true;
+    }
+
+    internal bool TryGetValue(out SyncJobSettings? value, out string? error)
+    {
+        value = null;
+        error = null;
+        _invalidInput = null;
         if (SelectedMount is null)
         {
-            WpfMessageBox.Show(
-                this,
-                "Choose a drive for this sync job.",
-                Title,
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning
-            );
-            return;
+            error = "Choose a drive for this sync job.";
+            _invalidInput = MountBox;
+            return false;
+        }
+        foreach (var input in new[] { NameBox, RemotePathBox, LocalPathBox })
+        {
+            if (!input.Text.Any(char.IsControl)) continue;
+            error = "Names and folder paths cannot contain control characters.";
+            _invalidInput = input;
+            return false;
+        }
+        if (SelectedMount.SyncJobs.Any(job => job.Id != _jobId &&
+                job.DisplayName.Equals(NameBox.Text.Trim(), StringComparison.OrdinalIgnoreCase)))
+        {
+            error = "Choose a different name. This drive already has a sync job with that name.";
+            _invalidInput = NameBox;
+            return false;
         }
         var scheduled = ScheduleBox.IsChecked == true;
-        var interval = 60;
-        if (scheduled && (!int.TryParse(IntervalBox.Text, out interval) || interval is < 5 or > 1440))
+        var interval = _existing?.Schedule.IntervalMinutes ?? 60;
+        if (NumericInput.TryGetPositiveInteger(IntervalBox.Text, 1440, out var editedInterval) && editedInterval >= 5)
+            interval = editedInterval;
+        else if (scheduled)
         {
-            WpfMessageBox.Show(
-                this,
-                "The interval must be between 5 and 1440 minutes.",
-                Title,
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning
-            );
-            return;
+            error = "Enter a whole number from 5 to 1440 minutes.";
+            _invalidInput = IntervalBox;
+            return false;
         }
-        var selectedMode = ModeBox.SelectedItem as SyncModeOption ?? Modes[0];
+        if (ModeBox.SelectedItem is not SyncModeOption selectedMode || !Modes.Contains(selectedMode))
+        {
+            error = "Choose a supported sync operation.";
+            _invalidInput = ModeBox;
+            return false;
+        }
         var managedLocalCopy = ManagedLocalCopyBox.IsChecked == true && CanManageLocalCopy;
         if (!managedLocalCopy && IsManagedStoragePath(LocalPathBox.Text.Trim()))
         {
-            WpfMessageBox.Show(
-                this,
-                "Choose a folder outside ResoDrive's managed copies. Files in the managed folder remain included in Nextcloud remote wipe.",
-                "Choose a different local folder",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning
-            );
-            return;
+            error = "Choose a folder outside ResoDrive's managed copies. Files in the managed folder remain included in Nextcloud remote wipe.";
+            _invalidInput = LocalPathBox;
+            return false;
         }
         var arguments = RcloneArgumentTextCodec.Parse(ArgumentsBox.Text);
         var job = new SyncJob
@@ -150,39 +195,27 @@ public partial class SyncEditorWindow : WpfWindow
         var validation = new SyncJobValidator().Validate(job);
         if (!validation.IsValid)
         {
-            WpfMessageBox.Show(
-                this,
-                string.Join(
-                    Environment.NewLine,
-                    validation.Issues.Select(issue => "• " + issue.Message)
-                ),
-                "Check sync job",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning
-            );
-            return;
+            var issue = validation.Issues[0];
+            error = issue.Message;
+            _invalidInput = issue.Field switch
+            {
+                "displayName" => NameBox,
+                "localPath" => LocalPathBox,
+                "remotePath" => RemotePathBox,
+                "mode" => ModeBox,
+                "schedule.interval" => IntervalBox,
+                _ => ArgumentsBox
+            };
+            return false;
         }
         if (RemotePathUtility.Normalize(SelectedMount.RemotePath).Length > 0 &&
             !job.RemotePath.StartsWith('/'))
         {
-            WpfMessageBox.Show(this,
-                "Start Remote folder with / for this drive, for example /Fleet Reference.",
-                "Check sync job", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
+            error = "Start Remote folder with / for this drive, for example /Fleet Reference.";
+            _invalidInput = RemotePathBox;
+            return false;
         }
-        var mirror = job.Mode.IsMirror();
-        if (
-            mirror
-            && (job.Schedule.Enabled || job.Schedule.RunOnApplicationStart)
-            && !WpfMessageBox.Confirm(
-                this,
-                $"This automatic mirror may delete destination-only files in:\n\n{MirrorDestination(selectedMode)}\n\nEnable automatic runs?",
-                "Confirm automatic mirror",
-                "Enable automatic runs"
-            )
-        )
-            return;
-        Value = new SyncJobSettings
+        value = new SyncJobSettings
         {
             Id = job.Id.Value,
             DisplayName = job.DisplayName,
@@ -199,7 +232,7 @@ public partial class SyncEditorWindow : WpfWindow
             },
             Arguments = job.Arguments.ToArray(),
         };
-        DialogResult = true;
+        return true;
     }
 
     private void Delete_Click(object sender, RoutedEventArgs e)
@@ -222,6 +255,7 @@ public partial class SyncEditorWindow : WpfWindow
     {
         if (_initializing)
             return;
+        ClearInputFeedback(ModeBox);
         ApplyNewJobLocalCopyDefault();
         UpdateLocalCopyControls();
         UpdateMirrorWarning();
@@ -231,6 +265,7 @@ public partial class SyncEditorWindow : WpfWindow
     {
         if (_initializing)
             return;
+        ClearInputFeedback(MountBox);
         ApplyNewJobLocalCopyDefault();
         UpdateLocalCopyControls();
     }
@@ -341,7 +376,78 @@ public partial class SyncEditorWindow : WpfWindow
                 ? Visibility.Visible
                 : Visibility.Collapsed;
 
-    private void Schedule_Changed(object sender, RoutedEventArgs e) => UpdateScheduleControls();
+    private void Schedule_Changed(object sender, RoutedEventArgs e)
+    {
+        UpdateScheduleControls();
+        if (!_initializing) UpdateIntervalFeedback();
+    }
+
+    private void Interval_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_initializing) UpdateIntervalFeedback();
+    }
+
+    private void Interval_PreviewTextInput(object sender, TextCompositionEventArgs e)
+    {
+        if (!NumericInput.IsAsciiDigits(NumericInput.ReplaceSelection(IntervalBox.Text,
+                IntervalBox.SelectionStart, IntervalBox.SelectionLength, e.Text)))
+        {
+            e.Handled = true;
+            _invalidInput = IntervalBox;
+            SetInputFeedback("Enter a whole number from 5 to 1440 minutes.");
+        }
+    }
+
+    private void Interval_Pasting(object sender, DataObjectPastingEventArgs e)
+    {
+        if (e.DataObject.GetData(System.Windows.DataFormats.UnicodeText) is not string insertion ||
+            !NumericInput.IsAsciiDigits(NumericInput.ReplaceSelection(IntervalBox.Text,
+                IntervalBox.SelectionStart, IntervalBox.SelectionLength, insertion)))
+        {
+            e.CancelCommand();
+            _invalidInput = IntervalBox;
+            SetInputFeedback("Enter a whole number from 5 to 1440 minutes.");
+        }
+    }
+
+    private void UpdateIntervalFeedback()
+    {
+        var invalid = ScheduleBox.IsChecked == true &&
+            (!NumericInput.TryGetPositiveInteger(IntervalBox.Text, 1440, out var value) || value < 5);
+        SaveButton.IsEnabled = !invalid;
+        if (invalid)
+        {
+            _invalidInput = IntervalBox;
+            SetInputFeedback("Enter a whole number from 5 to 1440 minutes.");
+        }
+        else ClearInputFeedback(IntervalBox);
+    }
+
+    private void Input_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_initializing && sender is FrameworkElement input) ClearInputFeedback(input);
+    }
+
+    private void ClearInputFeedback(FrameworkElement input)
+    {
+        if (_invalidInput != input) return;
+        _invalidInput = null;
+        SetInputFeedback(string.Empty);
+    }
+
+    private void SetInputFeedback(string message)
+    {
+        if (InputFeedback is null) return;
+        var changed = InputFeedback.Text != message;
+        InputFeedback.Text = message;
+        InputFeedback.Visibility = message.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        if (changed && message.Length > 0)
+        {
+            var peer = UIElementAutomationPeer.FromElement(InputFeedback) ??
+                UIElementAutomationPeer.CreatePeerForElement(InputFeedback);
+            peer?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+        }
+    }
 
     private void BrowseLocalFolder_Click(object sender, RoutedEventArgs e)
     {

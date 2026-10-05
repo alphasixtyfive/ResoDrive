@@ -2,11 +2,15 @@ using System.IO;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
+using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Threading;
 using ResoDrive.Core.Domain;
 using ResoDrive.Core.Settings;
 using ResoDrive.Core.Validation;
 using ResoDrive.Windows;
+using DataFormats = System.Windows.DataFormats;
+using WpfControl = System.Windows.Controls.Control;
 using WpfMessageBox = ResoDrive.App.ModernMessageBox;
 using WpfWindow = System.Windows.Window;
 
@@ -23,14 +27,16 @@ public partial class MountEditorWindow : WpfWindow
     private readonly string _remoteName;
     private readonly ApplicationPaths _paths;
     private readonly HashSet<char> _reservedDriveLetters;
+    private readonly HashSet<string> _reservedNames;
     private readonly CancellationTokenSource _loadingCancellation = new();
     private Task? _preparation;
     private bool _closed;
     private bool _ready;
     private bool _loadingInteraction;
+    private FrameworkElement? _invalidInput;
 
     public MountEditorWindow(MountSettings? existing, string remoteName, ApplicationPaths paths,
-        IEnumerable<char>? reservedDriveLetters = null)
+        IEnumerable<char>? reservedDriveLetters = null, IEnumerable<string>? reservedNames = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(remoteName);
         ArgumentNullException.ThrowIfNull(paths);
@@ -41,6 +47,7 @@ public partial class MountEditorWindow : WpfWindow
         _remoteName = remoteName.Trim().TrimEnd(':');
         _paths = paths;
         _reservedDriveLetters = (reservedDriveLetters ?? []).Select(char.ToUpperInvariant).ToHashSet();
+        _reservedNames = new HashSet<string>(reservedNames ?? [], StringComparer.OrdinalIgnoreCase);
 
         DriveBox.IsEnabled = false;
         SaveButton.IsEnabled = false;
@@ -70,7 +77,8 @@ public partial class MountEditorWindow : WpfWindow
         {
             EnabledBox.IsChecked = true;
             RestartBox.IsChecked = true;
-            AttemptsBox.Text = "Unlimited";
+            AttemptsBox.Text = "5";
+            UnlimitedBox.IsChecked = true;
         }
         else
         {
@@ -80,12 +88,17 @@ public partial class MountEditorWindow : WpfWindow
                 existing.AutoMount.Equals("OnApplicationStart", StringComparison.OrdinalIgnoreCase);
             EnabledBox.IsChecked = existing.Enabled;
             RestartBox.IsChecked = existing.Restart.Enabled;
-            AttemptsBox.Text = existing.Restart.MaximumAttempts == 0 ? "Unlimited" :
+            AttemptsBox.Text = existing.Restart.MaximumAttempts == 0 ? "5" :
                 existing.Restart.MaximumAttempts.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            UnlimitedBox.IsChecked = existing.Restart.MaximumAttempts == 0;
             NetworkModeBox.IsChecked = RcloneMountOptions.HasOption(existing.Arguments, "--network-mode");
         }
 
         UpdateRestartControls();
+        EditorScrollViewer.AddHandler(System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent,
+            new TextChangedEventHandler((_, _) => ClearFormError()));
+        EditorScrollViewer.AddHandler(System.Windows.Controls.Primitives.Selector.SelectionChangedEvent,
+            new SelectionChangedEventHandler((_, _) => ClearFormError()));
     }
 
     public MountSettings? Value { get; private set; }
@@ -94,56 +107,67 @@ public partial class MountEditorWindow : WpfWindow
     private void Save_Click(object sender, RoutedEventArgs e)
     {
         if (!_ready) return;
+        if (!TryBuildValue(out var value, out var error))
+        {
+            ShowFormError(error ?? "Check the drive settings.");
+            return;
+        }
+        Value = value;
+        DialogResult = true;
+    }
+
+    internal bool TryBuildValue(out MountSettings? value, out string? error)
+    {
+        value = null;
+        error = null;
+        _invalidInput = null;
+        if (!_ready)
+        {
+            error = "Wait for settings to finish loading.";
+            return false;
+        }
         if (string.IsNullOrWhiteSpace(NameBox.Text) || DriveBox.SelectedItem is not char drive)
         {
-            WpfMessageBox.Show(
-                this,
-                "Enter a name and choose a free drive letter.",
-                Title,
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-            return;
+            error = "Enter a name and choose a free drive letter.";
+            _invalidInput = string.IsNullOrWhiteSpace(NameBox.Text) ? NameBox : DriveBox;
+            return false;
+        }
+        if (NameBox.Text.Any(char.IsControl) || RemotePathBox.Text.Any(char.IsControl))
+        {
+            error = "Names and folder paths cannot contain control characters.";
+            _invalidInput = NameBox.Text.Any(char.IsControl) ? NameBox : RemotePathBox;
+            return false;
+        }
+        if (_reservedNames.Contains(NameBox.Text.Trim()))
+        {
+            error = "This drive name is already in use. Choose another name.";
+            _invalidInput = NameBox;
+            return false;
         }
 
         var path = RemotePathUtility.Normalize(RemotePathBox.Text);
         if (!RemotePathUtility.IsWellFormed(path))
         {
-            WpfMessageBox.Show(
-                this,
-                "Folder paths may start with one forward slash, but cannot contain backslashes, repeated slashes, or dot traversal segments.",
-                Title,
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-            return;
+            error = "Use forward slashes, without repeated slashes or dot traversal segments.";
+            _invalidInput = RemotePathBox;
+            return false;
         }
 
-        var reconnect = RestartBox.IsChecked == true;
-        var attempts = _existing?.Restart.MaximumAttempts ?? 0;
-        var attemptsText = AttemptsBox.Text.Trim();
-        if (reconnect && attemptsText.Equals("Unlimited", StringComparison.OrdinalIgnoreCase)) attempts = 0;
-        else if (reconnect && (!int.TryParse(attemptsText, out attempts) || attempts is < 0 or > 100))
+        if (!TryGetRestartSettings(out var restart))
         {
-            WpfMessageBox.Show(
-                this,
-                "Enter 1 to 100 reconnect attempts, or Unlimited to keep trying.",
-                Title,
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-            return;
+            error = AttemptsError.Text;
+            _invalidInput = AttemptsBox;
+            return false;
         }
 
         if (!OptionsEditor.TryGetArguments(NetworkModeBox.IsChecked == true, out var arguments, out var argumentError))
         {
-            WpfMessageBox.Show(
-                this,
-                argumentError ?? "Check the mount options.",
-                "Invalid advanced options",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-            return;
+            error = argumentError ?? "Check the mount options.";
+            _invalidInput = OptionsEditor;
+            return false;
         }
 
-        Value = new MountSettings
+        var candidate = new MountSettings
         {
             Id = _existing?.Id ?? Guid.NewGuid(),
             DisplayName = NameBox.Text.Trim(),
@@ -154,15 +178,20 @@ public partial class MountEditorWindow : WpfWindow
             Target = new MountTargetSettings { Kind = "drive", DriveLetter = drive },
             Enabled = EnabledBox.IsChecked == true,
             AutoMount = AutoMountBox.IsChecked == true ? "OnApplicationStart" : "Never",
-            Restart = (_existing?.Restart ?? new RestartSettings()) with
-            {
-                Enabled = reconnect,
-                MaximumAttempts = attempts,
-            },
+            Restart = restart,
             Arguments = arguments,
             SyncJobs = _existing?.SyncJobs ?? [],
         };
-        DialogResult = true;
+        var mapped = MountDefinitionMapper.ToDomain(candidate);
+        if (!mapped.Succeeded)
+        {
+            error = mapped.Error?.Message ?? "Check the drive settings.";
+            if (mapped.Error?.Code.StartsWith("mount.displayName", StringComparison.Ordinal) == true)
+                _invalidInput = NameBox;
+            return false;
+        }
+        value = candidate;
+        return true;
     }
 
     private void Delete_Click(object sender, RoutedEventArgs e)
@@ -183,9 +212,89 @@ public partial class MountEditorWindow : WpfWindow
 
     private void UpdateRestartControls()
     {
-        if (AttemptsBox is not null)
+        if (AttemptsBox is null || UnlimitedBox is null || AttemptsError is null) return;
+        var reconnect = RestartBox.IsChecked == true;
+        UnlimitedBox.IsEnabled = reconnect;
+        AttemptsBox.IsEnabled = reconnect && UnlimitedBox.IsChecked != true;
+        UpdateAttemptsValidation();
+        ClearFormError();
+    }
+
+    internal bool TryGetRestartSettings(out RestartSettings restart)
+    {
+        var reconnect = RestartBox.IsChecked == true;
+        var validNumber = NumericInput.TryGetPositiveInteger(AttemptsBox.Text, 100, out var finiteAttempts);
+        var unlimited = UnlimitedBox.IsChecked == true;
+        restart = (_existing?.Restart ?? new RestartSettings()) with
         {
-            AttemptsBox.IsEnabled = RestartBox.IsChecked == true;
+            Enabled = reconnect,
+            // Ignore invalid inactive drafts; never silently repair active input.
+            MaximumAttempts = unlimited ? 0 : validNumber ? finiteAttempts : _existing?.Restart.MaximumAttempts ?? 0,
+        };
+        return !reconnect || unlimited || validNumber;
+    }
+
+    private void Attempts_PreviewTextInput(object sender, TextCompositionEventArgs e) =>
+        e.Handled = !NumericInput.IsAsciiDigits(NumericInput.ReplaceSelection(
+            AttemptsBox.Text, AttemptsBox.SelectionStart, AttemptsBox.SelectionLength, e.Text));
+
+    private void Attempts_Pasting(object sender, DataObjectPastingEventArgs e)
+    {
+        if (!e.DataObject.GetDataPresent(DataFormats.UnicodeText) ||
+            e.DataObject.GetData(DataFormats.UnicodeText) is not string text ||
+            !NumericInput.IsAsciiDigits(NumericInput.ReplaceSelection(
+                AttemptsBox.Text, AttemptsBox.SelectionStart, AttemptsBox.SelectionLength, text)))
+            e.CancelCommand();
+    }
+
+    private void Attempts_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        UpdateAttemptsValidation();
+        ClearFormError();
+    }
+
+    private void UpdateAttemptsValidation()
+    {
+        if (AttemptsBox is null || UnlimitedBox is null || AttemptsError is null || SaveButton is null) return;
+        var invalid = _ready && !TryGetRestartSettings(out _);
+        var changed = AttemptsError.Visibility != (invalid ? Visibility.Visible : Visibility.Collapsed);
+        AttemptsError.Visibility = invalid ? Visibility.Visible : Visibility.Collapsed;
+        if (invalid) AttemptsBox.BorderBrush = StatusPalette.Warning;
+        else AttemptsBox.ClearValue(WpfControl.BorderBrushProperty);
+        SaveButton.IsEnabled = _ready && DriveBox.Items.Count > 0 && !invalid;
+        if (changed && invalid)
+        {
+            var peer = UIElementAutomationPeer.FromElement(AttemptsError) ??
+                UIElementAutomationPeer.CreatePeerForElement(AttemptsError);
+            peer?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+            if (AttemptsBox.IsKeyboardFocusWithin)
+            {
+                _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+                {
+                    if (!_closed && AttemptsError.Visibility == Visibility.Visible && AttemptsBox.IsKeyboardFocusWithin)
+                        AttemptsError.BringIntoView();
+                }));
+            }
+        }
+    }
+
+    private void ClearFormError()
+    {
+        if (FormError is not null) FormError.Visibility = Visibility.Collapsed;
+    }
+
+    private void ShowFormError(string message)
+    {
+        FormError.Text = message;
+        FormError.Visibility = Visibility.Visible;
+        var peer = UIElementAutomationPeer.FromElement(FormError) ?? UIElementAutomationPeer.CreatePeerForElement(FormError);
+        peer?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+        if (_invalidInput is not null)
+        {
+            for (DependencyObject? parent = _invalidInput; parent is not null; parent = LogicalTreeHelper.GetParent(parent))
+                if (parent is Expander expander) expander.IsExpanded = true;
+            _invalidInput.BringIntoView();
+            _invalidInput.Focus();
         }
     }
 
@@ -245,7 +354,7 @@ public partial class MountEditorWindow : WpfWindow
         _ready = true;
         EditorScrollViewer.IsEnabled = true;
         DeleteButton.IsEnabled = true;
-        SaveButton.IsEnabled = DriveBox.Items.Count > 0;
+        UpdateAttemptsValidation();
         SetLoadingStatus(message);
     }
 

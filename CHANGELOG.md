@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.26] - 2026-10-05
+
+- Replace text-based Unlimited attempts with an explicit checkbox and a validated numeric limit; keep drafts when toggling and show inline errors.
+- Validate setup before connecting and all editor candidates before closing; reject missing modes, duplicate names, malformed paths, ports and control characters.
+- Preserve disabled sync intervals and custom cache values; validate sizes, durations and bandwidth options without silently clamping input.
+- Bound inline errors, retain them when Advanced changes, and keep controls and buttons visible at small window sizes and larger display scales.
+- Let the installer own routine update/install progress, removing the duplicate preparation window while retaining upload blocking and its specific failure message.
+- Add input regression tests and an engineering guide requiring validation and compiled UI review before publication. Correct the withdrawn 0.3.25 release.
+
 ## [0.3.25] - 2026-10-05
 
 - Keep routine upload checks quiet while showing detected transfers, pending files and errors.

@@ -6,9 +6,9 @@
   xmlns:controls="clr-namespace:ResoDrive.App.Controls"
   Title="Drive settings"
   Width="540"
-  Height="540"
+  Height="640"
   MinWidth="480"
-  MinHeight="500"
+  MinHeight="560"
   WindowStartupLocation="CenterOwner"
   ShowInTaskbar="False"
   Background="{StaticResource WindowBrush}"
@@ -52,6 +52,8 @@
           <RowDefinition Height="Auto" MinHeight="44" />
           <RowDefinition Height="Auto" MinHeight="44" />
           <RowDefinition Height="Auto" MinHeight="44" />
+          <RowDefinition Height="Auto" MinHeight="44" />
+          <RowDefinition Height="Auto" />
           <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
@@ -107,39 +109,41 @@
           x:Name="AutoMountBox"
           Grid.Row="5"
           Grid.Column="1"
-          Content="{x:Static local:ProductInfo.MountOnStartText}"
+          Content="Mount automatically"
+          ToolTip="{x:Static local:ProductInfo.MountOnStartText}"
           AutomationProperties.Name="{x:Static local:ProductInfo.MountOnStartText}"
           VerticalAlignment="Center"
         />
 
         <TextBlock Grid.Row="6" Text="Recovery" VerticalAlignment="Center" />
-        <StackPanel
-          Grid.Row="6"
-          Grid.Column="1"
-          Orientation="Horizontal"
-          VerticalAlignment="Center"
-        >
-          <CheckBox
-            x:Name="RestartBox"
-            Content="Reconnect"
-            Margin="0,0,12,0"
-            Checked="Restart_Changed"
-            Unchecked="Restart_Changed"
-            AutomationProperties.Name="Reconnect automatically"
-          />
-          <TextBlock Text="Attempts" VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}" />
+        <CheckBox x:Name="RestartBox" Grid.Row="6" Grid.Column="1"
+                  Content="Reconnect" VerticalAlignment="Center"
+                  Checked="Restart_Changed" Unchecked="Restart_Changed"
+                  AutomationProperties.Name="Reconnect automatically" />
+
+        <TextBlock Grid.Row="7" Text="Maximum attempts" VerticalAlignment="Center" />
+        <StackPanel Grid.Row="7" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
           <TextBox
             x:Name="AttemptsBox"
             Style="{StaticResource EditorTextBox}"
-            Width="88"
-            Margin="8,0"
-            ToolTip="Maximum reconnect attempts, or Unlimited to keep trying"
-            AutomationProperties.Name="Maximum reconnect attempts, or Unlimited to keep trying"
+            Width="64"
+            PreviewTextInput="Attempts_PreviewTextInput"
+            DataObject.Pasting="Attempts_Pasting"
+            TextChanged="Attempts_TextChanged"
+            ToolTip="A whole number from 1 to 100"
+            AutomationProperties.Name="Maximum reconnect attempts"
           />
+          <CheckBox x:Name="UnlimitedBox" Content="Unlimited" Margin="12,0,0,0"
+                    VerticalAlignment="Center" Checked="Restart_Changed" Unchecked="Restart_Changed"
+                    AutomationProperties.Name="Unlimited reconnect attempts" />
         </StackPanel>
+        <TextBlock x:Name="AttemptsError" Grid.Row="8" Grid.Column="1"
+                   Text="Enter a whole number from 1 to 100." Visibility="Collapsed"
+                   Foreground="{StaticResource WarningBrush}" Margin="0,2,0,6" FontSize="12" TextWrapping="Wrap"
+                   AutomationProperties.LiveSetting="Polite" />
 
         <Expander
-          Grid.Row="7"
+          Grid.Row="9"
           Grid.ColumnSpan="2"
           Header="Advanced"
           Margin="0,7,0,0"
@@ -151,6 +155,7 @@
 
     <Grid Grid.Row="2" Margin="0,14,0,0">
       <Grid.RowDefinitions>
+        <RowDefinition Height="Auto" />
         <RowDefinition Height="24" />
         <RowDefinition Height="Auto" />
       </Grid.RowDefinitions>
@@ -159,13 +164,16 @@
         <ColumnDefinition Width="Auto" />
         <ColumnDefinition Width="Auto" />
       </Grid.ColumnDefinitions>
-      <TextBlock x:Name="LoadingText" Grid.ColumnSpan="2" Text="Loading settings…"
+      <TextBlock x:Name="FormError" Grid.ColumnSpan="2" Visibility="Collapsed"
+                 Foreground="{StaticResource WarningBrush}" FontSize="12" TextWrapping="Wrap"
+                 Margin="0,0,0,6" AutomationProperties.LiveSetting="Polite" />
+      <TextBlock x:Name="LoadingText" Grid.Row="1" Grid.ColumnSpan="2" Text="Loading settings…"
                  Foreground="{StaticResource MutedBrush}" FontSize="12"
                  TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                  AutomationProperties.LiveSetting="Polite" />
       <Button
         x:Name="DeleteButton"
-        Grid.Row="1"
+        Grid.Row="2"
         Style="{StaticResource DangerButton}"
         HorizontalAlignment="Left"
         Click="Delete_Click"
@@ -176,7 +184,7 @@
           <TextBlock Text="Delete" VerticalAlignment="Center" />
         </StackPanel>
       </Button>
-      <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+      <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
         <Button
           Style="{StaticResource ButtonStyle}"
           Content="Cancel"
@@ -191,7 +199,7 @@
           Click="Save_Click"
         />
       </StackPanel>
-      <controls:ScrollBarGutter Grid.Row="1" Grid.Column="2" ScrollOwner="{Binding ElementName=EditorScrollViewer}" />
+      <controls:ScrollBarGutter Grid.Row="2" Grid.Column="2" ScrollOwner="{Binding ElementName=EditorScrollViewer}" />
     </Grid>
   </Grid>
 </Window>

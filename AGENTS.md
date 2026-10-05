@@ -1,5 +1,11 @@
 # ResoDrive engineering checks
 
+Before changing editable settings, forms, input parsing, or save handlers, read
+[the UI input and visual acceptance guide](docs/UI-INPUT-VALIDATION.md). Validate
+complete input before side effects or closing an editor; cover paste, boundaries,
+disabled/custom values, and save-time checks. Inspect the compiled UI before
+publishing, and honor any user-requested preview or publication hold.
+
 Before changing installer, updater, host shutdown, or named-pipe security code,
 read [the installer incident report](docs/INSTALLER-INCIDENT-2026-09.md) and
 [the release procedure](docs/RELEASING.md).

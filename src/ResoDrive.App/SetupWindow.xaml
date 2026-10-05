@@ -132,7 +132,7 @@
             <TextBox x:Name="ServerBox" Grid.Row="1" Grid.Column="1" Style="{StaticResource EditorTextBox}" Margin="0,0,0,8" AutomationProperties.Name="Server address" />
 
             <TextBlock x:Name="PortLabel" Grid.Row="2" Text="Port" VerticalAlignment="Center" Visibility="Collapsed" />
-            <TextBox x:Name="PortBox" Grid.Row="2" Grid.Column="1" Style="{StaticResource EditorTextBox}" Width="88" HorizontalAlignment="Left" Text="22" Margin="0,0,0,8" Visibility="Collapsed" AutomationProperties.Name="SFTP port" />
+            <TextBox x:Name="PortBox" Grid.Row="2" Grid.Column="1" Style="{StaticResource EditorTextBox}" Width="88" HorizontalAlignment="Left" Text="22" Margin="0,0,0,8" Visibility="Collapsed" PreviewTextInput="Port_PreviewTextInput" AutomationProperties.Name="SFTP port" />
 
             <TextBlock x:Name="UsernameLabel" Grid.Row="3" Text="Username" VerticalAlignment="Center" />
             <TextBox
@@ -276,12 +276,12 @@
         x:Name="StatusText"
         Foreground="{StaticResource MutedBrush}"
         VerticalAlignment="Center"
-        TextTrimming="CharacterEllipsis"
+        TextWrapping="Wrap"
         ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
         AutomationProperties.LiveSetting="Polite"
         Margin="0,0,16,0"
       />
-      <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+      <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
         <Button
           x:Name="CancelButton"
           Style="{StaticResource ButtonStyle}"

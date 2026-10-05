@@ -717,7 +717,8 @@ public partial class MainWindow : WpfWindow
             .Select(mount => mount.Target.DriveLetter)
             .Where(letter => letter.HasValue)
             .Select(letter => letter!.Value);
-        var wizard = new SetupWindow(_paths, firstRun, reservedDriveLetters) { Owner = this };
+        var wizard = new SetupWindow(_paths, firstRun, reservedDriveLetters,
+            _settings.Mounts.Select(mount => mount.DisplayName)) { Owner = this };
         if (wizard.ShowDialog() != true || wizard.Result is null)
         {
             return false;
@@ -1335,7 +1336,8 @@ public partial class MainWindow : WpfWindow
             editor = new MountEditorWindow(
                 current, current.RemoteName, _paths,
                 _settings.Mounts.Select(mount => mount.Target.DriveLetter)
-                    .Where(letter => letter.HasValue).Select(letter => letter!.Value))
+                    .Where(letter => letter.HasValue).Select(letter => letter!.Value),
+                _settings.Mounts.Where(mount => mount.Id != current.Id).Select(mount => mount.DisplayName))
             {
                 Owner = this,
             };

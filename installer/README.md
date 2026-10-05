@@ -21,6 +21,13 @@ button after installation. The bundle owns the Installed apps entry; its embedde
 MSI is hidden. Direct MSI deployments retain their standard Windows Installer UI
 and launch checkbox. Silent deployments never launch the application.
 
+MSI or the setup bundle owns routine installation progress. Preparation runs in
+the background under the existing MSI action text and must not open a second
+progress window. An interactive blocked preparation shows its specific reason
+in the shared message dialog and fails installation; quiet deployments write
+the diagnostic result and return failure without UI. This does not combine UAC
+or Windows Installer's own failure messages into the application window.
+
 The MSI and bundle `UpgradeCode` values are permanent product-family identities.
 Never change them after publication. Normal releases increase `VersionPrefix` in
 `Directory.Build.props`; Windows Installer versions use the `major.minor.build`
