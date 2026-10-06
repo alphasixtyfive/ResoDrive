@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 
 namespace ResoDrive.CrashFixture;
 
@@ -9,6 +10,14 @@ internal static class Program
     [DllImport("kernel32.dll", ExactSpelling = true)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     private static extern int WerSetFlags(uint flags);
+
+    [DllImport("kernel32.dll", ExactSpelling = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern uint GetErrorMode();
+
+    [DllImport("kernel32.dll", ExactSpelling = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern int WerGetFlags(IntPtr process, out uint flags);
 
     private static int Main(string[] args)
     {
@@ -19,9 +28,16 @@ internal static class Program
             return 2;
 
         // Per-process UI suppression; machine dump policy remains unchanged.
-        if (WerSetFlags(32) != 0) return 5; // WER_FAULT_REPORTING_NO_UI
+        var configured = WerSetFlags(32); // WER_FAULT_REPORTING_NO_UI
+        if (configured != 0) return 5;
 
         using var current = Process.GetCurrentProcess();
+        var queried = WerGetFlags(current.Handle, out var flags);
+        File.WriteAllText(args[1] + ".runtime.json", JsonSerializer.Serialize(new
+        {
+            errorMode = GetErrorMode(), werFlags = queried == 0 ? flags : 0,
+            werSetResult = configured, debuggerPresent = Debugger.IsAttached
+        }));
         File.WriteAllLines(args[1],
         [
             current.Id.ToString(CultureInfo.InvariantCulture),

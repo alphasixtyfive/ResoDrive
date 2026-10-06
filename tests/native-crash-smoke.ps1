@@ -6,6 +6,7 @@ if (($VerifyWer -or $VerifyClipboard) -and ($env:GITHUB_ACTIONS -ne 'true' -or $
 }
 $repo = Split-Path $PSScriptRoot -Parent
 . (Join-Path $PSScriptRoot 'Read-FullMemoryDumpEvidence.ps1')
+. (Join-Path $PSScriptRoot 'Write-WerFailureEvidence.ps1')
 $runRoot = Join-Path ([IO.Path]::GetTempPath()) ('resodrive-native-crash-' + [Guid]::NewGuid().ToString('N'))
 $binaryRoot = Join-Path $runRoot 'bin with spaces'
 & (Join-Path $repo 'native/ResoDrive.CrashMonitor/build.ps1') -OutputDirectory $binaryRoot -IncludeTestFixture
@@ -316,12 +317,21 @@ if ($VerifyWer) {
     Assert ($identity.Count -eq 2) 'Real WER fixture child writes a readiness identity before triggering failure.'
     $childPid = [int]$identity[0]
     $childCreation = [long]$identity[1]
+    $fixtureChild = [Diagnostics.Process]::GetProcessById($childPid)
+    $null = $fixtureChild.Handle # Retain kernel identity through failure evidence collection.
+    Write-WerFailureEvidence -ChildId $childPid -CreationFileTime $childCreation -ExitCode 0 -DumpFolder $dumpFolder -IdentityPath $identityPath -MetadataRoot $werRoot -FixtureKind native-before
     [IO.File]::WriteAllText($triggerPath, 'raise-fail-fast')
     if (-not $process.WaitForExit(60000)) { throw 'The fatal WER acceptance process did not finish within 60 seconds.' }
     Assert ($process.ExitCode -ne 0) 'Real RaiseFailFastException terminates with an abnormal exit.'
     $dumpPath = Join-Path $dumpFolder "resodrive.exe.$childPid.dmp"
     $deadline = [DateTime]::UtcNow.AddSeconds(20)
     while (-not (Test-Path -LiteralPath $dumpPath) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+    if (-not (Test-Path -LiteralPath $dumpPath)) {
+        try { Write-WerFailureEvidence -ChildId $childPid -CreationFileTime $childCreation -ExitCode $process.ExitCode -DumpFolder $dumpFolder -IdentityPath $identityPath -MetadataRoot $werRoot -FixtureKind native }
+        finally { $fixtureChild.Dispose() }
+        throw 'Windows produced no matching native WER dump. Sanitized policy/runtime evidence was saved; full-dump acceptance remains failed.'
+    }
+    $fixtureChild.Dispose()
     $dump = Get-Item -LiteralPath $dumpPath
     Assert ($dump.Length -gt 0 -and $dump.CreationTimeUtc.ToFileTimeUtc() -ge $childCreation -and $dump.LastWriteTimeUtc.ToFileTimeUtc() -ge $childCreation) 'WER writes a nonempty dump for the exact real-crash fixture PID and creation time.'
     $dumpEvidence = Read-FullMemoryDumpEvidence $dumpPath
@@ -345,12 +355,21 @@ if ($VerifyWer) {
     $process = Start-TestProcess (Join-Path $managedBinaryRoot 'resodrive-launcher.exe') @('--identity', $managedIdentity, '--wait-trigger', $managedTrigger) $managedRoot
     $identity = Wait-FixtureIdentity $managedIdentity
     $childPid = [int]$identity[0]; $childCreation = [long]$identity[1]
+    $fixtureChild = [Diagnostics.Process]::GetProcessById($childPid)
+    $null = $fixtureChild.Handle
+    Write-WerFailureEvidence -ChildId $childPid -CreationFileTime $childCreation -ExitCode 0 -DumpFolder $dumpFolder -IdentityPath $managedIdentity -MetadataRoot $managedRoot -FixtureKind clr-before
     [IO.File]::WriteAllText($managedTrigger, 'managed-fail-fast')
     if (-not $process.WaitForExit(60000)) { throw 'Managed CLR FailFast fixture did not finish within 60 seconds.' }
     Assert ($process.ExitCode -ne 0) '.NET 10 Environment.FailFast produces a real abnormal managed-process exit.'
     $managedDumpPath = Join-Path $dumpFolder "resodrive.exe.$childPid.dmp"
     $deadline = [DateTime]::UtcNow.AddSeconds(20)
     while (-not (Test-Path -LiteralPath $managedDumpPath) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+    if (-not (Test-Path -LiteralPath $managedDumpPath)) {
+        try { Write-WerFailureEvidence -ChildId $childPid -CreationFileTime $childCreation -ExitCode $process.ExitCode -DumpFolder $dumpFolder -IdentityPath $managedIdentity -MetadataRoot $managedRoot -FixtureKind clr }
+        finally { $fixtureChild.Dispose() }
+        throw 'Windows produced no matching CLR WER dump. Sanitized policy/runtime evidence was saved; full-dump acceptance remains failed.'
+    }
+    $fixtureChild.Dispose()
     $managedDump = Get-Item -LiteralPath $managedDumpPath
     Assert ($managedDump.CreationTimeUtc.ToFileTimeUtc() -ge $childCreation -and $managedDump.LastWriteTimeUtc.ToFileTimeUtc() -ge $childCreation) 'Managed WER dump matches the CLR fixture PID and creation identity.'
     $managedEvidence = Read-FullMemoryDumpEvidence $managedDumpPath -RequiredModule coreclr.dll

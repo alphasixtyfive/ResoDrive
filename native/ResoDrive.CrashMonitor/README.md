@@ -115,6 +115,14 @@ Memory64 ranges. The CLR case additionally requires the loaded `coreclr.dll`
 module. Synthetic valid/corrupt dump layouts test this acceptance parser locally;
 production code never parses process-memory payloads.
 The test neither edits machine policy nor crashes anything on the developer PC.
+On hosted WER failure, sanitized JSON records the actual fixture error-mode/WER
+flags, debugger presence, numeric Windows policy settings, reporting-service
+status and correlated event/file metadata. It excludes debugger commands, raw
+event messages and dump contents. Microsoft documents that
+[automatic debugging](https://learn.microsoft.com/en-us/windows/win32/wer/collecting-user-mode-dumps)
+and the inherited `SEM_NOGPFAULTERRORBOX`
+[error mode](https://learn.microsoft.com/en-us/windows/win32/api/errhandlingapi/nf-errhandlingapi-seterrormode)
+can prevent WER collection; the test records evidence before attributing a cause.
 `-VerifyClipboard` is also restricted to a disposable hosted runner: it invokes
 the real Copy details button and compares the complete Unicode clipboard value
 with the saved report. Local visual tests leave the user's clipboard untouched.

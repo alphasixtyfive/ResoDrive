@@ -11,10 +11,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, i
     int count = 0;
     wchar_t **arguments = CommandLineToArgvW(GetCommandLineW(), &count);
     DWORD code = 0;
+    const wchar_t *identityPath = NULL;
     (void)instance; (void)previous; (void)commandLine; (void)show;
     for (int i = 1; arguments && i < count; ++i) {
         if (wcscmp(arguments[i], L"--identity") == 0 && i + 1 < count) {
-            HANDLE file = CreateFileW(arguments[++i], GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_FLAG_WRITE_THROUGH, NULL);
+            HANDLE file;
+            identityPath = arguments[++i];
+            file = CreateFileW(identityPath, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_FLAG_WRITE_THROUGH, NULL);
             FILETIME created, exited, kernel, user;
             if (file != INVALID_HANDLE_VALUE && GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) {
                 ULARGE_INTEGER time;
@@ -41,7 +44,25 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, i
         }
         else if (wcscmp(arguments[i], L"--fail-fast") == 0) {
             // Real unhandled fatal exception: opt-in WER acceptance on hosted CI only.
-            (void)WerSetFlags(WER_FAULT_REPORTING_NO_UI);
+            wchar_t github[16], runner[32], path[32768];
+            DWORD flags = 0, written;
+            HRESULT configured;
+            HANDLE file;
+            char evidence[256];
+            if (GetEnvironmentVariableW(L"GITHUB_ACTIONS", github, 16) != 4 || wcscmp(github, L"true") != 0 ||
+                GetEnvironmentVariableW(L"RUNNER_ENVIRONMENT", runner, 32) != 13 || wcscmp(runner, L"github-hosted") != 0)
+                ExitProcess(2);
+            configured = WerSetFlags(WER_FAULT_REPORTING_NO_UI);
+            (void)WerGetFlags(GetCurrentProcess(), &flags);
+            if (identityPath && SUCCEEDED(StringCchPrintfW(path, 32768, L"%s.runtime.json", identityPath))) {
+                file = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_FLAG_WRITE_THROUGH, NULL);
+                if (file != INVALID_HANDLE_VALUE) {
+                    StringCchPrintfA(evidence, sizeof(evidence), "{\"errorMode\":%lu,\"werFlags\":%lu,\"werSetResult\":%ld,\"debuggerPresent\":%s}",
+                        GetErrorMode(), flags, configured, IsDebuggerPresent() ? "true" : "false");
+                    WriteFile(file, evidence, (DWORD)strlen(evidence), &written, NULL);
+                    FlushFileBuffers(file); CloseHandle(file);
+                }
+            }
             RaiseFailFastException(NULL, NULL, 0);
         }
         else if (wcscmp(arguments[i], L"--record-args") == 0 && i + 1 < count) {

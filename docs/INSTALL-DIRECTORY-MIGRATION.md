@@ -43,6 +43,14 @@ installations and portable copies cannot claim this receipt. Disabled tasks stay
 disabled when their path alone is migrated; task verification failure restores
 the prior definition and enabled state.
 
+On a PC used by several Windows accounts, each account must open ResoDrive once
+from the current Start menu shortcut after folder migration. An enabled startup
+task pointing to the removed `rdrive` executable or launcher cannot start the app
+to repair itself. That manual launch reconciles only the current account's owned
+task using its saved startup preference. The installer does not rewrite other
+accounts' tasks. User-created shortcuts or scripts with the old program path
+must also be updated.
+
 An old Unimor bootstrapper also hardcodes `rdrive` and verifies the visible
 window's exact executable path. Use an updated bootstrapper for installation or
 activation after folder migration. Updating the app cannot rewrite a previously
