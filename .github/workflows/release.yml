@@ -57,9 +57,6 @@ jobs:
       - name: Build and verify release
         shell: pwsh
         run: .\build.ps1 -Configuration Release -BuildMsi $true
-      - name: Build and verify CET compatibility release
-        shell: pwsh
-        run: ./build.ps1 -Configuration Release -BuildMsi $true -CompatibilityMode -SkipTests
       - name: Verify native crash monitor with disposable processes
         shell: pwsh
         timeout-minutes: 4
@@ -94,7 +91,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./tests/installer-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64-compatibility/*-setup.exe).FullName -CompatibilityMode
+        run: ./tests/installer-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName -CompatibilityMode
       - name: Verify different-account preparation on disposable user
         shell: pwsh
         timeout-minutes: 4
@@ -136,8 +133,6 @@ jobs:
             artifacts/win-x64-compatibility/*.zip.sha256
             artifacts/win-x64-compatibility/*.msi
             artifacts/win-x64-compatibility/*.msi.sha256
-            artifacts/win-x64-compatibility/*.exe
-            artifacts/win-x64-compatibility/*.exe.sha256
           if-no-files-found: error
       - name: Stage GitHub release for desktop acceptance
         shell: pwsh
@@ -156,17 +151,32 @@ jobs:
           $hash = (Get-FileHash -LiteralPath $stableSetup -Algorithm SHA256).Hash.ToLowerInvariant()
           Set-Content -LiteralPath $stableChecksum -Value "$hash  ResoDrive-Setup.exe" -Encoding ascii
           $compatibilityDirectory = 'artifacts\win-x64-compatibility'
-          $compatibilitySetup = @(Get-ChildItem -LiteralPath $compatibilityDirectory -File -Filter 'resodrive-win-x64-*-compatibility-setup.exe')
-          if ($compatibilitySetup.Count -ne 1) { throw 'Expected one versioned compatibility Setup.' }
-          $stableCompatibility = Join-Path $compatibilityDirectory 'ResoDrive-Compatibility-Setup.exe'
-          Copy-Item -LiteralPath $compatibilitySetup[0].FullName -Destination $stableCompatibility
-          $compatibilityHash = (Get-FileHash -LiteralPath $stableCompatibility -Algorithm SHA256).Hash.ToLowerInvariant()
-          Set-Content -LiteralPath "$stableCompatibility.sha256" -Value "$compatibilityHash  ResoDrive-Compatibility-Setup.exe" -Encoding ascii
-          $assets = Get-ChildItem -LiteralPath $releaseDirectory,$compatibilityDirectory -File |
+          $version = $env:RELEASE_TAG.Substring(1)
+          $expectedAssets = @(
+            "resodrive-win-x64-$version.zip",
+            "resodrive-win-x64-$version.zip.sha256",
+            "resodrive-win-x64-$version.msi",
+            "resodrive-win-x64-$version.msi.sha256",
+            "resodrive-win-x64-$version-setup.exe",
+            "resodrive-win-x64-$version-setup.exe.sha256",
+            'ResoDrive-Setup.exe',
+            'ResoDrive-Setup.exe.sha256',
+            "resodrive-win-x64-$version-compatibility.zip",
+            "resodrive-win-x64-$version-compatibility.zip.sha256",
+            "resodrive-win-x64-$version-compatibility.msi",
+            "resodrive-win-x64-$version-compatibility.msi.sha256"
+          )
+          $assets = @(Get-ChildItem -LiteralPath $releaseDirectory,$compatibilityDirectory -File |
             Where-Object Name -Match '\.(zip|msi|exe)(\.sha256)?$' |
-            Sort-Object Name
-          if ($assets.Count -ne 16) {
-            throw "Expected sixteen standard and compatibility release files, found $($assets.Count)."
+            Sort-Object Name)
+          $unexpected = @($assets | Where-Object Name -CNotIn $expectedAssets)
+          if ($assets.Count -ne $expectedAssets.Count -or $unexpected.Count -ne 0) {
+            throw 'Expected exactly twelve release assets: two MSI/ZIP payloads and one shared Setup with its stable alias and checksums.'
+          }
+          foreach ($name in $expectedAssets) {
+            if (@($assets | Where-Object Name -CEQ $name).Count -ne 1) {
+              throw "Missing or duplicate release asset: $name."
+            }
           }
           gh release create $env:RELEASE_TAG $assets.FullName `
             --draft --verify-tag --notes-file RELEASE_NOTES.md --title "ResoDrive $env:RELEASE_TAG"

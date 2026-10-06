@@ -1,15 +1,14 @@
 # Changelog
 
-## [0.3.31] - 2026-10-06
+## [0.3.32] - 2026-10-06
 
-- Show a standard Windows error dialog for unexpected startup and process failures, with Copy details and local diagnostic evidence. Normal startup has no extra window.
-- Configure bounded Windows Error Reporting full dumps for installed copies, retain matching build symbols separately, and record guarded UI and host diagnostics.
-- Distinguish activation timeouts, handled startup failures and normal shutdown; make fatal host background-service failures observable.
-- Install fresh copies in `%ProgramFiles%\ResoDrive`; retain legacy updater compatibility and use Windows Installer for staged migration from `rdrive`.
-- Preserve account settings, credentials, pending-upload cache and process ownership across installation-folder changes.
-- Keep error details compact on screen while copying the complete available report; reject redirected diagnostic and installed-executable paths before access.
-- Refresh the missing-prerequisite Setup payload to .NET Desktop Runtime 10.0.12; retain normal same-major runtime selection and CET protection.
-- Provide a separately verified CET compatibility package using Microsoft's documented opt-out; preserve its selection in later updates and explain the reduced protection in Setup.
+- Show startup and crash errors with Copy details and saved local reports.
+- Offer standard and compatibility options in one Setup and remember the choice for updates.
+- Use Program Files\ResoDrive for fresh installs and migrate older installations while preserving account data and upload protection.
+
+## [0.3.31] - 2026-10-06 (unpublished acceptance build)
+
+- Validate startup diagnostics, installation-folder migration and compatibility payloads.
 
 ## [0.3.30] - 2026-10-05
 

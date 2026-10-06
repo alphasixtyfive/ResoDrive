@@ -4,7 +4,7 @@
   <Font Id="2" Height="-12" Weight="400" Foreground="595959">Segoe UI</Font>
   <Font Id="3" Height="-18" Weight="600" Foreground="windowtext">Segoe UI</Font>
   <Font Id="4" Height="-1" Foreground="d9d9d9" Background="d9d9d9">Segoe UI</Font>
-  <Window Width="500" Height="340" FontId="0" Caption="ResoDrive Setup" IconFile="app.ico">
+  <Window Width="540" Height="424" FontId="0" Caption="ResoDrive Setup" IconFile="app.ico">
     <ImageControl X="20" Y="12" Width="80" Height="80" ImageFile="logo.png" Visible="yes" />
     <Label X="116" Y="26" Width="-28" Height="32" FontId="1" Visible="yes" DisablePrefix="yes">[WixBundleName]</Label>
     <Label X="116" Y="56" Width="-28" Height="20" FontId="2" Visible="yes" DisablePrefix="yes">Version [WixBundleVersion]</Label>
@@ -13,16 +13,24 @@
       <Label X="28" Y="120" Width="-28" Height="30" FontId="0">Preparing setup...</Label>
     </Page>
     <Page Name="Install">
-      <Label X="28" Y="118" Width="-28" Height="44" FontId="0"><Text>Access your cloud storage as a drive in Windows.</Text><Text Condition="ResoDriveCompatibilityMode = 1">CET compatibility build.&#10;Installing Windows updates is preferred.</Text></Label>
-      <Label X="28" Y="166" Width="-28" Height="58" FontId="2"><Text>Installs for all users of this PC. Windows will ask for administrator permission.&#10;The .NET Desktop Runtime is downloaded only if needed.</Text><Text Condition="ResoDriveCompatibilityMode = 1">Reduces CET stack protection for ResoDrive.&#10;Windows settings stay unchanged; policy may still apply.&#10;Installs for all users; .NET is downloaded only if needed.</Text></Label>
-      <Hypertext Name="EulaHyperlink" X="28" Y="236" Width="200" Height="24" FontId="2" TabStop="yes">&lt;a href="#"&gt;MIT licence&lt;/a&gt;</Hypertext>
+      <Label X="28" Y="112" Width="-28" Height="22" FontId="0">Access your cloud storage as a drive in Windows.</Label>
+      <Label X="28" Y="140" Width="-28" Height="48" FontId="2"><Text>Installs for all users; Windows will ask for administrator permission.&#10;Downloads and installs .NET Desktop Runtime 10 (x64), required to run ResoDrive.</Text><Text Condition="DotNetDesktopRuntimeVersion &gt;= DotNetDesktopRuntimeMinimumVersion">Installs for all users; Windows will ask for administrator permission.&#10;.NET Desktop Runtime is already installed; download skipped.</Text></Label>
+      <Checkbox Name="ResoDriveCompatibilityMode" X="28" Y="192" Width="-28" Height="26" FontId="0" TabStop="yes" EnableCondition="ResoDriveCanChangeMode = 1">Use CET compatibility mode (reduced protection)</Checkbox>
+      <Label X="28" Y="224" Width="-28" Height="54" FontId="2">Standard is recommended. CET helps protect against attacks that hijack execution. Compatibility mode reduces it for ResoDrive only. Windows settings stay unchanged; company policy still applies. Update Windows first.</Label>
+      <Label X="28" Y="284" Width="-28" Height="46" FontId="2" VisibleCondition="ResoDriveMissingCetCapability = 1">Windows is missing a CET-related capability. Compatibility mode may be needed to start ResoDrive; update Windows first.</Label>
+      <Label X="28" Y="284" Width="-28" Height="46" FontId="2" VisibleCondition="ResoDriveCanChangeMode = 0 AND ResoDriveMissingCetCapability &lt;&gt; 1">Repair preserves the installed choice. A newer release is required to change compatibility mode.</Label>
+      <Hypertext Name="EulaHyperlink" X="28" Y="334" Width="200" Height="24" FontId="2" TabStop="yes">&lt;a href="#"&gt;MIT licence&lt;/a&gt;</Hypertext>
       <Button Name="InstallButton" X="-128" Y="-18" Width="112" Height="30" TabStop="yes" FontId="0">Install</Button>
       <Button Name="InstallCancelButton" X="-24" Y="-18" Width="88" Height="30" TabStop="yes" FontId="0"><Text>Cancel</Text><CloseWindowAction /></Button>
     </Page>
     <Page Name="Progress">
       <Label X="28" Y="118" Width="-28" Height="30" FontId="3"><Text>Installing ResoDrive</Text><Text Condition="WixBundleAction = 4">Removing ResoDrive</Text><Text Condition="WixBundleAction = 8">Repairing ResoDrive</Text></Label>
-      <Label Name="OverallProgressPackageText" X="28" Y="160" Width="-28" Height="44" FontId="0">Preparing...</Label>
-      <Progressbar Name="OverallCalculatedProgressbar" X="28" Y="218" Width="-28" Height="14" />
+      <Label Name="CacheProgressPackageText" X="28" Y="160" Width="-28" Height="42" FontId="0">Preparing files...</Label>
+      <Progressbar Name="CacheProgressbar" X="28" Y="206" Width="-28" Height="10" />
+      <Label Name="ExecuteProgressPackageText" X="28" Y="230" Width="-28" Height="42" FontId="0">Waiting to install...</Label>
+      <Progressbar Name="ExecuteProgressbar" X="28" Y="276" Width="-28" Height="10" />
+      <Label X="28" Y="302" Width="-28" Height="20" FontId="2">Overall progress</Label>
+      <Progressbar Name="OverallCalculatedProgressbar" X="28" Y="328" Width="-28" Height="14" />
       <Button Name="ProgressCancelButton" X="-24" Y="-18" Width="88" Height="30" TabStop="yes" FontId="0">Cancel</Button>
     </Page>
     <Page Name="Modify">
@@ -43,13 +51,14 @@
     </Page>
     <Page Name="Failure">
       <Label X="28" Y="118" Width="-28" Height="30" FontId="3">Setup could not finish</Label>
-      <Hypertext Name="FailureMessageText" X="28" Y="160" Width="-28" Height="66" FontId="0" TabStop="yes" HideWhenDisabled="yes" />
-      <Hypertext Name="FailureLogFileLink" X="28" Y="236" Width="-28" Height="24" FontId="0" TabStop="yes" HideWhenDisabled="yes">Open the &lt;a href="#"&gt;setup log&lt;/a&gt; for details.</Hypertext>
+      <Hypertext Name="FailureMessageText" X="28" Y="160" Width="-28" Height="120" FontId="0" TabStop="yes" HideWhenDisabled="yes" VisibleCondition="NOT ResoDriveSetupError" />
+      <Label X="28" Y="160" Width="-28" Height="120" FontId="0" VisibleCondition="ResoDriveSetupError">[ResoDriveSetupError]</Label>
+      <Hypertext Name="FailureLogFileLink" X="28" Y="304" Width="-28" Height="24" FontId="0" TabStop="yes" HideWhenDisabled="yes">Open the &lt;a href="#"&gt;setup log&lt;/a&gt; for details.</Hypertext>
       <Button Name="FailureRestartButton" X="-128" Y="-18" Width="164" Height="30" TabStop="yes" FontId="0" HideWhenDisabled="yes">Restart Windows</Button>
       <Button Name="FailureCloseButton" X="-24" Y="-18" Width="88" Height="30" TabStop="yes" FontId="0"><Text>Close</Text><CloseWindowAction /></Button>
     </Page>
     <Page Name="Help">
-      <Label X="28" Y="118" Width="-28" Height="136" FontId="0">/install, /repair or /uninstall&#10;/quiet for unattended setup&#10;/norestart to prevent an automatic restart&#10;/log path to save a setup log</Label>
+      <Label X="28" Y="118" Width="-28" Height="210" FontId="0">/install or /repair&#10;/quiet for unattended setup&#10;/norestart to prevent an automatic restart&#10;/log path to save a setup log&#10;ResoDriveCompatibilityMode=0 for standard, =1 for CET compatibility&#10;Existing installations keep their choice by default.&#10;To uninstall, use Windows Settings &gt; Apps &gt; Installed apps.</Label>
       <Button Name="HelpCloseButton" X="-24" Y="-18" Width="88" Height="30" TabStop="yes" FontId="0"><Text>Close</Text><CloseWindowAction /></Button>
     </Page>
   </Window>

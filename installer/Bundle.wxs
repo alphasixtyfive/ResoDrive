@@ -15,6 +15,7 @@
       Condition="WixBundleCommandLineAction &lt;&gt; 4"
       Message="To remove ResoDrive, open Windows Settings &gt; Apps &gt; Installed apps and choose Uninstall."
     />
+    <bal:Condition Condition="ResoDriveSelectionValid = 1" Message="[ResoDriveSetupError]" />
     <BootstrapperApplication>
       <bal:WixStandardBootstrapperApplication
         Theme="hyperlinkLicense" ThemeFile="SetupTheme.xml"
@@ -23,6 +24,7 @@
         LaunchTarget="[ProgramFiles64Folder]ResoDrive\resodrive-launcher.exe"
         LaunchWorkingFolder="[ProgramFiles64Folder]ResoDrive" />
       <Payload SourceFile="$(var.IconSource)" Name="app.ico" />
+      <Payload SourceFile="$(var.SetupFunctionsSource)" bal:BAFunctions="yes" />
     </BootstrapperApplication>
 
     <netfx:DotNetCoreSearch
@@ -33,8 +35,20 @@
     />
 
     <Variable Name="ResoDriveDataRoot" Type="string" Value="" bal:Overridable="yes" />
-    <!-- Build-owned, never command-line overridable: explains this exact payload. -->
-    <Variable Name="ResoDriveCompatibilityMode" Type="numeric" Value="$(var.ResoDriveCompatibilityMode)" />
+    <Variable Name="DotNetDesktopRuntimeMinimumVersion" Type="version" Value="$(var.DotNetDesktopRuntimeMinimumVersion)" />
+    <!-- The native extension resolves the sentinel to the verified installed
+         choice, or standard on a fresh PC. It never chooses compatibility from
+         capability detection. Both payloads are immutable builds. -->
+    <Variable Name="ResoDriveCompatibilityMode" Type="numeric" Value="-1" Persisted="yes" bal:Overridable="yes" />
+    <!-- Coordinated installers can defer opening the app until profile setup
+         finishes. The public installer still offers Open ResoDrive by default. -->
+    <Variable Name="ResoDriveSuppressLaunch" Type="numeric" Value="0" Persisted="yes" bal:Overridable="yes" />
+    <Variable Name="ResoDriveUpgradeCode" Type="string" Value="{$(var.ResoDriveUpgradeCode)}" />
+    <Variable Name="ResoDriveSelectionValid" Type="numeric" Value="1" />
+    <Variable Name="ResoDriveCanChangeMode" Type="numeric" Value="1" />
+    <Variable Name="ResoDriveMissingCetCapability" Type="numeric" Value="0" />
+    <Variable Name="ResoDriveInstalledVersion" Type="string" Value="" />
+    <Variable Name="ResoDriveSetupError" Type="string" Value="" />
     <Chain>
       <ExePackage
         Id="DotNetDesktopRuntime"
@@ -45,6 +59,7 @@
         Permanent="yes"
         Cache="remove"
         Vital="yes"
+        DisplayName="Microsoft .NET Desktop Runtime 10 (x64)"
       >
         <ExePackagePayload
           Name="windowsdesktop-runtime-$(var.DotNetDesktopRuntimeVersion)-win-x64.exe"
@@ -54,7 +69,16 @@
         />
       </ExePackage>
       <!-- Windows Installer owns app maintenance; Burn only installs this final package. -->
-      <MsiPackage SourceFile="$(var.MsiSource)" Compressed="yes" Vital="yes" Permanent="yes" Visible="yes">
+      <MsiPackage Id="ResoDriveStandard" SourceFile="$(var.StandardMsiSource)" DisplayName="ResoDrive"
+        Compressed="yes" Vital="yes" Permanent="yes" Visible="yes"
+        InstallCondition="ResoDriveCompatibilityMode = 0" RepairCondition="ResoDriveCompatibilityMode = 0">
+        <MsiProperty Name="RDRIVE_FROM_SETUP" Value="1" />
+        <MsiProperty Name="RDRIVE_MIGRATE_INSTALL" Value="1" />
+        <MsiProperty Name="RDRIVE_DATA_ROOT" Value="[ResoDriveDataRoot]" Condition="ResoDriveDataRoot" />
+      </MsiPackage>
+      <MsiPackage Id="ResoDriveCompatibility" SourceFile="$(var.CompatibilityMsiSource)" DisplayName="ResoDrive"
+        Compressed="yes" Vital="yes" Permanent="yes" Visible="yes"
+        InstallCondition="ResoDriveCompatibilityMode = 1" RepairCondition="ResoDriveCompatibilityMode = 1">
         <MsiProperty Name="RDRIVE_FROM_SETUP" Value="1" />
         <MsiProperty Name="RDRIVE_MIGRATE_INSTALL" Value="1" />
         <MsiProperty Name="RDRIVE_DATA_ROOT" Value="[ResoDriveDataRoot]" Condition="ResoDriveDataRoot" />

@@ -19,6 +19,16 @@
       Schedule="afterInstallInitialize"
       AllowSameVersionUpgrades="$(var.ResoDriveAllowSameVersionUpgrades)"
     />
+    <?if $(var.ResoDriveAllowSameVersionUpgrades) = no ?>
+    <!-- MajorUpgrade's default permits equal-version distinct ProductCodes to
+         coexist. Detect and reject that case for both immutable build variants. -->
+    <Upgrade Id="$(var.ResoDriveUpgradeCode)">
+      <UpgradeVersion Minimum="$(var.ResoDriveVersion)" Maximum="$(var.ResoDriveVersion)"
+        IncludeMinimum="yes" IncludeMaximum="yes" OnlyDetect="yes" Property="RDRIVE_SAME_VERSION_PRODUCT" />
+    </Upgrade>
+    <Launch Condition="Installed OR NOT RDRIVE_SAME_VERSION_PRODUCT"
+      Message="This ResoDrive version is already installed. Repair it in Windows Settings; use a newer release to change compatibility mode." />
+    <?endif?>
     <MediaTemplate EmbedCab="yes" />
 
     <Icon Id="resodrive.ico" SourceFile="$(var.IconSource)" />

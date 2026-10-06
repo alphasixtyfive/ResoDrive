@@ -53,19 +53,23 @@ public sealed class InstallerPackageTests
         var bundle = Assert.Single(document.Descendants(Wix + "Bundle"));
         var chain = Assert.Single(bundle.Elements(Wix + "Chain"));
         var packages = chain.Elements().Where(element => element.Name.LocalName.EndsWith("Package", StringComparison.Ordinal)).ToArray();
-        var application = Assert.Single(packages, package => package.Name == Wix + "MsiPackage");
-
-        Assert.Equal("yes", (string?)application.Attribute("Visible"));
-        Assert.Equal("yes", (string?)application.Attribute("Vital"));
-        Assert.Same(application, packages[^1]);
+        var applications = packages.Where(package => package.Name == Wix + "MsiPackage").ToArray();
+        Assert.Equal(2, applications.Length);
+        Assert.All(applications, application =>
+        {
+            Assert.Equal("yes", (string?)application.Attribute("Visible"));
+            Assert.Equal("yes", (string?)application.Attribute("Vital"));
+            Assert.Equal("ResoDrive", (string?)application.Attribute("DisplayName"));
+            var fromSetup = Assert.Single(application.Elements(Wix + "MsiProperty"), property =>
+                (string?)property.Attribute("Name") == "RDRIVE_FROM_SETUP");
+            Assert.Equal("1", (string?)fromSetup.Attribute("Value"));
+            Assert.Null(fromSetup.Attribute("Condition"));
+        });
+        Assert.Equal(applications, packages.TakeLast(2));
         Assert.All(packages, package => Assert.Equal("yes", (string?)package.Attribute("Permanent")));
         Assert.Null(bundle.Attribute("DisableModify"));
         Assert.Null(bundle.Attribute("DisableRemove"));
 
-        var fromSetup = Assert.Single(application.Elements(Wix + "MsiProperty"), property =>
-            (string?)property.Attribute("Name") == "RDRIVE_FROM_SETUP");
-        Assert.Equal("1", (string?)fromSetup.Attribute("Value"));
-        Assert.Null(fromSetup.Attribute("Condition"));
     }
 
     [Fact]
@@ -73,11 +77,75 @@ public sealed class InstallerPackageTests
     {
         XNamespace bal = "http://wixtoolset.org/schemas/v4/wxs/bal";
         var document = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Bundle.wxs"));
-        var condition = Assert.Single(document.Descendants(bal + "Condition"));
+        var condition = Assert.Single(document.Descendants(bal + "Condition"), item =>
+            (string?)item.Attribute("Condition") == "WixBundleCommandLineAction <> 4");
 
         Assert.Equal("WixBundleCommandLineAction <> 4", (string?)condition.Attribute("Condition"));
         Assert.Contains("Windows Settings > Apps > Installed apps", (string?)condition.Attribute("Message"));
         Assert.Contains("Uninstall", (string?)condition.Attribute("Message"));
+    }
+
+    [Fact]
+    public void SetupSelectsExactlyOneImmutableVariantForInstallAndRepair()
+    {
+        XNamespace bal = "http://wixtoolset.org/schemas/v4/wxs/bal";
+        var document = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Bundle.wxs"));
+        var packages = document.Descendants(Wix + "MsiPackage").ToArray();
+        Assert.Equal(2, packages.Length);
+        Assert.Equal(["$(var.StandardMsiSource)", "$(var.CompatibilityMsiSource)"], packages.Select(package => (string?)package.Attribute("SourceFile")));
+        Assert.Equal(["ResoDriveCompatibilityMode = 0", "ResoDriveCompatibilityMode = 1"], packages.Select(package => (string?)package.Attribute("InstallCondition")));
+        Assert.All(packages, package => Assert.Equal((string?)package.Attribute("InstallCondition"), (string?)package.Attribute("RepairCondition")));
+        var selection = Assert.Single(document.Descendants(Wix + "Variable"), item => (string?)item.Attribute("Name") == "ResoDriveCompatibilityMode");
+        Assert.Equal("-1", (string?)selection.Attribute("Value"));
+        Assert.Equal("yes", (string?)selection.Attribute(bal + "Overridable"));
+        var extension = Assert.Single(document.Descendants(Wix + "Payload"), item => (string?)item.Attribute(bal + "BAFunctions") == "yes");
+        Assert.Equal("$(var.SetupFunctionsSource)", (string?)extension.Attribute("SourceFile"));
+        Assert.Contains(document.Descendants(bal + "Condition"), item => (string?)item.Attribute("Condition") == "ResoDriveSelectionValid = 1");
+    }
+
+    [Fact]
+    public void EqualVersionDistinctProductsAreRejectedBeforePreparation()
+    {
+        var document = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Package.wxs"));
+        var range = Assert.Single(document.Descendants(Wix + "UpgradeVersion"), item => (string?)item.Attribute("Property") == "RDRIVE_SAME_VERSION_PRODUCT");
+        Assert.Equal("$(var.ResoDriveVersion)", (string?)range.Attribute("Minimum"));
+        Assert.Equal((string?)range.Attribute("Minimum"), (string?)range.Attribute("Maximum"));
+        Assert.Equal("yes", (string?)range.Attribute("IncludeMinimum"));
+        Assert.Equal("yes", (string?)range.Attribute("IncludeMaximum"));
+        Assert.Equal("yes", (string?)range.Attribute("OnlyDetect"));
+        Assert.Contains(document.Descendants(Wix + "Launch"), item => (string?)item.Attribute("Condition") == "Installed OR NOT RDRIVE_SAME_VERSION_PRODUCT");
+    }
+
+    [Fact]
+    public void CoordinatingInstallerCanDeferLaunchWithoutChangingPublicDefaults()
+    {
+        XNamespace bal = "http://wixtoolset.org/schemas/v4/wxs/bal";
+        XNamespace theme = "http://wixtoolset.org/schemas/v4/thmutil";
+        var bundle = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Bundle.wxs"));
+        var suppression = Assert.Single(bundle.Descendants(Wix + "Variable"), item => (string?)item.Attribute("Name") == "ResoDriveSuppressLaunch");
+        Assert.Equal("0", (string?)suppression.Attribute("Value"));
+        Assert.Equal("yes", (string?)suppression.Attribute(bal + "Overridable"));
+        Assert.Equal("yes", (string?)suppression.Attribute("Persisted"));
+        var document = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "SetupTheme.xml"));
+        var launch = Assert.Single(document.Descendants(theme + "Button"), item => (string?)item.Attribute("Name") == "LaunchButton");
+        Assert.Equal("yes", (string?)launch.Attribute("HideWhenDisabled"));
+    }
+
+    [Fact]
+    public void SetupShowsOptInProtectionWarningAndRealPrerequisiteStatus()
+    {
+        XNamespace theme = "http://wixtoolset.org/schemas/v4/thmutil";
+        var document = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "SetupTheme.xml"));
+        var checkbox = Assert.Single(document.Descendants(theme + "Checkbox"));
+        Assert.Equal("ResoDriveCompatibilityMode", (string?)checkbox.Attribute("Name"));
+        Assert.Equal("ResoDriveCanChangeMode = 1", (string?)checkbox.Attribute("EnableCondition"));
+        Assert.Contains("reduced protection", checkbox.Value);
+        Assert.Contains(document.Descendants(theme + "Text"), text =>
+            (string?)text.Attribute("Condition") == "DotNetDesktopRuntimeVersion >= DotNetDesktopRuntimeMinimumVersion" && text.Value.Contains("download skipped", StringComparison.Ordinal));
+        Assert.Contains(document.Descendants(theme + "Label"), label =>
+            (string?)label.Attribute("VisibleCondition") == "ResoDriveMissingCetCapability = 1");
+        Assert.Contains(document.Descendants(), element => (string?)element.Attribute("Name") == "CacheProgressPackageText");
+        Assert.Contains(document.Descendants(), element => (string?)element.Attribute("Name") == "ExecuteProgressPackageText");
     }
 
     [Fact]
@@ -145,8 +213,9 @@ public sealed class InstallerPackageTests
         Assert.Equal("CostFinalize", (string?)location.Attribute("After"));
 
         var bundle = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Bundle.wxs"));
-        var optIn = Assert.Single(bundle.Descendants(Wix + "MsiProperty"), item => (string?)item.Attribute("Name") == "RDRIVE_MIGRATE_INSTALL");
-        Assert.Equal("1", (string?)optIn.Attribute("Value"));
+        var optIns = bundle.Descendants(Wix + "MsiProperty").Where(item => (string?)item.Attribute("Name") == "RDRIVE_MIGRATE_INSTALL").ToArray();
+        Assert.Equal(2, optIns.Length);
+        Assert.All(optIns, optIn => Assert.Equal("1", (string?)optIn.Attribute("Value")));
         var repair = Assert.Single(document.Descendants(Wix + "SetProperty"), item => (string?)item.Attribute("Action") == "RestoreInstalledFolder");
         Assert.Equal("[RDRIVE_INSTALLED_ROOT]", (string?)repair.Attribute("Value"));
         Assert.Equal("Installed AND RDRIVE_INSTALLED_ROOT", (string?)repair.Attribute("Condition"));

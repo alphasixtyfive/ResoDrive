@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Restore pinned official native headers; this project produces no managed payload. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="WixToolset.BootstrapperApplicationApi" PrivateAssets="all" ExcludeAssets="all" GeneratePathProperty="true" />
+    <PackageReference Include="WixToolset.WixStandardBootstrapperApplicationFunctionApi" PrivateAssets="all" ExcludeAssets="all" GeneratePathProperty="true" />
+  </ItemGroup>
+</Project>

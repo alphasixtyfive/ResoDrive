@@ -26,10 +26,9 @@ public repository before publishing.
 
 ## Release procedure
 
-Publish both the standard package and a separately named CET compatibility package
-from the same source revision. `./build.ps1 -CompatibilityMode -SkipTests` may run
-after the standard build's checks pass; it uses isolated publish/package outputs
-under `artifacts/win-x64-compatibility`. Microsoft documents
+Run `./build.ps1` to build both application payloads from one source revision,
+then package them in one Setup. Outputs remain isolated under `artifacts/win-x64`
+and `artifacts/win-x64-compatibility`. Microsoft documents
 [`CETCompat=false`](https://learn.microsoft.com/en-us/dotnet/core/compatibility/interop/9.0/cet-support)
 as the application opt-out. This package removes the apphost CET marking; it does
 not change Windows security settings. The normal build retains CET support.
@@ -41,12 +40,19 @@ mode and the observed CET flag. The compatibility assembly metadata preserves
 that variant for later automatic updates; the MSI also records `CompatibilityMode`
 as `cet-disabled` or `standard` under `HKLM\SOFTWARE\ResoDrive\Installation`.
 
-Compatibility assets use `resodrive-win-x64-{version}-compatibility` before their
-extension (Setup adds `-setup.exe`). The stable download is
-`ResoDrive-Compatibility-Setup.exe`; all assets have matching SHA-256 sidecars.
-Both variants must pass hosted installer acceptance before the release is staged.
-They replace the same installation and cannot coexist. Equal-version replacement
-rules remain unchanged: changing variants requires a newer release. The published
+Compatibility MSI and ZIP assets use `resodrive-win-x64-{version}-compatibility`
+before their extension for automatic updates. The single stable installer is
+`ResoDrive-Setup.exe`; all assets have matching SHA-256 sidecars. Setup defaults
+to standard for fresh installations, explains the compatibility option and
+remembers a verified installed choice. Unattended callers can explicitly select
+`ResoDriveCompatibilityMode=0` or `1`; other values fail before planning.
+An installation coordinator can pass `ResoDriveSuppressLaunch=1` to let Setup
+finish before the coordinator applies its own configuration and opens the app.
+The default `0` keeps Setup's Open ResoDrive button; other values are rejected.
+Both modes must pass hosted installer acceptance before the release is staged.
+Verify that selecting the opposite mode at the same version fails in both Setup
+and direct MSI, leaving one registered application and unchanged data. Changing
+modes requires a newer release. The published
 0.3.30 cached MSI helper carries CET marking and runs again during old-product
 removal. A new compatibility helper alone cannot establish upgrade safety on an
 affected vessel. Preserve the guarded preparation/removal behavior, update Windows

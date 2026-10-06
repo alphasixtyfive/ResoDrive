@@ -198,8 +198,10 @@ Prefer updating Windows to a supported, fully serviced version while retaining
 its protections. For a controlled comparison, Microsoft documents building the
 same application with `CETCompat=false`; this reduces a security mitigation and
 does not belong in an unexplained retry or machine-wide policy change. ResoDrive's
-standard build retains the default protection. Its separately named compatibility
-build uses this documented opt-out and retains that choice in later in-app updates.
+standard build retains the default protection. The single Setup includes both
+payloads, with an explicit compatibility option using this documented opt-out.
+It explains the reduction in stack protection before installation and retains
+the installed choice in later in-app updates. No Windows security policy is changed.
 Missing or invalid compatibility assets fail verification; updates never silently
 substitute the standard package. Record the executable's CET flag, OS capability
 and per-process mitigation alongside the comparison result. Merely updating the

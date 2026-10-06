@@ -39,9 +39,6 @@ jobs:
       - name: Build and verify packages
         shell: pwsh
         run: ./build.ps1 -Configuration Release -BuildMsi $true
-      - name: Build and verify CET compatibility package
-        shell: pwsh
-        run: ./build.ps1 -Configuration Release -BuildMsi $true -CompatibilityMode -SkipTests
       - name: Verify native crash monitor with disposable processes
         shell: pwsh
         timeout-minutes: 4
@@ -74,7 +71,7 @@ jobs:
         run: |
           $mode = @{}
           if ('${{ matrix.mode }}' -eq 'compatibility') { $mode.CompatibilityMode = $true }
-          ./tests/installer-smoke.ps1 -SetupPath (Get-ChildItem "$env:RDRIVE_ARTIFACT_ROOT/*-setup.exe").FullName @mode
+          ./tests/installer-smoke.ps1 -SetupPath (Get-ChildItem 'artifacts/win-x64/*-setup.exe').FullName @mode
       - name: Verify different-account preparation on disposable user
         shell: pwsh
         timeout-minutes: 4

@@ -1,18 +1,19 @@
 <Project Sdk="WixToolset.Sdk/5.0.2">
   <PropertyGroup>
     <OutputType>Bundle</OutputType>
+    <InstallerPlatform>x64</InstallerPlatform>
     <NuGetLockFilePath>packages.bootstrapper.lock.json</NuGetLockFilePath>
     <DefaultItemExcludes>$(DefaultItemExcludes);Package.wxs</DefaultItemExcludes>
     <OutputName>$(ResoDriveExecutableBaseName)-$(ResoDriveRuntime)-$(ResoDriveVersion)-setup</OutputName>
-    <ResoDriveCompatibilityMode Condition="'$(ResoDriveCompatibilityMode)' == ''">0</ResoDriveCompatibilityMode>
     <ResoDriveBundleName>$(ResoDriveProductName)</ResoDriveBundleName>
-    <ResoDriveBundleName Condition="'$(ResoDriveCompatibilityMode)' == '1'">$(ResoDriveProductName) Compatibility</ResoDriveBundleName>
     <DefineConstants>
-      MsiSource=$(MsiSource);
+      StandardMsiSource=$(StandardMsiSource);
+      CompatibilityMsiSource=$(CompatibilityMsiSource);
+      SetupFunctionsSource=$(SetupFunctionsSource);
       ResoDriveVersion=$(ResoDriveVersion);
       ResoDriveProductName=$(ResoDriveProductName);
       ResoDriveBundleName=$(ResoDriveBundleName);
-      ResoDriveCompatibilityMode=$(ResoDriveCompatibilityMode);
+      ResoDriveUpgradeCode=$(ResoDriveUpgradeCode);
       ResoDrivePublisher=$(ResoDrivePublisher);
       ResoDriveBundleUpgradeCode=$(ResoDriveBundleUpgradeCode);
       DotNetDesktopRuntimeVersion=$(DotNetDesktopRuntimeVersion);
@@ -26,13 +27,15 @@
   </PropertyGroup>
 
   <Target Name="ValidateResoDriveBundleProperties" BeforeTargets="Build">
-    <Error Condition="'$(MsiSource)' == ''" Text="MsiSource must point to the built ResoDrive MSI." />
+    <Error Condition="'$(StandardMsiSource)' == ''" Text="StandardMsiSource must point to the built standard MSI." />
+    <Error Condition="'$(CompatibilityMsiSource)' == ''" Text="CompatibilityMsiSource must point to the built compatibility MSI." />
+    <Error Condition="'$(SetupFunctionsSource)' == ''" Text="SetupFunctionsSource must point to the native Setup functions DLL." />
     <Error Condition="'$(ResoDriveVersion)' == ''" Text="ResoDriveVersion is required." />
     <Error Condition="'$(ResoDriveRuntime)' == ''" Text="ResoDriveRuntime is required." />
     <Error Condition="'$(ResoDriveProductName)' == ''" Text="ResoDriveProductName is required." />
     <Error Condition="'$(ResoDrivePublisher)' == ''" Text="ResoDrivePublisher is required." />
     <Error Condition="'$(ResoDriveBundleUpgradeCode)' == ''" Text="ResoDriveBundleUpgradeCode is required." />
-    <Error Condition="'$(ResoDriveCompatibilityMode)' != '0' AND '$(ResoDriveCompatibilityMode)' != '1'" Text="ResoDriveCompatibilityMode must be 0 or 1." />
+    <Error Condition="'$(ResoDriveUpgradeCode)' == ''" Text="ResoDriveUpgradeCode is required." />
     <Error Condition="'$(DotNetDesktopRuntimeVersion)' == ''" Text="DotNetDesktopRuntimeVersion is required." />
     <Error Condition="'$(DotNetDesktopRuntimeMinimumVersion)' == ''" Text="DotNetDesktopRuntimeMinimumVersion is required." />
     <Error Condition="'$(DotNetDesktopRuntimeUrl)' == ''" Text="DotNetDesktopRuntimeUrl is required." />

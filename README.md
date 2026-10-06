@@ -81,7 +81,8 @@ only when it is missing. Mounting a drive requires
 
 Download `ResoDrive-Setup.exe` from the latest
 [release](https://github.com/alphasixtyfive/ResoDrive/releases/latest), run it,
-and open ResoDrive. The first time through:
+and open ResoDrive. Setup explains its standard and compatibility options and
+downloads the Microsoft .NET Desktop Runtime only when needed. The first time through:
 
 1. Let ResoDrive download and verify rclone.
 2. Add your storage connection and choose a free drive letter.

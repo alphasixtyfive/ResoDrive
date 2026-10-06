@@ -10,6 +10,8 @@
     <PackageVersion Include="WixToolset.UI.wixext" Version="5.0.2" />
     <PackageVersion Include="WixToolset.BootstrapperApplications.wixext" Version="5.0.2" />
     <PackageVersion Include="WixToolset.Netfx.wixext" Version="5.0.2" />
+    <PackageVersion Include="WixToolset.BootstrapperApplicationApi" Version="5.0.2" />
+    <PackageVersion Include="WixToolset.WixStandardBootstrapperApplicationFunctionApi" Version="5.0.2" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.0" />
   </ItemGroup>

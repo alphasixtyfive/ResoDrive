@@ -131,7 +131,7 @@ function Assert-WerPolicyRemoved {
     }
 }
 
-function Invoke-Installer([string]$Executable, [string]$Arguments, [switch]$ExpectFailure, [switch]$LegacyUpdater) {
+function Invoke-Installer([string]$Executable, [string]$Arguments, [switch]$ExpectFailure, [switch]$LegacyUpdater, [switch]$PreserveSetupMode) {
     # Windows Installer's service does not inherit process-local RDRIVE_DATA_DIR.
     # Pass the isolated root through the supported bundle/MSI property instead.
     if ([IO.Path]::GetFileName($Executable) -ieq 'msiexec.exe') {
@@ -139,6 +139,13 @@ function Invoke-Installer([string]$Executable, [string]$Arguments, [switch]$Expe
         if (-not $LegacyUpdater) { $Arguments += ' RDRIVE_MIGRATE_INSTALL=1' }
     } else {
         $Arguments += " ResoDriveDataRoot=`"$env:RDRIVE_DATA_DIR`""
+        # Only the candidate supports this contract. Historical fixtures must
+        # retain their exact published command-line behavior. Repair exercises
+        # detection of the remembered mode without an explicit override.
+        if ($Executable -ieq $setup -and -not $PreserveSetupMode -and
+            $Arguments -notmatch '(?i)\bResoDriveCompatibilityMode=') {
+            if ($CompatibilityMode) { $Arguments += ' ResoDriveCompatibilityMode=1' }
+        }
     }
     $process = Start-Process -FilePath $Executable -ArgumentList $Arguments -WindowStyle Hidden -PassThru
     try {
@@ -609,7 +616,7 @@ function New-FutureMigrationFixture([int]$VersionOffset = 1) {
     $compatibilityValue = if ($CompatibilityMode) { 'true' } else { 'false' }
     $installationMode = if ($CompatibilityMode) { 'cet-disabled' } else { 'standard' }
     New-Item -ItemType Directory -Path $payload -Force | Out-Null
-    Copy-Item -Path (Join-Path ([IO.Path]::GetDirectoryName($setup)) 'resodrive\*') -Destination $payload -Recurse -Force
+    Copy-Item -Path (Join-Path $candidateArtifactRoot 'resodrive\*') -Destination $payload -Recurse -Force
     dotnet publish (Join-Path $PSScriptRoot '..\src\ResoDrive.App\ResoDrive.App.csproj') -c Release -r win-x64 --self-contained false --no-restore `
         --output $published "-p:VersionPrefix=$nextVersion" "-p:CETCompat=$cetCompat" "-p:ResoDriveCompatibilityMode=$compatibilityValue" | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'Temporary future fixture publish failed.' }
@@ -690,7 +697,9 @@ $sameVersionRecovery = @($sameVersionPaths | Where-Object { -not [string]::IsNul
 $bundleUpgradeCode = '{5B94F457-820F-4B41-B609-071179764B08}'
 $msiexec = Join-Path ([Environment]::SystemDirectory) 'msiexec.exe'
 $candidateSuffix = if ($CompatibilityMode) { '-compatibility' } else { '' }
-$candidateMsi = Join-Path ([IO.Path]::GetDirectoryName($setup)) "resodrive-win-x64-$expectedVersion$candidateSuffix.msi"
+$candidateArtifactRoot = [IO.Path]::GetDirectoryName($setup)
+if ($CompatibilityMode) { $candidateArtifactRoot = Join-Path (Split-Path -Parent $candidateArtifactRoot) 'win-x64-compatibility' }
+$candidateMsi = Join-Path $candidateArtifactRoot "resodrive-win-x64-$expectedVersion$candidateSuffix.msi"
 $candidateProductCode = Get-MsiProperty $candidateMsi 'ProductCode'
 $sameVersionUpgradeCode = Get-MsiProperty $candidateMsi 'UpgradeCode'
 $sameVersionReceipt = $null
@@ -727,6 +736,12 @@ try {
         $sameVersionReceipt['CandidateProductCode'] = $candidateProductCode
         $sameVersionReceipt | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $testRoot 'same-version-result.json') -Encoding utf8
     }
+    Invoke-Installer $setup "/install /quiet /norestart ResoDriveCompatibilityMode=2 /log `"$testRoot\invalid-mode.log`"" -ExpectFailure
+    if ((Test-Path -LiteralPath $app) -or (Test-Path -LiteralPath $legacyApp) -or
+        @(Get-RelatedMsiProducts $sameVersionUpgradeCode).Count -ne 0) {
+        throw 'An invalid compatibility choice changed the installation.'
+    }
+    Assert-DataPreserved
     Invoke-Installer $setup "/install /quiet /norestart /log `"$testRoot\fresh.log`""
     $candidateAppHash = (Get-FileHash -LiteralPath $app -Algorithm SHA256).Hash
     $candidateProductVersion = (Get-Item -LiteralPath $app).VersionInfo.ProductVersion
@@ -737,11 +752,26 @@ try {
     Assert-CompatibilityMode
     & (Join-Path $PSScriptRoot 'native-crash-smoke.ps1') -MonitorPath $launcher -VerifyWer -VerifyClipboard
     Assert-DataPreserved
+    # Opposite equal-version products must be rejected by both entry points,
+    # rather than silently registering two products in one installation root.
+    $oppositeSuffix = if ($CompatibilityMode) { '' } else { '-compatibility' }
+    $oppositeRoot = Join-Path (Split-Path -Parent ([IO.Path]::GetDirectoryName($setup))) $(if ($CompatibilityMode) { 'win-x64' } else { 'win-x64-compatibility' })
+    $oppositeMsi = Join-Path $oppositeRoot "resodrive-win-x64-$expectedVersion$oppositeSuffix.msi"
+    if ((Get-MsiProperty $oppositeMsi 'UpgradeCode') -ine $sameVersionUpgradeCode -or
+        (Get-MsiProperty $oppositeMsi 'ProductCode') -ieq $candidateProductCode) {
+        throw 'The two modes must have distinct products in the same application family.'
+    }
+    $oppositeMode = if ($CompatibilityMode) { 0 } else { 1 }
+    Invoke-Installer $setup "/install /quiet /norestart ResoDriveCompatibilityMode=$oppositeMode /log `"$testRoot\blocked-mode-switch.log`"" -ExpectFailure
+    Invoke-Installer $msiexec "/i `"$oppositeMsi`" /quiet /norestart /l*v `"$testRoot\blocked-opposite-msi.log`"" -ExpectFailure
+    Assert-CandidateInstalled
+    Assert-OneRemovableAppEntry
+    Assert-DataPreserved
     Invoke-Installer $setup "/uninstall /quiet /norestart /log `"$testRoot\unsupported-setup-uninstall.log`"" -ExpectFailure
     Assert-CandidateInstalled
     Assert-OneRemovableAppEntry
     $running = Start-TestApplication
-    Invoke-Installer $setup "/repair /quiet /norestart /log `"$testRoot\repair.log`""
+    Invoke-Installer $setup "/repair /quiet /norestart /log `"$testRoot\repair.log`"" -PreserveSetupMode
     Assert-Stopped $running
     Assert-WerPolicy
     Assert-OneRemovableAppEntry
@@ -994,6 +1024,10 @@ try {
     [ordered]@{
         Passed = $true
         CetCompatibilityMode = [bool]$CompatibilityMode
+        UnifiedSetupSha256 = (Get-FileHash -LiteralPath $setup).Hash
+        InvalidCompatibilitySelectionRejectedBeforeInstallation = $true
+        OppositeEqualVersionSetupAndMsiRejected = $true
+        RepairRetainedModeWithoutCommandLineOverride = $true
         CompatibilityChoicePreservedByModernUpdater = $true
         Version = $expectedVersion
         PreviousPublicVersion = $PreviousVersion
