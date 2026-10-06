@@ -378,7 +378,59 @@ function Remove-StartupFixture {
     finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($folder) | Out-Null }
 }
 
-function Invoke-CopiedUpdater([string]$Source, [string]$Msi, [string]$Version, [string]$ExpectedExecutable) {
+function Assert-UpdatedUiReady([string]$Executable, [DateTimeOffset]$StartedAfter) {
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(20)
+    do {
+        $windows = @(Get-Process resodrive -ErrorAction SilentlyContinue | Where-Object {
+            $_.Path -ieq $Executable -and $_.MainWindowHandle -ne 0 -and
+                $_.StartTime.ToUniversalTime() -ge $StartedAfter.UtcDateTime
+        })
+        if ($windows.Count -gt 1) { throw 'The updater reopened more than one UI at the expected installed path.' }
+        if ($windows.Count -eq 1) {
+            $identity = [ordered]@{
+                processId = $windows[0].Id
+                processCreatedAtUtc = $windows[0].StartTime.ToUniversalTime().ToString('O')
+                mainWindowHandle = $windows[0].MainWindowHandle.ToInt64()
+            }
+            # This normal secondary launch targets the exact installed directory's
+            # activation scope. Exit 0 requires its live, loaded, visible UI to ACK.
+            $probe = Start-Process -FilePath $Executable -ArgumentList '--show' -WindowStyle Hidden -PassThru
+            try {
+                if (-not $probe.WaitForExit(15000) -or $probe.ExitCode -ne 0) { throw 'The updated UI did not acknowledge its exact-directory readiness probe.' }
+            } finally { $probe.Dispose() }
+            $windows[0].Refresh()
+            if ($windows[0].HasExited -or $windows[0].MainWindowHandle -eq 0) { throw 'The updated UI exited or lost its visible window after readiness acknowledgement.' }
+            return $identity
+        }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    throw 'The updater did not reopen a visible UI at the exact expected installed path.'
+}
+
+function Read-OptionalFinalUpdateOutcome([string]$Path, [string]$Version) {
+    # The relaunched UI intentionally consumes this receipt. Open once with
+    # delete-sharing so disappearance after this read cannot invalidate evidence.
+    $stream = $null
+    try {
+        try { $stream = [IO.FileStream]::new($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+            [IO.FileShare]::Read -bor [IO.FileShare]::Delete) }
+        catch [IO.FileNotFoundException] { return $null }
+        catch [IO.DirectoryNotFoundException] { return $null }
+        if ($stream.Length -gt 64 * 1024) { throw 'The retained update outcome exceeds its expected bound.' }
+        $reader = [IO.StreamReader]::new($stream, [Text.Encoding]::UTF8, $true, 1024, $true)
+        try { $json = $reader.ReadToEnd() } finally { $reader.Dispose() }
+        $result = $json | ConvertFrom-Json
+        if ($result.version -cne $Version -or $result.status -cne 'succeeded' -or
+            $result.finalized -isnot [bool] -or $result.finalized -ne $true -or
+            $result.relaunchAcknowledged -isnot [bool] -or $result.relaunchAcknowledged -ne $true -or
+            $result.installerExitCode -notin @(0, 1641, 3010)) { throw 'The retained updater outcome does not confirm successful installation and readiness.' }
+        return $result
+    } finally { if ($null -ne $stream) { $stream.Dispose() } }
+}
+
+function Invoke-CopiedUpdater([string]$Source, [string]$Msi, [string]$Version,
+    [string]$ExpectedExecutable, [string]$ExpectedSha256) {
+    $sourceVersion = (Get-Item -LiteralPath $Source).VersionInfo.ProductVersion
     $updates = Join-Path $env:RDRIVE_DATA_DIR 'updates'
     New-Item -ItemType Directory -Path $updates -Force | Out-Null
     $helper = Join-Path $updates 'resodrive-update-helper.exe'
@@ -386,24 +438,48 @@ function Invoke-CopiedUpdater([string]$Source, [string]$Msi, [string]$Version, [
     $outcome = Join-Path $updates 'application-update-result.json'
     Copy-Item -LiteralPath $Source -Destination $helper -Force
     Copy-Item -LiteralPath $Msi -Destination $stagedMsi -Force
-    if (Test-Path -LiteralPath $outcome) { Remove-Item -LiteralPath $outcome }
+    foreach ($staleOutcome in @($outcome, ($outcome + '.tmp'))) {
+        if (Test-Path -LiteralPath $staleOutcome) { Remove-Item -LiteralPath $staleOutcome }
+    }
     $parent = Start-Process -FilePath (Join-Path ([Environment]::SystemDirectory) 'cmd.exe') -ArgumentList '/c exit 0' -WindowStyle Hidden -PassThru
     try { $parentId = $parent.Id; $parent.WaitForExit() } finally { $parent.Dispose() }
     $arguments = '--complete-update ' + $Version + ' "' + $stagedMsi + '" "' + $Source + '" "' + $Source + '" "' + $outcome + '" ' +
         (Get-FileHash -LiteralPath $stagedMsi -Algorithm SHA256).Hash + ' ' + $parentId
     $oldHandoff = $env:RDRIVE_UPDATE_HANDOFF_DIR
     $env:RDRIVE_UPDATE_HANDOFF_DIR = $updates
+    $startedAtUtc = [DateTimeOffset]::UtcNow
+    $helperExitCode = $null
     try {
         $process = Start-Process -FilePath $helper -ArgumentList $arguments -WindowStyle Hidden -PassThru
         try {
             if (-not $process.WaitForExit(240000)) { throw 'Copied updater timed out.' }
+            $helperExitCode = $process.ExitCode
             if ($process.ExitCode -ne 0) { throw "Copied updater failed ($($process.ExitCode))." }
         } finally { $process.Dispose() }
     } finally { $env:RDRIVE_UPDATE_HANDOFF_DIR = $oldHandoff }
-    $result = Get-Content -LiteralPath $outcome -Raw | ConvertFrom-Json
-    Copy-Item -LiteralPath $outcome -Destination (Join-Path $testRoot "update-outcome-$Version-$([IO.Path]::GetFileName((Split-Path -Parent $ExpectedExecutable))).json") -Force
-    if ($result.status -cne 'succeeded' -or -not $result.finalized -or -not $result.relaunchAcknowledged) { throw 'Copied updater did not confirm the updated window was ready.' }
     Assert-NativeInstalledLocator $ExpectedExecutable $Version
+    $actualHash = (Get-FileHash -LiteralPath $ExpectedExecutable -Algorithm SHA256).Hash
+    if ($ExpectedSha256 -notmatch '^[a-fA-F0-9]{64}$' -or $actualHash -ine $ExpectedSha256) { throw 'The copied updater did not install the exact expected managed binary.' }
+    $ui = Assert-UpdatedUiReady $ExpectedExecutable $startedAtUtc
+    $result = Read-OptionalFinalUpdateOutcome $outcome $Version
+    $receiptState = 'consumed-by-active-updated-ui'
+    if ($null -ne $result) { $receiptState = 'observed-and-validated-final-outcome' }
+    # Frozen v0.3.30 CompleteAsync exits 0 only for successful MSI + RequestReady
+    # acknowledgement; malformed --complete-update returns 2. The current helper
+    # preserves that exit contract. The UI may already have deleted its receipt.
+    [ordered]@{
+        targetVersion = $Version
+        sourceProductVersion = $sourceVersion
+        helperExitCode = $helperExitCode
+        helperExitContract = '0 requires succeeded MSI and RequestReady acknowledgement'
+        expectedExecutable = $ExpectedExecutable
+        installedExecutableSha256 = $actualHash
+        realInstalledMsiRegistrationVerified = $true
+        exactDirectoryReadinessProbeAcknowledged = $true
+        updatedUi = $ui
+        outcomeReceiptState = $receiptState
+        finalOutcome = $result
+    } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $testRoot "update-handoff-$Version-$([IO.Path]::GetFileName((Split-Path -Parent $ExpectedExecutable))).json") -Encoding utf8
 }
 
 function New-FutureMigrationFixture {
@@ -513,7 +589,7 @@ try {
     Invoke-Installer $msiexec "/i `"$previous`" /quiet /norestart /l*v `"$testRoot\previous.log`""
     if (-not (Test-Path -LiteralPath $legacyApp) -or (Test-Path -LiteralPath $app)) { throw 'The public baseline must install into rdrive.' }
     $running = Start-TestApplication $legacyApp
-    Invoke-CopiedUpdater $legacyApp $candidateMsi $expectedVersion $legacyApp
+    Invoke-CopiedUpdater $legacyApp $candidateMsi $expectedVersion $legacyApp $candidateAppHash
     if (-not $running.WaitForExit(15000)) { throw 'The old UI survived its copied updater.' }
     $running.Dispose()
     Assert-CandidateInstalled $legacyApp
@@ -535,7 +611,7 @@ try {
     [IO.File]::WriteAllText($legacyUnowned, 'Installer must not recursively delete unrelated old-directory files.')
     New-DisabledStartupFixture
     $running = Start-TestApplication $legacyApp
-    Invoke-CopiedUpdater $legacyApp $future.Msi $future.Version $app
+    Invoke-CopiedUpdater $legacyApp $future.Msi $future.Version $app $future.AppHash
     if (-not $running.WaitForExit(15000)) { throw 'The compatibility UI survived its relocation updater.' }
     $running.Dispose()
     if ((Test-Path -LiteralPath $legacyApp) -or (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $legacyApp) 'resodrive-launcher.exe'))) { throw 'Migration left duplicate old application files.' }
@@ -555,7 +631,7 @@ try {
     # Skipping this candidate must still preserve .30's hardcoded activation path.
     Invoke-Installer $msiexec "/i `"$previous`" /quiet /norestart /l*v `"$testRoot\skip-baseline.log`""
     $running = Start-TestApplication $legacyApp
-    Invoke-CopiedUpdater $legacyApp $future.Msi $future.Version $legacyApp
+    Invoke-CopiedUpdater $legacyApp $future.Msi $future.Version $legacyApp $future.AppHash
     if (-not $running.WaitForExit(15000)) { throw 'Skipped-version updater left the old UI alive.' }
     $running.Dispose()
     Assert-OneRemovableAppEntry $futureCode $future.Version
