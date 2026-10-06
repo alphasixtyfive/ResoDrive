@@ -107,8 +107,13 @@ Local smoke tests use synthetic process exit codes; they prove observer behavior
 not actual WER capture or .NET runtime diagnosis. `-VerifyDialog` additionally
 renders the real native error window for inspection. `-VerifyWer` is allowed only
 on disposable GitHub-hosted runners after the candidate MSI installs its per-app
-policy. A readiness/trigger handshake then raises a real FailFast exception and
-checks the dump's exact process identity, timestamps, size and `MDMP` signature.
+policy. Readiness/trigger handshakes exercise both native `RaiseFailFastException`
+and a separate .NET 10 `Environment.FailFast` fixture through the packaged
+launcher. Each dump must match the exact process identity and timestamps, declare
+full memory, and contain bounded thread, module, exception, CPU context and
+Memory64 ranges. The CLR case additionally requires the loaded `coreclr.dll`
+module. Synthetic valid/corrupt dump layouts test this acceptance parser locally;
+production code never parses process-memory payloads.
 The test neither edits machine policy nor crashes anything on the developer PC.
 `-VerifyClipboard` is also restricted to a disposable hosted runner: it invokes
 the real Copy details button and compares the complete Unicode clipboard value
@@ -125,3 +130,6 @@ Microsoft references: [CreateProcessW](https://learn.microsoft.com/en-us/windows
 [EvtRender](https://learn.microsoft.com/en-us/windows/win32/api/winevt/nf-winevt-evtrender),
 [process-object lifetime and PID reuse](https://devblogs.microsoft.com/oldnewthing/20110107-00/?p=11803),
 [WER LocalDumps](https://learn.microsoft.com/en-us/windows/win32/wer/collecting-user-mode-dumps).
+Test layouts follow Microsoft's [MINIDUMP_HEADER](https://learn.microsoft.com/en-us/windows/win32/api/minidumpapiset/ns-minidumpapiset-minidump_header)
+and [MINIDUMP_MEMORY64_LIST](https://learn.microsoft.com/en-us/windows/win32/api/minidumpapiset/ns-minidumpapiset-minidump_memory64_list);
+the CLR fixture uses [Environment.FailFast](https://learn.microsoft.com/en-us/dotnet/api/system.environment.failfast?view=net-10.0).

@@ -18,6 +18,7 @@ public sealed partial class CrashDiagnosticLog
     private readonly ApplicationPaths? _paths;
     private readonly string _directory;
     private readonly bool _requiresGuard;
+    private readonly bool _localDestination;
     private readonly AccountDataGuard? _accountData;
     private readonly long _maximumBytes;
 
@@ -35,7 +36,15 @@ public sealed partial class CrashDiagnosticLog
         _maximumBytes = maximumBytes;
         LogFile = Path.Combine(paths.Logs, $"resodrive-{processRole}.log");
         SessionId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
-        try { _accountData = new AccountDataGuard(paths); }
+        _localDestination = IsLocalDiagnosticPath(LogFile);
+        // An account root may intentionally be remote. Diagnostics must never probe
+        // its wipe marker or filesystem: offline network I/O has no bounded timeout.
+        if (!_localDestination) return;
+        try
+        {
+            RejectRedirectedPaths();
+            _accountData = new AccountDataGuard(paths);
+        }
         catch (Exception exception) when (IsDiagnosticIoFailure(exception))
         {
             // An unreadable wipe marker blocks all account writes, including diagnostics.
@@ -55,6 +64,7 @@ public sealed partial class CrashDiagnosticLog
         _requiresGuard = accountData is not null;
         _maximumBytes = maximumBytes;
         SessionId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+        _localDestination = IsLocalDiagnosticPath(LogFile);
     }
 
     public string LogFile { get; }
@@ -108,10 +118,14 @@ public sealed partial class CrashDiagnosticLog
 
     private bool WriteCore(string level, string eventName, string? detail, string? errorId, bool sanitize)
     {
-        if (_requiresGuard && _accountData is null) return false;
+        // Recheck before the guard touches disk: a drive letter can be remapped
+        // after construction. Do not use IsReady or enumerate remote files.
+        if (!_localDestination || !IsLocalDiagnosticPath(LogFile) ||
+            _requiresGuard && _accountData is null) return false;
         var entered = false;
         try
         {
+            RejectRedirectedPaths();
             if (_accountData?.IsBlocked == true) return false;
             entered = Monitor.TryEnter(_gate, LeaseTimeout);
             if (!entered) return false;
@@ -161,6 +175,24 @@ public sealed partial class CrashDiagnosticLog
 
     private void RejectRedirectedPaths()
     {
+        // Inspect ancestors in order before any access below them. A local drive
+        // may contain a junction to an offline share; checking only the leaf would
+        // follow that junction before discovering it.
+        var ancestors = new Stack<string>();
+        for (string? path = _directory; path is not null; path = Path.GetDirectoryName(path))
+            ancestors.Push(path);
+        foreach (var ancestor in ancestors)
+        {
+            try
+            {
+                var attributes = File.GetAttributes(ancestor);
+                if ((attributes & FileAttributes.Directory) == 0 ||
+                    (attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new IOException("Diagnostic directory ancestors must not redirect account writes.");
+            }
+            catch (FileNotFoundException) { return; }
+            catch (DirectoryNotFoundException) { return; }
+        }
         var candidates = _paths is null ? [_directory, LogFile, LogFile + ".1"] :
             new[] { _paths.Root, _directory, LogFile, LogFile + ".1", Path.Combine(_paths.Root, ".account-data.lock") };
         foreach (var path in candidates)
@@ -180,6 +212,20 @@ public sealed partial class CrashDiagnosticLog
     private static bool IsDiagnosticIoFailure(Exception exception) =>
         exception is IOException or UnauthorizedAccessException or ArgumentException or
             NotSupportedException or OperationCanceledException or System.Security.SecurityException;
+
+    private static bool IsLocalDiagnosticPath(string path)
+    {
+        // Only ordinary absolute drive-letter paths. This rejects UNC, extended
+        // UNC and device namespaces before any native drive or filesystem query.
+        if (path.Length < 3 || !char.IsAsciiLetter(path[0]) || path[1] != ':' ||
+            path[2] is not ('\\' or '/')) return false;
+        try
+        {
+            return new DriveInfo(path[..3]).DriveType is
+                DriveType.Fixed or DriveType.Removable or DriveType.CDRom or DriveType.Ram;
+        }
+        catch (Exception exception) when (IsDiagnosticIoFailure(exception)) { return false; }
+    }
 
     private static string NewErrorId() =>
         Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture)[..8].ToUpperInvariant();

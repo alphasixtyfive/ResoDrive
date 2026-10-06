@@ -5,6 +5,7 @@ if (($VerifyWer -or $VerifyClipboard) -and ($env:GITHUB_ACTIONS -ne 'true' -or $
     throw 'Real WER crash and clipboard acceptance are permitted only on a disposable GitHub-hosted runner. Local smoke uses synthetic exit codes, never changes machine policy, and leaves the user clipboard untouched.'
 }
 $repo = Split-Path $PSScriptRoot -Parent
+. (Join-Path $PSScriptRoot 'Read-FullMemoryDumpEvidence.ps1')
 $runRoot = Join-Path ([IO.Path]::GetTempPath()) ('resodrive-native-crash-' + [Guid]::NewGuid().ToString('N'))
 $binaryRoot = Join-Path $runRoot 'bin with spaces'
 & (Join-Path $repo 'native/ResoDrive.CrashMonitor/build.ps1') -OutputDirectory $binaryRoot -IncludeTestFixture
@@ -82,6 +83,8 @@ public static class NativeCrashWindowProbe {
 }
 $results = [Collections.Generic.List[string]]::new()
 function Assert([bool]$condition, [string]$message) { if (-not $condition) { throw $message }; $results.Add($message) }
+$null = & (Join-Path $PSScriptRoot 'full-memory-dump-smoke.ps1')
+Assert $true 'Full-memory dump parser accepts a valid synthetic layout and rejects 12 corrupt layouts without a real crash.'
 function Start-TestProcess([string]$executable, [string[]]$arguments, [string]$root, [switch]$ShowDialogs) {
     $info = [Diagnostics.ProcessStartInfo]::new($executable)
     $info.UseShellExecute = $false
@@ -96,7 +99,7 @@ function Wait-TestProcess($process) {
     if (-not $process.WaitForExit(15000)) { throw "Native smoke process $($process.Id) did not finish. Its disposable data is at $runRoot" }
     return $process.ExitCode
 }
-function Reports([string]$root) { return @(Get-ChildItem -LiteralPath ($root + '-diagnostics') -Filter 'incident-*.txt' -ErrorAction SilentlyContinue) }
+function Reports([string]$root) { return ,@(Get-ChildItem -LiteralPath ($root + '-diagnostics') -Filter 'incident-*.txt' -ErrorAction SilentlyContinue) }
 function Wait-FixtureIdentity([string]$path) {
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     while ([DateTime]::UtcNow -lt $deadline) {
@@ -213,7 +216,7 @@ $sent = @('space value', 'quote"value', '', 'trailing\', 'unicode-船', 'passwor
 $process = Start-TestProcess $launcher (@('--record-args', $argumentFile) + $sent) $quoteRoot
 Assert ((Wait-TestProcess $process) -eq 0) 'Quoted arguments exit normally.'
 $received = [IO.File]::ReadAllText($argumentFile, [Text.Encoding]::Unicode).Split("`n")
-Assert (($received.Count -eq $sent.Count + 1) -and ((Compare-Object $sent $received[0..($sent.Count - 1)] -SyncWindow 0).Count -eq 0)) 'Argument forwarding preserves spaces, embedded quotes, empty values, Unicode and trailing backslashes.'
+Assert (($received.Count -eq $sent.Count + 1) -and (@(Compare-Object $sent $received[0..($sent.Count - 1)] -SyncWindow 0).Count -eq 0)) 'Argument forwarding preserves spaces, embedded quotes, empty values, Unicode and trailing backslashes.'
 Assert ((Reports $quoteRoot).Count -eq 0) 'Forwarded command-line arguments are never logged.'
 
 $observerRoot = Join-Path $runRoot 'observer-data'
@@ -321,16 +324,39 @@ if ($VerifyWer) {
     while (-not (Test-Path -LiteralPath $dumpPath) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
     $dump = Get-Item -LiteralPath $dumpPath
     Assert ($dump.Length -gt 0 -and $dump.CreationTimeUtc.ToFileTimeUtc() -ge $childCreation -and $dump.LastWriteTimeUtc.ToFileTimeUtc() -ge $childCreation) 'WER writes a nonempty dump for the exact real-crash fixture PID and creation time.'
-    $stream = [IO.File]::OpenRead($dumpPath)
-    try {
-        $signature = [byte[]]::new(4)
-        $read = $stream.Read($signature, 0, $signature.Length)
-        Assert ($read -eq 4 -and [Text.Encoding]::ASCII.GetString($signature) -eq 'MDMP') 'Captured evidence is a Windows minidump-format file.'
-    } finally { $stream.Dispose() }
+    $dumpEvidence = Read-FullMemoryDumpEvidence $dumpPath
+    Assert ($dumpEvidence.threadCount -gt 0 -and $dumpEvidence.moduleCount -gt 0 -and $dumpEvidence.memoryBytes -gt 0) 'Native WER evidence declares full memory and contains valid thread/module/exception/context and Memory64 ranges.'
     $werReports = Reports $werRoot
+    Assert ($werReports.Count -eq 1) 'Real native failure creates exactly one incident report.'
     $werSummary = Get-Content -LiteralPath $werReports[0].FullName -Raw
-    Assert ($werReports.Count -eq 1 -and $werSummary -match 'unexpected-exit') 'Native observer also records the actual fatal exception.'
+    Assert ($werSummary -match 'unexpected-exit') 'Native observer also records the actual fatal exception.'
     Assert ($werSummary -match 'MSI-owned default WER folder exists before application execution') 'Native preflight prepares the installed dump folder before the real crash without test-side directory creation.'
+
+    $managedBinaryRoot = Join-Path $runRoot 'managed-clr-fixture'
+    Push-Location $repo
+    try {
+        & dotnet publish (Join-Path $PSScriptRoot 'ResoDrive.CrashFixture/ResoDrive.CrashFixture.csproj') -c Release -r win-x64 --self-contained false -o $managedBinaryRoot
+        if ($LASTEXITCODE -ne 0) { throw 'Pinned .NET 10 managed crash fixture build failed.' }
+    } finally { Pop-Location }
+    Copy-Item -LiteralPath $launcher -Destination (Join-Path $managedBinaryRoot 'resodrive-launcher.exe')
+    $managedRoot = Join-Path $runRoot 'managed-wer-data'
+    $managedIdentity = Join-Path $runRoot 'managed-wer-identity.txt'
+    $managedTrigger = Join-Path $runRoot 'managed-wer-trigger.txt'
+    $process = Start-TestProcess (Join-Path $managedBinaryRoot 'resodrive-launcher.exe') @('--identity', $managedIdentity, '--wait-trigger', $managedTrigger) $managedRoot
+    $identity = Wait-FixtureIdentity $managedIdentity
+    $childPid = [int]$identity[0]; $childCreation = [long]$identity[1]
+    [IO.File]::WriteAllText($managedTrigger, 'managed-fail-fast')
+    if (-not $process.WaitForExit(60000)) { throw 'Managed CLR FailFast fixture did not finish within 60 seconds.' }
+    Assert ($process.ExitCode -ne 0) '.NET 10 Environment.FailFast produces a real abnormal managed-process exit.'
+    $managedDumpPath = Join-Path $dumpFolder "resodrive.exe.$childPid.dmp"
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    while (-not (Test-Path -LiteralPath $managedDumpPath) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+    $managedDump = Get-Item -LiteralPath $managedDumpPath
+    Assert ($managedDump.CreationTimeUtc.ToFileTimeUtc() -ge $childCreation -and $managedDump.LastWriteTimeUtc.ToFileTimeUtc() -ge $childCreation) 'Managed WER dump matches the CLR fixture PID and creation identity.'
+    $managedEvidence = Read-FullMemoryDumpEvidence $managedDumpPath -RequiredModule coreclr.dll
+    Assert ($managedEvidence.requiredModuleFound -and $managedEvidence.memoryBytes -gt 0) 'Managed WER dump contains full memory, exception CPU context and the loaded CoreCLR module.'
+    $managedReports = Reports $managedRoot
+    Assert ($managedReports.Count -eq 1) 'The packaged native launcher also records the CLR-specific fatal failure.'
 }
 
 $missingRoot = Join-Path $runRoot 'missing-data'

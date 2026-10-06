@@ -687,6 +687,18 @@ try {
         ActualWerDumpVerified = $true
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $testRoot 'installer-ownership-result.json') -Encoding utf8
     Write-Output 'Installer smoke passed: one removable app entry, fresh install, running-app repair/removal, direct MSI upgrade, blocked legacy MSI migration, native Setup migration and preserved user data.'
+} catch {
+    # Report source location without dumping command arguments, bound parameters,
+    # fixture configuration or account contents into workflow logs.
+    Write-Host ("Installer smoke failure type: {0}" -f $_.Exception.GetType().FullName)
+    if ($null -ne $_.InvocationInfo) {
+        Write-Host ("Installer smoke failure location: {0}:{1}:{2}" -f
+            $_.InvocationInfo.ScriptName, $_.InvocationInfo.ScriptLineNumber, $_.InvocationInfo.OffsetInLine)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($_.ScriptStackTrace)) {
+        Write-Host ("Installer smoke script stack:`n{0}" -f $_.ScriptStackTrace)
+    }
+    throw
 } finally {
     try {
         Remove-StartupFixture

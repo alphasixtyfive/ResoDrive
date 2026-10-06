@@ -82,6 +82,73 @@ public sealed class CrashDiagnosticLogTests : IDisposable
         Assert.False(File.Exists(log.LogFile));
     }
 
+    [Theory]
+    [InlineData(@"\\192.0.2.1\unreachable-share\resodrive-test")]
+    [InlineData(@"\\?\UNC\192.0.2.1\unreachable-share\resodrive-test")]
+    [InlineData(@"\\.\UNC\192.0.2.1\unreachable-share\resodrive-test")]
+    public void OfflineNetworkDestinationsAreRefusedBeforeGuardOrFileAccess(string root)
+    {
+        // TEST-NET-1 is not a real share; no filesystem availability probes belong
+        // here. Include construction: the account guard itself reads a wipe marker.
+        var elapsed = Stopwatch.StartNew();
+        var paths = new ApplicationPaths(root);
+        var accountLog = new CrashDiagnosticLog(paths, "host");
+        Assert.False(accountLog.Information("network.refused"));
+        accountLog.StartSession();
+        Assert.Matches("^[A-F0-9]{8}$", accountLog.Exception("fatal.failed", new BrokenException()));
+        Assert.False(new CrashDiagnosticLog(paths.UiLogFile).Information("network.refused"));
+        Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(3), $"Remote diagnostics took {elapsed.Elapsed}.");
+    }
+
+    [Fact]
+    public void LocalDeviceNamespaceIsRefusedWithoutWriting()
+    {
+        var deviceRoot = @"\\?\" + _root;
+        var paths = new ApplicationPaths(deviceRoot);
+        Assert.False(new CrashDiagnosticLog(paths, "ui").Information("device.refused"));
+        Assert.False(new CrashDiagnosticLog(paths.UiLogFile).Information("device.refused"));
+        Assert.False(Directory.Exists(_root));
+    }
+
+    [Fact]
+    public async Task AncestorJunctionIsRefusedBeforeAccessingItsDescendants()
+    {
+        var outside = _root + "-outside";
+        var junction = Path.Combine(_root, "redirected");
+        Directory.CreateDirectory(_root);
+        Directory.CreateDirectory(outside);
+        var sentinel = Path.Combine(outside, "sentinel.txt");
+        File.WriteAllText(sentinel, "untouched");
+        try
+        {
+            var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("COMSPEC") ?? "cmd.exe")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            foreach (var argument in new[] { "/d", "/c", "mklink", "/J", junction, outside })
+                start.ArgumentList.Add(argument);
+            using var process = Process.Start(start)!;
+            await process.WaitForExitAsync();
+            Assert.Equal(0, process.ExitCode);
+
+            var elapsed = Stopwatch.StartNew();
+            var paths = new ApplicationPaths(Path.Combine(junction, "account"));
+            Assert.False(new CrashDiagnosticLog(paths, "host").Information("junction.refused"));
+            Assert.False(new CrashDiagnosticLog(paths.UiLogFile).Information("junction.refused"));
+            Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(3));
+            Assert.Empty(Directory.GetDirectories(outside));
+            Assert.Equal("untouched", File.ReadAllText(sentinel));
+        }
+        finally
+        {
+            if (Directory.Exists(junction)) Directory.Delete(junction);
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
     [Fact]
     public void RotationAndOversizedEventsRemainWithinTwoBoundedFiles()
     {

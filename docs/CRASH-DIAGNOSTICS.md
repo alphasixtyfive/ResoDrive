@@ -30,6 +30,10 @@ and memory dumps are local support evidence, retained separately from account
 cleanup. A remote wipe does not assert that Windows crash evidence has been
 erased.
 
+Native summaries and managed logs refuse network, device and reparse destinations
+before guarded filesystem access. An unavailable destination is reported honestly;
+the native dialog can still copy the available summary.
+
 Memory dumps can contain passwords, tokens, file content, and personal data.
 They are optional sensitive attachments, not automatically included or sent.
 Review the files before sharing them through an agreed support channel. Deleting
@@ -147,16 +151,19 @@ Local native smoke uses synthetic abnormal exits to test process observation,
 argument forwarding, process identity, metadata, retention, session shutdown,
 unavailable destinations and standard dialog rendering. Those tests do not
 reproduce a CLR runtime failure or prove WER capture. Hosted installer acceptance
-separately triggers a real fatal fixture exception and checks the resulting
-Windows dump, its PID/time and file signature under the installed policy.
+separately triggers native and .NET 10 fatal fixture exceptions and checks the
+resulting Windows full-memory dumps under the installed policy.
 Desktop UAC and the affected vessel still require their own acceptance evidence.
 
 The installer lifecycle test additionally calls that smoke test with `-VerifyWer
 -VerifyClipboard`
 after installing the candidate on a disposable GitHub-hosted Windows runner. It
 checks the installed registry value types and literal path, triggers a real
-fail-fast in a disposable fixture, and requires a matching, nonempty dump with an
-`MDMP` signature. It also checks that global WER policy values survive install,
+fail-fast in separate disposable native and CLR fixtures supervised by the
+packaged launcher. Each dump must match PID and creation time, declare full memory,
+and contain valid thread, module, exception, CPU context and Memory64 ranges.
+The CLR dump must also contain `coreclr.dll`. Local synthetic layouts exercise
+the acceptance parser without capturing real memory. It also checks that global WER policy values survive install,
 repair, upgrade and removal. This acceptance path refuses developer machines and
 pre-existing per-executable policy; local metadata tests alone do not establish
 that Windows dump collection worked.
