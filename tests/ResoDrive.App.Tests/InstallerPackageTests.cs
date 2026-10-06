@@ -158,6 +158,33 @@ public sealed class InstallerPackageTests
     }
 
     [Fact]
+    public void RegisteredUpgradeLocationIsAvailableBeforeTheMissingLocationLaunchGuard()
+    {
+        // After the compatibility release, per-version component identities mean
+        // AppSearch must supply the registered location before launch validation.
+        // CostFinalize is too late, and a UI-only assignment breaks passive MSI updates.
+        var document = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Package.wxs"));
+        var resolve = Assert.Single(document.Descendants(Wix + "SetProperty"), item =>
+            (string?)item.Attribute("Id") == "RDRIVE_PREVIOUS_INSTALL_ROOT");
+        Assert.Equal("LaunchConditions", (string?)resolve.Attribute("Before"));
+        Assert.Null(resolve.Attribute("After"));
+        Assert.Equal("both", (string?)resolve.Attribute("Sequence"));
+        Assert.Equal("[RDRIVE_REGISTERED_INSTALL_ROOT]", (string?)resolve.Attribute("Value"));
+        Assert.Equal("WIX_UPGRADE_DETECTED AND RDRIVE_REGISTERED_INSTALL_ROOT", (string?)resolve.Attribute("Condition"));
+
+        var search = Assert.Single(document.Descendants(Wix + "RegistrySearch"), item =>
+            (string?)item.Attribute("Id") == "RegisteredInstallFolder");
+        Assert.Equal("HKLM", (string?)search.Attribute("Root"));
+        Assert.Equal("always64", (string?)search.Attribute("Bitness"));
+        Assert.Equal("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\[WIX_UPGRADE_DETECTED]", (string?)search.Attribute("Key"));
+        Assert.Equal("InstallLocation", (string?)search.Attribute("Name"));
+        Assert.Contains(document.Descendants(Wix + "Launch"), item =>
+            (string?)item.Attribute("Condition") == "Installed OR NOT WIX_UPGRADE_DETECTED OR RDRIVE_PREVIOUS_INSTALL_ROOT");
+        Assert.Contains(document.Descendants(Wix + "Launch"), item =>
+            (string?)item.Attribute("Condition") == "NOT (WIX_UPGRADE_DETECTED >< \";\")");
+    }
+
+    [Fact]
     public void RelocationDrainsBothDirectoriesAndRecordsMachineOwnedTaskMigrationProof()
     {
         var document = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Package.wxs"));

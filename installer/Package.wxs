@@ -42,8 +42,10 @@
         Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\[ProductCode]"
         Name="InstallLocation" Type="raw" Bitness="always64" />
     </Property>
+    <!-- Resolve the related product's registered location before the missing-root
+         launch guard. New versions no longer have the frozen component keypath. -->
     <SetProperty Id="RDRIVE_PREVIOUS_INSTALL_ROOT" Value="[RDRIVE_REGISTERED_INSTALL_ROOT]"
-      Before="CostFinalize" Sequence="both" Condition="WIX_UPGRADE_DETECTED AND RDRIVE_REGISTERED_INSTALL_ROOT" />
+      Before="LaunchConditions" Sequence="both" Condition="WIX_UPGRADE_DETECTED AND RDRIVE_REGISTERED_INSTALL_ROOT" />
     <SetProperty Id="INSTALLFOLDER" Value="[RDRIVE_PREVIOUS_INSTALL_ROOT]"
       After="SetRDRIVE_PREVIOUS_INSTALL_ROOT" Sequence="both"
       Condition="WIX_UPGRADE_DETECTED AND RDRIVE_PREVIOUS_INSTALL_ROOT AND RDRIVE_MIGRATE_INSTALL &lt;&gt; &quot;1&quot;" />
