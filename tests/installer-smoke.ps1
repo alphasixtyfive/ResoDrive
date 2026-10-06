@@ -487,6 +487,7 @@ function New-FutureMigrationFixture {
     $root = Join-Path $testRoot 'future-fixture'
     $payload = Join-Path $root 'payload'
     $published = Join-Path $root 'managed'
+    $installerIntermediate = (Join-Path $root 'installer-obj') + '/'
     New-Item -ItemType Directory -Path $payload -Force | Out-Null
     Copy-Item -Path (Join-Path ([IO.Path]::GetDirectoryName($setup)) 'resodrive\*') -Destination $payload -Recurse -Force
     dotnet publish (Join-Path $PSScriptRoot '..\src\ResoDrive.App\ResoDrive.App.csproj') -c Release -r win-x64 --self-contained false --no-restore `
@@ -497,6 +498,7 @@ function New-FutureMigrationFixture {
     . (Join-Path $PSScriptRoot '..\installer\ComponentIdentity.ps1')
     $props = $project.SelectSingleNode('/Project/PropertyGroup')
     dotnet build (Join-Path $PSScriptRoot '..\installer\ResoDrive.Installer.wixproj') -c Release --no-restore --output $root `
+        "-p:IntermediateOutputPath=$installerIntermediate" `
         "-p:PackageSource=$payload" "-p:ResoDriveVersion=$nextVersion" '-p:ResoDriveRuntime=win-x64' `
         "-p:ResoDriveComponentSeed=$(Get-ResoDriveComponentSeed $nextVersion)" "-p:ResoDriveUpgradeCode=$sameVersionUpgradeCode" `
         "-p:ResoDriveProductName=$($props.ProductDisplayName)" "-p:ResoDrivePublisher=$($props.ProductPublisher)" `

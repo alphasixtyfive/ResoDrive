@@ -16,6 +16,10 @@ $stageRoot = Join-Path $artifactRoot '.stage'
 $appOutput = Join-Path $stageRoot 'app'
 $installerOutput = Join-Path $stageRoot 'installer'
 $bootstrapperOutput = Join-Path $stageRoot 'bootstrapper'
+# WiX incremental tracking does not include version/define-constant changes.
+# Keep each package's build state in the fresh stage, separate from NuGet assets.
+$installerIntermediate = (Join-Path $stageRoot 'installer-obj') + '/'
+$bootstrapperIntermediate = (Join-Path $stageRoot 'bootstrapper-obj') + '/'
 $nativeOutput = Join-Path $stageRoot 'native'
 $symbolsOutput = Join-Path $artifactRoot 'symbols'
 $buildProperties = [xml](Get-Content -LiteralPath (Join-Path $projectRoot 'Directory.Build.props') -Raw)
@@ -155,6 +159,7 @@ if ($BuildMsi) {
         --configuration $Configuration `
         --no-restore `
         --output $installerOutput `
+        "-p:IntermediateOutputPath=$installerIntermediate" `
         -p:PackageSource=$packageOutput `
         -p:ResoDriveVersion=$releaseVersion `
         "-p:ResoDriveComponentSeed=$(Get-ResoDriveComponentSeed $releaseVersion)" `
@@ -271,6 +276,7 @@ if ($BuildMsi) {
         --configuration $Configuration `
         --no-restore `
         --output $bootstrapperOutput `
+        "-p:IntermediateOutputPath=$bootstrapperIntermediate" `
         -p:MsiSource=$msiOutput `
         -p:ResoDriveVersion=$releaseVersion `
         -p:ResoDriveRuntime=$Runtime `
