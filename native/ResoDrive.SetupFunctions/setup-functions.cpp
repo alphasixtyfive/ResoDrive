@@ -172,6 +172,15 @@ extern "C" __declspec(dllexport) HRESULT WINAPI BAFunctionsCreate(
     }
     if (SUCCEEDED(hr)) hr = context->engine->SetVariableNumeric(L"ResoDriveCanChangeMode", context->canChangeMode ? 1 : 0);
     if (SUCCEEDED(hr) && context->verified) hr = ValidateSelection(context);
+    if (SUCCEEDED(hr) && context->verified)
+    {
+        // Keep visibility fixed for this Setup session. Unchecking an existing
+        // compatibility choice must not hide the control before confirmation.
+        LONGLONG missingCapability = 0;
+        hr = context->engine->GetVariableNumeric(L"ResoDriveMissingCetCapability", &missingCapability);
+        if (SUCCEEDED(hr)) hr = context->engine->SetVariableNumeric(L"ResoDriveShowCompatibilityChoice",
+            ShowCompatibilityChoice(missingCapability != 0, context->installedMode, choice) ? 1 : 0);
+    }
     LONGLONG suppressLaunch = 0;
     if (SUCCEEDED(hr)) hr = context->engine->GetVariableNumeric(L"ResoDriveSuppressLaunch", &suppressLaunch);
     if (hr == DISP_E_TYPEMISMATCH) hr = SetFailure(context, SuppressLaunchError(-1));

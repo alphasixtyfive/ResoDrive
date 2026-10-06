@@ -43,8 +43,11 @@ as `cet-disabled` or `standard` under `HKLM\SOFTWARE\ResoDrive\Installation`.
 Compatibility MSI and ZIP assets use `resodrive-win-x64-{version}-compatibility`
 before their extension for automatic updates. The single stable installer is
 `ResoDrive-Setup.exe`; all assets have matching SHA-256 sidecars. Setup defaults
-to standard for fresh installations, explains the compatibility option and
-remembers a verified installed choice. Unattended callers can explicitly select
+to standard for fresh installations and remembers a verified installed choice.
+It shows compatibility controls only for a detected capability risk, an existing
+compatibility installation or an explicit compatibility selection. Their visibility
+stays fixed for that Setup session; an unchecked fresh default never opts out
+automatically. Unattended callers can explicitly select
 `ResoDriveCompatibilityMode=0` or `1`; other values fail before planning.
 An installation coordinator can pass `ResoDriveSuppressLaunch=1` to let Setup
 finish before the coordinator applies its own configuration and opens the app.

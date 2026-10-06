@@ -139,7 +139,17 @@ public sealed class InstallerPackageTests
         var checkbox = Assert.Single(document.Descendants(theme + "Checkbox"));
         Assert.Equal("ResoDriveCompatibilityMode", (string?)checkbox.Attribute("Name"));
         Assert.Equal("ResoDriveCanChangeMode = 1", (string?)checkbox.Attribute("EnableCondition"));
+        Assert.Equal("ResoDriveShowCompatibilityChoice = 1", (string?)checkbox.Attribute("VisibleCondition"));
         Assert.Contains("reduced protection", checkbox.Value);
+        XNamespace bal = "http://wixtoolset.org/schemas/v4/wxs/bal";
+        var bundle = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Bundle.wxs"));
+        var visibility = Assert.Single(bundle.Descendants(Wix + "Variable"), variable => (string?)variable.Attribute("Name") == "ResoDriveShowCompatibilityChoice");
+        Assert.Equal("0", (string?)visibility.Attribute("Value"));
+        Assert.Equal("numeric", (string?)visibility.Attribute("Type"));
+        Assert.Null(visibility.Attribute(bal + "Overridable"));
+        Assert.Null(visibility.Attribute("Persisted"));
+        Assert.Contains(document.Descendants(theme + "Label"), label =>
+            (string?)label.Attribute("VisibleCondition") == "ResoDriveShowCompatibilityChoice = 1" && label.Value.Contains("Standard is recommended", StringComparison.Ordinal));
         Assert.Contains(document.Descendants(theme + "Text"), text =>
             (string?)text.Attribute("Condition") == "DotNetDesktopRuntimeVersion >= DotNetDesktopRuntimeMinimumVersion" && text.Value.Contains("download skipped", StringComparison.Ordinal));
         Assert.Contains(document.Descendants(theme + "Label"), label =>

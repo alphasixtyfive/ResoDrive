@@ -1,10 +1,14 @@
 # Changelog
 
-## [0.3.32] - 2026-10-06
+## [0.3.33] - 2026-10-06
 
 - Show startup and crash errors with Copy details and saved local reports.
-- Offer standard and compatibility options in one Setup and remember the choice for updates.
+- Check Windows and .NET in one Setup, show compatibility options when needed and remember the choice for updates.
 - Use Program Files\ResoDrive for fresh installs and migrate older installations while preserving account data and upload protection.
+
+## [0.3.32] - 2026-10-06 (unpublished acceptance build)
+
+- Validate the shared Setup before its final layout review.
 
 ## [0.3.31] - 2026-10-06 (unpublished acceptance build)
 

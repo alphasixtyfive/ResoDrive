@@ -47,6 +47,7 @@
     <Variable Name="ResoDriveSelectionValid" Type="numeric" Value="1" />
     <Variable Name="ResoDriveCanChangeMode" Type="numeric" Value="1" />
     <Variable Name="ResoDriveMissingCetCapability" Type="numeric" Value="0" />
+    <Variable Name="ResoDriveShowCompatibilityChoice" Type="numeric" Value="0" />
     <Variable Name="ResoDriveInstalledVersion" Type="string" Value="" />
     <Variable Name="ResoDriveSetupError" Type="string" Value="" />
     <Chain>

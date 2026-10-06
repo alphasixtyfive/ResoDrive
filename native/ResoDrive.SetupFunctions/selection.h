@@ -1,5 +1,10 @@
 #pragma once
 
+inline BOOL ShowCompatibilityChoice(BOOL missingCapability, LONGLONG installedMode, LONGLONG initialSelection)
+{
+    return missingCapability || installedMode == 1 || initialSelection == 1;
+}
+
 inline LPCWSTR SelectionError(LONGLONG selection, LONGLONG installedMode, BOOL canChangeMode)
 {
     if (selection != 0 && selection != 1)
