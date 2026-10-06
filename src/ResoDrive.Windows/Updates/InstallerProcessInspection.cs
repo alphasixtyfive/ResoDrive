@@ -10,6 +10,9 @@ namespace ResoDrive.Windows;
 /// <summary>Fails closed when an installer cannot distinguish a UI from a host or an active rclone child.</summary>
 internal static partial class InstallerProcessInspection
 {
+    // Shared with the native crash monitor: only verified installer UI termination.
+    internal const int ExpectedInstallerTerminationExitCode = unchecked((int)0xE0524449);
+
     private sealed record Candidate(Process Process, SafeProcessHandle Handle, DateTime StartTimeUtc) : IDisposable
     {
         public void Dispose()
@@ -171,7 +174,7 @@ internal static partial class InstallerProcessInspection
                     if (process.HasExited) continue;
                     // Terminate the handle opened during inspection. Process.Kill would
                     // reopen by PID and could target a different process after PID reuse.
-                    if (!TerminateProcess(candidate.Handle, -1))
+                    if (!TerminateProcess(candidate.Handle, ExpectedInstallerTerminationExitCode))
                     {
                         if (HasConfirmedExit(process)) continue;
                         throw new Win32Exception(Marshal.GetLastPInvokeError());

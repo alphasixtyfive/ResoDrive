@@ -90,6 +90,14 @@ try {
     $securePassword = ConvertTo-SecureString -String $password -AsPlainText -Force
     $testUser = New-LocalUser -Name $userName -Password $securePassword -AccountNeverExpires -PasswordNeverExpires
     $accountCreated = $true
+    # New-LocalUser does not establish the normal standard-user group precondition.
+    # Use well-known SIDs so this remains correct on localized hosted images.
+    Add-LocalGroupMember -SID 'S-1-5-32-545' -Member $testUser
+    $userMembership = @(Get-LocalGroupMember -SID 'S-1-5-32-545' | Where-Object { $_.SID.Value -eq $testUser.SID.Value })
+    $adminMembership = @(Get-LocalGroupMember -SID 'S-1-5-32-544' | Where-Object { $_.SID.Value -eq $testUser.SID.Value })
+    if ($userMembership.Count -ne 1 -or $adminMembership.Count -ne 0) {
+        throw 'The disposable account must belong to builtin Users and must not belong to Administrators.'
+    }
     $credential = [pscredential]::new("$env:COMPUTERNAME\$userName", $securePassword)
     $grant = "$env:COMPUTERNAME\${userName}:(OI)(CI)M"
     & icacls.exe $testRoot /grant $grant /T /Q | Out-Null
@@ -152,6 +160,7 @@ try {
         PriorPackageSha256 = (Get-FileHash -LiteralPath $zipPath).Hash
         NewHelperSha256 = (Get-FileHash -LiteralPath $newApp).Hash
         DifferentAccountSid = $testUser.SID.Value
+        StandardUserGroupMembershipVerified = $true
         RunnerSessionId = [Diagnostics.Process]::GetCurrentProcess().SessionId
         ActiveHostBlocked = $true
         HostExitedAfterOwnShutdown = $true

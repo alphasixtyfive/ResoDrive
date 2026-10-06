@@ -159,6 +159,24 @@ Assert ($summary -match '0x80131506' -and $summary -match 'SHA-256 at observer s
 Assert ($summary -match 'Observer inherited error mode: 0x[0-9A-F]{8}' -and $summary -match 'Observer normalized error mode: 0x[0-9A-F]{8} \(child mode is not inspected\)' -and $summary -match 'AeDebug Auto=' -and $summary -match 'WER Disabled machine=') 'Saved summary exposes observer mode normalization and read-only Windows capture settings without debugger commands.'
 Assert (-not (Test-Path -LiteralPath $fatalRoot)) 'Crash reporting never recreates account data.'
 
+$installerStopRoot = Join-Path $runRoot 'expected-installer-stop-data'
+$process = Start-TestProcess $launcher @('--exit', '0xE0524449') $installerStopRoot -ShowDialogs
+try {
+    Assert ($process.WaitForExit(5000) -and $process.ExitCode -eq [BitConverter]::ToInt32([BitConverter]::GetBytes([Convert]::ToUInt32('E0524449', 16)), 0)) 'Expected installer UI termination propagates its reserved code without leaving a dialog.'
+} finally {
+    if (-not $process.HasExited) { [NativeCrashWindowProbe]::CloseVisible($process.Id) }
+}
+Assert ((Reports $installerStopRoot).Count -eq 0) 'Verified installer UI termination produces no false crash incident.'
+
+$hostInstallerCodeRoot = Join-Path $runRoot 'host-installer-code-data'
+$process = Start-TestProcess $launcher @('--host', '--exit', '0xE0524449') $hostInstallerCodeRoot
+$null = Wait-TestProcess $process
+Assert ((Reports $hostInstallerCodeRoot).Count -eq 1) 'The reserved installer UI stop code remains an abnormal reportable result for a host.'
+
+$genericTerminationRoot = Join-Path $runRoot 'generic-termination-data'
+$process = Start-TestProcess $launcher @('--exit', '0xFFFFFFFF') $genericTerminationRoot
+Assert ((Wait-TestProcess $process) -eq -1 -and (Reports $genericTerminationRoot).Count -eq 1) 'Generic FFFFFFFF termination remains a reportable failure, not an expected installer stop.'
+
 $displayedRoot = Join-Path $runRoot 'already-displayed-data'
 $process = Start-TestProcess $launcher @('--sleep', '300', '--exit', '0xE0524447') $displayedRoot -ShowDialogs
 $null = Wait-TestProcess $process

@@ -21,6 +21,8 @@ public sealed class InstallerProcessInspectionTests
         await InstallerProcessInspection.StopVerifiedUiAsync(fixture.Binaries, null, CancellationToken.None);
 
         Assert.True(ui.HasExited);
+        // Native UI supervision recognizes this exact protocol result; -1 is a failure.
+        Assert.Equal(unchecked((int)0xE0524449), ui.ExitCode);
     }
 
     [Fact]

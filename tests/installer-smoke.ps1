@@ -347,26 +347,46 @@ function New-DisabledStartupFixture {
         $script:startupFixtureCreated = $true
     } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($folder) | Out-Null }
 }
+function Resolve-StartupFixtureSid([string]$UserId) {
+    if ([string]::IsNullOrWhiteSpace($UserId)) { throw 'The startup task has no Windows user identity.' }
+    try { return [Security.Principal.SecurityIdentifier]::new($UserId).Value }
+    catch [ArgumentException] {
+        return ([Security.Principal.NTAccount]::new($UserId)).Translate([Security.Principal.SecurityIdentifier]).Value
+    }
+}
+function Assert-MigratedStartupDefinition([xml]$Xml, [string]$ExpectedLauncher, [string]$ExpectedSid) {
+    $ns = [Xml.XmlNamespaceManager]::new($Xml.NameTable)
+    $ns.AddNamespace('t', 'http://schemas.microsoft.com/windows/2004/02/mit/task')
+    $actions = $Xml.SelectNodes('/t:Task/t:Actions/*', $ns)
+    $principals = $Xml.SelectNodes('/t:Task/t:Principals/*', $ns)
+    $triggers = $Xml.SelectNodes('/t:Task/t:Triggers/*', $ns)
+    if ($actions.Count -ne 1 -or $actions[0].LocalName -cne 'Exec' -or
+        $principals.Count -ne 1 -or $principals[0].LocalName -cne 'Principal' -or
+        $triggers.Count -ne 1 -or $triggers[0].LocalName -cne 'LogonTrigger') {
+        throw 'Migration changed the single startup action, principal or logon trigger.'
+    }
+    # Scheduler XML can store DOMAIN\user instead of a SID and omit the default
+    # least-privilege RunLevel. Resolve identity semantically without broadening
+    # ownership to another account or accepting an elevated task.
+    $principalSid = Resolve-StartupFixtureSid $principals[0].SelectSingleNode('t:UserId', $ns).InnerText
+    $triggerSid = Resolve-StartupFixtureSid $triggers[0].SelectSingleNode('t:UserId', $ns).InnerText
+    $runLevel = $principals[0].SelectSingleNode('t:RunLevel', $ns)
+    if ($principalSid -cne $ExpectedSid -or $triggerSid -cne $ExpectedSid -or
+        ($null -ne $runLevel -and -not [string]::IsNullOrEmpty($runLevel.InnerText) -and $runLevel.InnerText -cne 'LeastPrivilege') -or
+        $principals[0].SelectSingleNode('t:LogonType', $ns).InnerText -cne 'InteractiveToken' -or
+        $actions[0].SelectSingleNode('t:Command', $ns).InnerText -ine $ExpectedLauncher -or
+        $actions[0].SelectSingleNode('t:Arguments', $ns).InnerText -cne '--background' -or
+        $Xml.SelectSingleNode('/t:Task/t:RegistrationInfo/t:Description', $ns).InnerText -cne 'Starts ResoDrive for this user at sign-in. Managed by ResoDrive.') {
+        throw 'The receipt-backed startup migration did not preserve the exact user, privilege, activation and ownership contract.'
+    }
+}
 function Assert-DisabledStartupFixtureMigrated {
     $folder = Get-StartupFixtureFolder
     $task = $null
     try {
         $task = $folder.GetTask($startupFixtureName)
         if ($task.Enabled) { throw 'Migration enabled a disabled startup task.' }
-        $xml = [xml]$task.Xml
-        $ns = [Xml.XmlNamespaceManager]::new($xml.NameTable)
-        $ns.AddNamespace('t', 'http://schemas.microsoft.com/windows/2004/02/mit/task')
-        $actions = $xml.SelectNodes('/t:Task/t:Actions/*', $ns)
-        $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-        if ($actions.Count -ne 1 -or $actions[0].LocalName -cne 'Exec' -or
-            $actions[0].SelectSingleNode('t:Command', $ns).InnerText -ine $launcher -or
-            $actions[0].SelectSingleNode('t:Arguments', $ns).InnerText -cne '--background' -or
-            $xml.SelectSingleNode('/t:Task/t:Principals/t:Principal/t:UserId', $ns).InnerText -cne $sid -or
-            $xml.SelectSingleNode('/t:Task/t:Principals/t:Principal/t:LogonType', $ns).InnerText -cne 'InteractiveToken' -or
-            $xml.SelectSingleNode('/t:Task/t:Principals/t:Principal/t:RunLevel', $ns).InnerText -cne 'LeastPrivilege' -or
-            $xml.SelectSingleNode('/t:Task/t:Triggers/t:LogonTrigger/t:UserId', $ns).InnerText -cne $sid) {
-            throw 'The receipt-backed startup migration did not preserve the exact user, privilege, activation and disabled-state contract.'
-        }
+        Assert-MigratedStartupDefinition ([xml]$task.Xml) $launcher ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
     } finally {
         foreach ($item in @($task, $folder)) { if ($null -ne $item) { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($item) | Out-Null } }
     }
@@ -428,6 +448,59 @@ function Read-OptionalFinalUpdateOutcome([string]$Path, [string]$Version) {
     } finally { if ($null -ne $stream) { $stream.Dispose() } }
 }
 
+function Read-IsolatedUpdaterEvidenceBytes([string]$Path, [int]$MaximumBytes) {
+    $stream = $null
+    try {
+        $stream = [IO.FileStream]::new($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+            [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+        if ($stream.Length -gt $MaximumBytes) { throw 'Updater evidence exceeds its expected bound.' }
+        $buffer = [byte[]]::new($MaximumBytes + 1)
+        $count = 0
+        while ($count -lt $buffer.Length) {
+            $read = $stream.Read($buffer, $count, $buffer.Length - $count)
+            if ($read -eq 0) { break }
+            $count += $read
+        }
+        if ($count -gt $MaximumBytes) { throw 'Updater evidence grew beyond its expected bound.' }
+        $result = [byte[]]::new($count)
+        [Array]::Copy($buffer, $result, $count)
+        return ,$result
+    } finally { if ($null -ne $stream) { $stream.Dispose() } }
+}
+
+function Save-IsolatedUpdaterEvidence([string]$UpdatesDirectory, [string]$Destination, [string]$Version) {
+    # Only exact updater receipts and the exact staged-MSI log from this disposable
+    # fixture are eligible. Never enumerate or copy account configuration or dumps.
+    if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid updater evidence version.' }
+    foreach ($name in @('application-update-result.json', 'application-update-result.json.tmp')) {
+        try {
+            $bytes = Read-IsolatedUpdaterEvidenceBytes (Join-Path $UpdatesDirectory $name) (64 * 1024)
+            $receipt = [Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json
+            $evidence = [ordered]@{ expectedTargetVersion = $Version; sourceReceipt = $name }
+            foreach ($field in @('Version', 'Status', 'InstallerExitCode', 'RelaunchAcknowledged', 'Finalized', 'RecordedAtUtc', 'Message')) {
+                $property = $receipt.PSObject.Properties[$field]
+                if ($null -ne $property) {
+                    $value = $property.Value
+                    if ($value -is [string] -and $value.Length -gt 2048) { $value = $value.Substring(0, 2048) }
+                    if ($null -eq $value -or $value -is [string] -or $value -is [bool] -or $value -is [ValueType]) {
+                        $evidence[$field] = $value
+                    }
+                }
+            }
+            $evidence | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $Destination "updater-$Version-$name.evidence.json") -Encoding utf8
+        } catch [IO.FileNotFoundException] { }
+        catch [IO.DirectoryNotFoundException] { }
+        catch { Write-Host ("Updater receipt evidence unavailable ({0})." -f $_.Exception.GetType().Name) }
+    }
+    $logName = "resodrive-win-x64-$Version.msi.log"
+    try {
+        $bytes = Read-IsolatedUpdaterEvidenceBytes (Join-Path $UpdatesDirectory $logName) (32 * 1024 * 1024)
+        [IO.File]::WriteAllBytes((Join-Path $Destination "updater-$logName"), $bytes)
+    } catch [IO.FileNotFoundException] { }
+    catch [IO.DirectoryNotFoundException] { }
+    catch { Write-Host ("Updater MSI-log evidence unavailable ({0})." -f $_.Exception.GetType().Name) }
+}
+
 function Invoke-CopiedUpdater([string]$Source, [string]$Msi, [string]$Version,
     [string]$ExpectedExecutable, [string]$ExpectedSha256) {
     $sourceVersion = (Get-Item -LiteralPath $Source).VersionInfo.ProductVersion
@@ -454,7 +527,10 @@ function Invoke-CopiedUpdater([string]$Source, [string]$Msi, [string]$Version,
         try {
             if (-not $process.WaitForExit(240000)) { throw 'Copied updater timed out.' }
             $helperExitCode = $process.ExitCode
-            if ($process.ExitCode -ne 0) { throw "Copied updater failed ($($process.ExitCode))." }
+            if ($process.ExitCode -ne 0) {
+                Save-IsolatedUpdaterEvidence $updates $testRoot $Version
+                throw "Copied updater failed ($($process.ExitCode))."
+            }
         } finally { $process.Dispose() }
     } finally { $env:RDRIVE_UPDATE_HANDOFF_DIR = $oldHandoff }
     Assert-NativeInstalledLocator $ExpectedExecutable $Version
@@ -779,6 +855,10 @@ try {
     throw
 } finally {
     try {
+        $updatesEvidenceDirectory = Join-Path $env:RDRIVE_DATA_DIR 'updates'
+        Save-IsolatedUpdaterEvidence $updatesEvidenceDirectory $testRoot $expectedVersion
+        $futureEvidenceVersion = '{0}.{1}.{2}' -f $targetVersion.Major, $targetVersion.Minor, ($targetVersion.Build + 1)
+        Save-IsolatedUpdaterEvidence $updatesEvidenceDirectory $testRoot $futureEvidenceVersion
         Remove-StartupFixture
         if ((Get-GlobalWerPolicySnapshot) -cne $initialGlobalWerPolicy) {
             throw 'Installer lifecycle changed the pre-existing global Windows Error Reporting policy.'

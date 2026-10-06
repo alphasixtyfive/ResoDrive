@@ -21,6 +21,7 @@
 #define FOLDER_BUTTON 1002
 #define FAILURE_ALREADY_DISPLAYED ((DWORD)0xE0524447)
 #define ACTIVATION_TIMED_OUT ((DWORD)0xE0524448)
+#define EXPECTED_INSTALLER_TERMINATION ((DWORD)0xE0524449)
 
 typedef struct {
     wchar_t executable[PATH_CAP];
@@ -668,7 +669,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, i
     if (process) {
         if (!wait_for_process(process) || !GetExitCodeProcess(process, &incident.exitCode)) { CloseHandle(process); return 2; }
     }
-    BOOL report = (incident.launchFailed || incident.exitCode != 0) && !utility && !incident.sessionEnding && !GetSystemMetrics(SM_SHUTTINGDOWN);
+    // InstallerProcessInspection uses this code only after verifying a safe UI stop.
+    // It is not an expected host exit, and generic termination codes still report.
+    BOOL expectedInstallerStop = incident.exitCode == EXPECTED_INSTALLER_TERMINATION && wcscmp(incident.role, L"ui") == 0;
+    BOOL report = (incident.launchFailed || incident.exitCode != 0) && !expectedInstallerStop && !utility && !incident.sessionEnding && !GetSystemMetrics(SM_SHUTTINGDOWN);
     // Keep the kernel process object referenced through collection: its PID cannot
     // be reused while this handle is open, including for delayed event records.
     if (report) record_incident();

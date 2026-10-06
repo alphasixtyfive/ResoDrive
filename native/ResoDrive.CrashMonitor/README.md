@@ -41,6 +41,13 @@ disposable `resodrive.exe` test fixture and must never be used for packaging.
 - `0xE0524448` is the reserved activation-timeout result. It records an
   `activation-timeout` incident and says the existing window did not respond;
   it does not claim that the primary application stopped.
+- `0xE0524449` is the reserved verified installer UI-termination result, shared
+  with `InstallerProcessInspection.ExpectedInstallerTerminationExitCode`.
+  After the existing host/account/upload/process-identity checks authorize a UI
+  stop, the installer uses this code on its already-verified process handle.
+  UI observers propagate it without an incident or dialog. Hosts receiving it,
+  and generic `0xFFFFFFFF` termination, remain reportable failures. The code
+  grants no permission to stop a process and changes none of those checks.
 - `RDRIVE_CRASH_NO_DIALOG=1`, or observer-only `--no-dialog`, suppresses dialogs for
   process tests but retains reporting. Never set it globally on production machines.
 - A hidden top-level window receives Windows shutdown notifications. It is never

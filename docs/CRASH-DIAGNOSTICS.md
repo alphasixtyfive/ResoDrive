@@ -14,6 +14,11 @@ This process-local normalization changes no machine policy. Summaries report the
 observer's inherited and normalized modes and read-only automatic-debugging/WER
 settings; they do not claim to inspect an already-running raw process's mode.
 
+An installer-authorized UI stop uses reserved exit code `0xE0524449` after the
+existing identity, account, host and upload protections succeed. UI supervision
+recognizes that expected repair/update/removal result without a crash dialog.
+The same code from a host, and generic `0xFFFFFFFF` termination, remain failures.
+
 The launcher is a local observer, not a debugger or an uploader. It must not
 terminate the managed host, change upload protection, edit account data, or
 reinterpret a normal secondary launch as a crashed primary process. Internal
