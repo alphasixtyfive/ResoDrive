@@ -16,7 +16,17 @@ concurrency:
 jobs:
   test:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: standard
+            artifactRoot: artifacts/win-x64
+          - mode: compatibility
+            artifactRoot: artifacts/win-x64-compatibility
+    env:
+      RDRIVE_ARTIFACT_ROOT: ${{ matrix.artifactRoot }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -29,16 +39,21 @@ jobs:
       - name: Build and verify packages
         shell: pwsh
         run: ./build.ps1 -Configuration Release -BuildMsi $true
+      - name: Build and verify CET compatibility package
+        shell: pwsh
+        run: ./build.ps1 -Configuration Release -BuildMsi $true -CompatibilityMode -SkipTests
       - name: Verify native crash monitor with disposable processes
         shell: pwsh
         timeout-minutes: 4
-        run: ./tests/native-crash-smoke.ps1 -MonitorPath artifacts/win-x64/resodrive/resodrive-launcher.exe
+        run: ./tests/native-crash-smoke.ps1 -MonitorPath "$env:RDRIVE_ARTIFACT_ROOT/resodrive/resodrive-launcher.exe"
       - name: Preserve matching diagnostic symbols
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: resodrive-symbols-${{ github.sha }}
-          path: artifacts/win-x64/symbols/*
+          name: resodrive-symbols-${{ matrix.mode }}-${{ github.sha }}
+          path: |
+            artifacts/win-x64/symbols/*
+            artifacts/win-x64-compatibility/symbols/*
           retention-days: 30
           if-no-files-found: error
       - name: Verify application tests with one available CPU
@@ -51,25 +66,30 @@ jobs:
         timeout-minutes: 4
         run: >-
           ./tests/process-smoke.ps1
-          -AppPath "artifacts\win-x64\resodrive\resodrive.exe"
+          -AppPath "$env:RDRIVE_ARTIFACT_ROOT/resodrive/resodrive.exe"
       - name: Verify installation, upgrade and removal
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./tests/installer-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName
+        run: |
+          $mode = @{}
+          if ('${{ matrix.mode }}' -eq 'compatibility') { $mode.CompatibilityMode = $true }
+          ./tests/installer-smoke.ps1 -SetupPath (Get-ChildItem "$env:RDRIVE_ARTIFACT_ROOT/*-setup.exe").FullName @mode
       - name: Verify different-account preparation on disposable user
         shell: pwsh
         timeout-minutes: 4
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./tests/cross-account-smoke.ps1 -NewAppPath artifacts/win-x64/resodrive/resodrive.exe
+        run: ./tests/cross-account-smoke.ps1 -NewAppPath "$env:RDRIVE_ARTIFACT_ROOT/resodrive/resodrive.exe"
       - name: Preserve installer diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: installer-smoke-logs
+          name: installer-smoke-logs-${{ matrix.mode }}
           path: |
             ${{ runner.temp }}/resodrive-installer-smoke/*.log
             ${{ runner.temp }}/resodrive-installer-smoke/*.json
+            ${{ runner.temp }}/resodrive-installer-smoke-compatibility/*.log
+            ${{ runner.temp }}/resodrive-installer-smoke-compatibility/*.json
             ${{ runner.temp }}/resodrive-cross-account-smoke/*
           if-no-files-found: ignore

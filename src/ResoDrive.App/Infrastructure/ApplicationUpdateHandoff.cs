@@ -67,7 +67,7 @@ internal static class ApplicationUpdateHandoff
         var installedExecutable = Path.GetFullPath(installedExecutablePath);
         var installer = Path.GetFullPath(installerPath);
         var directory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(updatesDirectory));
-        var expectedInstaller = Path.Combine(directory, $"resodrive-win-x64-{version}.msi");
+        var expectedInstaller = Path.Combine(directory, ApplicationUpdateAssets.InstallerFileName(version));
         var expectedExecutableName = typeof(Program).Assembly.GetName().Name + ".exe";
         if (!Version.TryParse(version, out var parsedVersion) || parsedVersion.Build < 0 ||
             parsedVersion.Revision >= 0 || parsedVersion.ToString(3) != version ||
@@ -138,7 +138,8 @@ internal static class ApplicationUpdateHandoff
         IReadOnlyList<string> arguments,
         string? helperExecutablePath,
         string trustedUpdatesDirectory,
-        out ApplicationUpdateCompletionRequest request)
+        out ApplicationUpdateCompletionRequest request,
+        bool? compatibilityMode = null)
     {
         request = null!;
         if (arguments.Count != 8 ||
@@ -177,7 +178,7 @@ internal static class ApplicationUpdateHandoff
             var outcomePath = Path.GetFullPath(arguments[5]);
             var expectedInstallerPath = Path.Combine(
                 updatesDirectory,
-                $"resodrive-win-x64-{arguments[1]}.msi");
+                ApplicationUpdateAssets.InstallerFileName(arguments[1], compatibilityMode));
             var expectedOutcomePath = Path.Combine(updatesDirectory, OutcomeFileName);
             var expectedExecutableName = typeof(Program).Assembly.GetName().Name + ".exe";
             if (!installerPath.Equals(expectedInstallerPath, StringComparison.OrdinalIgnoreCase) ||

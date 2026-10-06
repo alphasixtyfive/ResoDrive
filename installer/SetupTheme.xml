@@ -13,8 +13,8 @@
       <Label X="28" Y="120" Width="-28" Height="30" FontId="0">Preparing setup...</Label>
     </Page>
     <Page Name="Install">
-      <Label X="28" Y="118" Width="-28" Height="44" FontId="0">Access your cloud storage as a drive in Windows.</Label>
-      <Label X="28" Y="166" Width="-28" Height="58" FontId="2">Installs for all users of this PC. Windows will ask for administrator permission.&#10;The .NET Desktop Runtime is downloaded only if needed.</Label>
+      <Label X="28" Y="118" Width="-28" Height="44" FontId="0"><Text>Access your cloud storage as a drive in Windows.</Text><Text Condition="ResoDriveCompatibilityMode = 1">CET compatibility build.&#10;Installing Windows updates is preferred.</Text></Label>
+      <Label X="28" Y="166" Width="-28" Height="58" FontId="2"><Text>Installs for all users of this PC. Windows will ask for administrator permission.&#10;The .NET Desktop Runtime is downloaded only if needed.</Text><Text Condition="ResoDriveCompatibilityMode = 1">Removes hardware-enforced stack protection for ResoDrive.&#10;Windows security settings stay unchanged.&#10;Installs for all users; .NET is downloaded only if needed.</Text></Label>
       <Hypertext Name="EulaHyperlink" X="28" Y="236" Width="200" Height="24" FontId="2" TabStop="yes">&lt;a href="#"&gt;MIT licence&lt;/a&gt;</Hypertext>
       <Button Name="InstallButton" X="-128" Y="-18" Width="112" Height="30" TabStop="yes" FontId="0">Install</Button>
       <Button Name="InstallCancelButton" X="-24" Y="-18" Width="88" Height="30" TabStop="yes" FontId="0"><Text>Cancel</Text><CloseWindowAction /></Button>

@@ -26,6 +26,33 @@ public repository before publishing.
 
 ## Release procedure
 
+Publish both the standard package and a separately named CET compatibility package
+from the same source revision. `./build.ps1 -CompatibilityMode -SkipTests` may run
+after the standard build's checks pass; it uses isolated publish/package outputs
+under `artifacts/win-x64-compatibility`. Microsoft documents
+[`CETCompat=false`](https://learn.microsoft.com/en-us/dotnet/core/compatibility/interop/9.0/cet-support)
+as the application opt-out. This package removes the apphost CET marking; it does
+not change Windows security settings. The normal build retains CET support.
+
+The build checks the actual application PE marking and extracts the compiled
+MSI's preparation helper read-only to verify its exact hash and marking. Each
+variant keeps its own matching symbols and manifest, including compatibility
+mode and the observed CET flag. The compatibility assembly metadata preserves
+that variant for later automatic updates; the MSI also records `CompatibilityMode`
+as `cet-disabled` or `standard` under `HKLM\SOFTWARE\ResoDrive\Installation`.
+
+Compatibility assets use `resodrive-win-x64-{version}-compatibility` before their
+extension (Setup adds `-setup.exe`). The stable download is
+`ResoDrive-Compatibility-Setup.exe`; all assets have matching SHA-256 sidecars.
+Both variants must pass hosted installer acceptance before the release is staged.
+They replace the same installation and cannot coexist. Equal-version replacement
+rules remain unchanged: changing variants requires a newer release. The published
+0.3.30 cached MSI helper carries CET marking and runs again during old-product
+removal. A new compatibility helper alone cannot establish upgrade safety on an
+affected vessel. Preserve the guarded preparation/removal behavior, update Windows
+where required, and complete acceptance on that machine as well as the modern
+hosted runner.
+
 1. Set `VersionPrefix` in `Directory.Build.props`.
 2. Rewrite `RELEASE_NOTES.md` in short, plain language for the current release and
    update other release-facing documentation as needed.

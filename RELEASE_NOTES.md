@@ -4,6 +4,7 @@ ResoDrive 0.3.31 is an unpublished acceptance build for crash diagnostics and in
 - Installed copies use Windows Error Reporting to collect up to three full dumps. Startup and host logs retain error references and build/runtime details. Matching symbols are retained separately for analysis.
 - Fresh installations use Program Files\ResoDrive. Older in-app updaters retain their registered folder for a compatibility update; the newer updater can then migrate through Windows Installer and reopen the installed app correctly.
 - Settings, credentials, queued-upload cache and other account data remain in their existing location. Upload protection continues to block unsafe installation.
+- A separately named compatibility build uses Microsoft's CET opt-out for Windows with missing capabilities. Setup explains the reduced protection and recommends Windows updates. In-app updates retain the selected variant.
 
 Memory dumps may contain sensitive data. They stay local and are not sent automatically. Copy details provides a small diagnostic summary; dumps are separate, optional support attachments.
 

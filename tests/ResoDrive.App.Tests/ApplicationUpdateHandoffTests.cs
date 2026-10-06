@@ -341,6 +341,13 @@ public sealed class ApplicationUpdateHandoffTests
 
         Assert.True(ApplicationUpdateHandoff.TryParseCompletionRequest(
             valid, helper, updates, out _));
+        var compatibility = Replace(valid, 2, Path.Combine(updates, "resodrive-win-x64-0.3.0-compatibility.msi"));
+        Assert.True(ApplicationUpdateHandoff.TryParseCompletionRequest(
+            compatibility, helper, updates, out _, compatibilityMode: true));
+        Assert.False(ApplicationUpdateHandoff.TryParseCompletionRequest(
+            compatibility, helper, updates, out _, compatibilityMode: false));
+        Assert.False(ApplicationUpdateHandoff.TryParseCompletionRequest(
+            valid, helper, updates, out _, compatibilityMode: true));
         Assert.False(ApplicationUpdateHandoff.TryParseCompletionRequest(
             valid, Path.Combine(directory.Path, "installed", "resodrive.exe"), updates, out _));
         Assert.False(ApplicationUpdateHandoff.TryParseCompletionRequest(

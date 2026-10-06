@@ -197,13 +197,23 @@ an internal CLR error to this check.
 Prefer updating Windows to a supported, fully serviced version while retaining
 its protections. For a controlled comparison, Microsoft documents building the
 same application with `CETCompat=false`; this reduces a security mitigation and
-does not belong in an unexplained retry or machine-wide policy change. ResoDrive
-retains the default protection. Record the executable's CET flag, OS capability
+does not belong in an unexplained retry or machine-wide policy change. ResoDrive's
+standard build retains the default protection. Its separately named compatibility
+build uses this documented opt-out and retains that choice in later in-app updates.
+Missing or invalid compatibility assets fail verification; updates never silently
+substitute the standard package. Record the executable's CET flag, OS capability
 and per-process mitigation alongside the comparison result. Merely updating the
 runtime payload pin does not establish that this prerequisite is fixed.
 
 See Microsoft's [CET compatibility guidance](https://learn.microsoft.com/en-us/dotnet/core/compatibility/interop/9.0/cet-support)
 and the [runtime startup capability check](https://github.com/dotnet/dotnet/blob/e2f47b0110ed922f21a1522da67279133ce28f32/src/runtime/src/coreclr/vm/threads.cpp#L7639).
+
+Changing package variants requires a newer version under the existing MSI upgrade
+rules. During an upgrade, Windows Installer can run the old product's cached
+preparation helper as well as the new one. An old CET-compatible helper can still
+fail before its managed safeguards run; the new compatibility package alone does
+not resolve that cached-helper prerequisite. Update Windows first and verify the
+actual affected-machine upgrade. Do not skip preparation or ignore removal errors.
 
 ## Verification limits
 

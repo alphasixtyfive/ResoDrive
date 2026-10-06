@@ -5,13 +5,23 @@ param(
     [ValidateSet('Debug', 'Release')]
     [string] $Configuration = 'Release',
 
-    [bool] $BuildMsi = $true
+    [bool] $BuildMsi = $true,
+
+    [switch] $CompatibilityMode,
+
+    # CI builds the same sources twice after the standard build's tests pass.
+    [switch] $SkipTests
 )
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = $PSScriptRoot
 . (Join-Path $projectRoot 'installer\ComponentIdentity.ps1')
-$artifactRoot = Join-Path $projectRoot "artifacts\$Runtime"
+. (Join-Path $projectRoot 'installer\Read-CetCompatibility.ps1')
+$variantSuffix = if ($CompatibilityMode) { '-compatibility' } else { '' }
+$cetCompat = (-not $CompatibilityMode).ToString().ToLowerInvariant()
+$compatibilityProperty = $CompatibilityMode.IsPresent.ToString().ToLowerInvariant()
+$installationMode = if ($CompatibilityMode) { 'cet-disabled' } else { 'standard' }
+$artifactRoot = Join-Path $projectRoot "artifacts\$Runtime$variantSuffix"
 $stageRoot = Join-Path $artifactRoot '.stage'
 $appOutput = Join-Path $stageRoot 'app'
 $installerOutput = Join-Path $stageRoot 'installer'
@@ -21,6 +31,7 @@ $bootstrapperOutput = Join-Path $stageRoot 'bootstrapper'
 $installerIntermediate = (Join-Path $stageRoot 'installer-obj') + '/'
 $bootstrapperIntermediate = (Join-Path $stageRoot 'bootstrapper-obj') + '/'
 $nativeOutput = Join-Path $stageRoot 'native'
+$managedBuildRoot = Join-Path $stageRoot 'managed'
 $symbolsOutput = Join-Path $artifactRoot 'symbols'
 $buildProperties = [xml](Get-Content -LiteralPath (Join-Path $projectRoot 'Directory.Build.props') -Raw)
 $versionNode = $buildProperties.SelectSingleNode('/Project/PropertyGroup/VersionPrefix')
@@ -67,11 +78,11 @@ if ($releaseVersion -notmatch '^(\d{1,3})\.(\d{1,3})\.(\d{1,5})$' -or
     [int]$Matches[1] -gt 255 -or [int]$Matches[2] -gt 255 -or [int]$Matches[3] -gt 65535) {
     throw "VersionPrefix '$releaseVersion' is not compatible with Windows Installer. Use major.minor.build (255.255.65535 maximum)."
 }
-$archiveOutput = Join-Path $artifactRoot "$executableBaseName-$Runtime-$releaseVersion.zip"
+$archiveOutput = Join-Path $artifactRoot "$executableBaseName-$Runtime-$releaseVersion$variantSuffix.zip"
 $archiveChecksumOutput = "$archiveOutput.sha256"
-$msiOutput = Join-Path $artifactRoot "$executableBaseName-$Runtime-$releaseVersion.msi"
+$msiOutput = Join-Path $artifactRoot "$executableBaseName-$Runtime-$releaseVersion$variantSuffix.msi"
 $msiChecksumOutput = "$msiOutput.sha256"
-$setupOutput = Join-Path $artifactRoot "$executableBaseName-$Runtime-$releaseVersion-setup.exe"
+$setupOutput = Join-Path $artifactRoot "$executableBaseName-$Runtime-$releaseVersion$variantSuffix-setup.exe"
 $setupChecksumOutput = "$setupOutput.sha256"
 $msiUpgradeCode = '8D0BD004-119E-4589-B816-7D5A27D94561'
 $bundleUpgradeCode = '5B94F457-820F-4B41-B609-071179764B08'
@@ -113,12 +124,29 @@ dotnet restore (Join-Path $projectRoot 'installer\ResoDrive.Installer.wixproj') 
 if ($LASTEXITCODE -ne 0) { throw "Installer restore failed with exit code $LASTEXITCODE." }
 dotnet restore (Join-Path $projectRoot 'installer\ResoDrive.Bootstrapper.wixproj') --locked-mode
 if ($LASTEXITCODE -ne 0) { throw "Setup bundle restore failed with exit code $LASTEXITCODE." }
-dotnet test (Join-Path $projectRoot 'resodrive.slnx') --configuration $Configuration --no-restore
-if ($LASTEXITCODE -ne 0) { throw "Tests failed with exit code $LASTEXITCODE." }
+if (-not $SkipTests) {
+    dotnet test (Join-Path $projectRoot 'resodrive.slnx') --configuration $Configuration --no-restore
+    if ($LASTEXITCODE -ne 0) { throw "Tests failed with exit code $LASTEXITCODE." }
+}
+dotnet restore (Join-Path $projectRoot 'src\ResoDrive.App\ResoDrive.App.csproj') `
+    --artifacts-path $managedBuildRoot --locked-mode
+if ($LASTEXITCODE -ne 0) { throw "Isolated application restore failed with exit code $LASTEXITCODE." }
 dotnet publish (Join-Path $projectRoot 'src\ResoDrive.App\ResoDrive.App.csproj') `
     --configuration $Configuration --runtime $Runtime --self-contained false --no-restore `
+    --artifacts-path $managedBuildRoot `
+    "-p:CETCompat=$cetCompat" "-p:ResoDriveCompatibilityMode=$compatibilityProperty" `
     --output $appOutput
 if ($LASTEXITCODE -ne 0) { throw "App publish failed with exit code $LASTEXITCODE." }
+$actualCetCompat = Get-PeCetCompatibility (Join-Path $appOutput "$executableBaseName.exe")
+if ($actualCetCompat -ne (-not $CompatibilityMode)) {
+    throw "Published application CET marking does not match the requested $installationMode package."
+}
+$managedConfiguration = $Configuration.ToLowerInvariant()
+foreach ($managedAssembly in @("ResoDrive.App\${managedConfiguration}_$Runtime\resodrive.dll", "ResoDrive.Windows\$managedConfiguration\ResoDrive.Windows.dll")) {
+    if ((Get-ManagedCetCompatibility (Join-Path $managedBuildRoot "bin\$managedAssembly")) -ne $CompatibilityMode.IsPresent) {
+        throw 'The compiled application/updater compatibility metadata does not match this package.'
+    }
+}
 
 & (Join-Path $projectRoot 'native\ResoDrive.CrashMonitor\build.ps1') `
     -OutputDirectory $nativeOutput -Configuration $Configuration
@@ -165,6 +193,7 @@ if ($BuildMsi) {
         "-p:ResoDriveComponentSeed=$(Get-ResoDriveComponentSeed $releaseVersion)" `
         -p:ResoDriveRuntime=$Runtime `
         -p:ResoDriveUpgradeCode=$msiUpgradeCode `
+        "-p:ResoDriveInstallationMode=$installationMode" `
         "-p:ResoDriveProductName=$productDisplayName" `
         "-p:ResoDrivePublisher=$productPublisher" `
         "-p:ResoDriveDescription=$msbuildProductDescription" `
@@ -220,7 +249,8 @@ if ($BuildMsi) {
         @{ Query = 'SELECT `Source` FROM `CustomAction` WHERE `Action` = ''LaunchResoDrive'''; Expected = 'ResoDriveLauncherFile' },
         @{ Query = 'SELECT `Component_` FROM `Shortcut` WHERE `Shortcut` = ''ResoDriveStartMenuShortcut'''; Expected = 'ResoDriveLauncher' },
         @{ Query = 'SELECT `Type` FROM `CompLocator` WHERE `Signature_` = ''PreviousInstallFolder'''; Expected = '1' },
-        @{ Query = 'SELECT `Target` FROM `CustomAction` WHERE `Action` = ''RestoreInstalledFolder'''; Expected = '[RDRIVE_INSTALLED_ROOT]' }
+        @{ Query = 'SELECT `Target` FROM `CustomAction` WHERE `Action` = ''RestoreInstalledFolder'''; Expected = '[RDRIVE_INSTALLED_ROOT]' },
+        @{ Query = 'SELECT `Value` FROM `Registry` WHERE `Name` = ''CompatibilityMode'' AND `Component_` = ''ResoDriveCompatibilityMode'''; Expected = $installationMode }
     )
     foreach ($check in $compiledChecks) {
         $checkView = $database.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $database, @($check.Query))
@@ -242,6 +272,13 @@ if ($BuildMsi) {
     [Runtime.InteropServices.Marshal]::FinalReleaseComObject($windowsInstaller) | Out-Null
     [GC]::Collect()
     [GC]::WaitForPendingFinalizers()
+    $embeddedHelper = Join-Path $stageRoot 'embedded-preparation-helper.exe'
+    Export-MsiPreparationHelper -MsiPath $builtMsi -OutputPath $embeddedHelper
+    if ((Get-FileHash -LiteralPath $embeddedHelper -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath (Join-Path $packageOutput "$executableBaseName.exe") -Algorithm SHA256).Hash -or
+        (Get-PeCetCompatibility $embeddedHelper) -ne $actualCetCompat) {
+        throw 'The compiled MSI preparation helper does not match the verified application variant.'
+    }
     foreach ($requiredFile in @("$executableBaseName.exe", 'resodrive-launcher.exe', 'profiles.sample.json')) {
         if ($requiredFile -notin $packagedFiles) {
             throw "MSI validation could not find '$requiredFile' in the File table."
@@ -281,6 +318,7 @@ if ($BuildMsi) {
         -p:ResoDriveVersion=$releaseVersion `
         -p:ResoDriveRuntime=$Runtime `
         -p:ResoDriveBundleUpgradeCode=$bundleUpgradeCode `
+        "-p:ResoDriveCompatibilityMode=$([int]$CompatibilityMode.IsPresent)" `
         "-p:ResoDriveProductName=$productDisplayName" `
         "-p:ResoDrivePublisher=$productPublisher" `
         "-p:ResoDriveExecutableBaseName=$executableBaseName" `
@@ -324,6 +362,8 @@ $manifest = [ordered]@{
     version = $releaseVersion
     runtime = $Runtime
     configuration = $Configuration
+    compatibilityMode = $CompatibilityMode.IsPresent
+    cetCompat = $actualCetCompat
     sourceCommit = "$sourceCommit".Trim()
     sourceModified = $sourceChanges.Count -ne 0
     dotNetSdk = "$sdkVersion".Trim()

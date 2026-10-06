@@ -4,7 +4,8 @@ param(
     [string]$LegacySetupVersion = '0.3.20',
     [string]$SameVersionBaselineMsiPath = '',
     [string]$SameVersionBaselineSetupPath = '',
-    [string]$CandidateMsiPath = ''
+    [string]$CandidateMsiPath = '',
+    [switch]$CompatibilityMode
 )
 
 $ErrorActionPreference = 'Stop'
@@ -33,7 +34,7 @@ $app = Join-Path $env:ProgramFiles 'ResoDrive\resodrive.exe'
 $legacyApp = Join-Path $env:ProgramFiles 'rdrive\resodrive.exe'
 $launcher = Join-Path $env:ProgramFiles 'ResoDrive\resodrive-launcher.exe'
 if ((Test-Path -LiteralPath $app) -or (Test-Path -LiteralPath $legacyApp)) { throw 'Refusing to overwrite a pre-existing installation.' }
-$testRoot = Join-Path $env:RUNNER_TEMP 'resodrive-installer-smoke'
+$testRoot = Join-Path $env:RUNNER_TEMP $(if ($CompatibilityMode) { 'resodrive-installer-smoke-compatibility' } else { 'resodrive-installer-smoke' })
 New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
 $oldDataRoot = $env:RDRIVE_DATA_DIR
 $env:RDRIVE_DATA_DIR = Join-Path $testRoot 'user-data'
@@ -279,6 +280,24 @@ function Assert-CandidateInstalled([string]$Executable = $app) {
         throw 'The installed executable does not match the exact candidate bundle payload.'
     }
     Assert-NativeInstalledLocator $Executable $expectedVersion
+    Assert-CompatibilityMode
+}
+
+function Assert-CompatibilityMode {
+    $base = $key = $null
+    try {
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+            [Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+        $key = $base.OpenSubKey('SOFTWARE\ResoDrive\Installation')
+        $expectedMode = if ($CompatibilityMode) { 'cet-disabled' } else { 'standard' }
+        if ($null -eq $key -or $key.GetValueKind('CompatibilityMode') -ne [Microsoft.Win32.RegistryValueKind]::String -or
+            $key.GetValue('CompatibilityMode') -cne $expectedMode) {
+            throw 'The installed CET compatibility choice was not preserved.'
+        }
+    } finally {
+        if ($null -ne $key) { $key.Dispose() }
+        if ($null -ne $base) { $base.Dispose() }
+    }
 }
 
 function Assert-NativeInstalledLocator([string]$Executable, [string]$Version) {
@@ -492,13 +511,14 @@ function Save-IsolatedUpdaterEvidence([string]$UpdatesDirectory, [string]$Destin
         catch [IO.DirectoryNotFoundException] { }
         catch { Write-Host ("Updater receipt evidence unavailable ({0})." -f $_.Exception.GetType().Name) }
     }
-    $logName = "resodrive-win-x64-$Version.msi.log"
-    try {
-        $bytes = Read-IsolatedUpdaterEvidenceBytes (Join-Path $UpdatesDirectory $logName) (32 * 1024 * 1024)
-        [IO.File]::WriteAllBytes((Join-Path $Destination "updater-$logName"), $bytes)
-    } catch [IO.FileNotFoundException] { }
-    catch [IO.DirectoryNotFoundException] { }
-    catch { Write-Host ("Updater MSI-log evidence unavailable ({0})." -f $_.Exception.GetType().Name) }
+    foreach ($logName in @("resodrive-win-x64-$Version.msi.log", "resodrive-win-x64-$Version-compatibility.msi.log")) {
+        try {
+            $bytes = Read-IsolatedUpdaterEvidenceBytes (Join-Path $UpdatesDirectory $logName) (32 * 1024 * 1024)
+            [IO.File]::WriteAllBytes((Join-Path $Destination "updater-$logName"), $bytes)
+        } catch [IO.FileNotFoundException] { }
+        catch [IO.DirectoryNotFoundException] { }
+        catch { Write-Host ("Updater MSI-log evidence unavailable ({0})." -f $_.Exception.GetType().Name) }
+    }
 }
 
 function Invoke-CopiedUpdater([string]$Source, [string]$Msi, [string]$Version,
@@ -507,7 +527,11 @@ function Invoke-CopiedUpdater([string]$Source, [string]$Msi, [string]$Version,
     $updates = Join-Path $env:RDRIVE_DATA_DIR 'updates'
     New-Item -ItemType Directory -Path $updates -Force | Out-Null
     $helper = Join-Path $updates 'resodrive-update-helper.exe'
-    $stagedMsi = Join-Path $updates "resodrive-win-x64-$Version.msi"
+    # Frozen legacy helpers require the original filename. The new compatibility
+    # helper retains its explicit variant in the filename and checksum contract.
+    $sourceNumericVersion = [version](($sourceVersion -split '\+', 2)[0])
+    $variantSuffix = if ($CompatibilityMode -and $sourceNumericVersion -ge $targetVersion) { '-compatibility' } else { '' }
+    $stagedMsi = Join-Path $updates "resodrive-win-x64-$Version$variantSuffix.msi"
     $outcome = Join-Path $updates 'application-update-result.json'
     Copy-Item -LiteralPath $Source -Destination $helper -Force
     Copy-Item -LiteralPath $Msi -Destination $stagedMsi -Force
@@ -534,6 +558,7 @@ function Invoke-CopiedUpdater([string]$Source, [string]$Msi, [string]$Version,
         } finally { $process.Dispose() }
     } finally { $env:RDRIVE_UPDATE_HANDOFF_DIR = $oldHandoff }
     Assert-NativeInstalledLocator $ExpectedExecutable $Version
+    Assert-CompatibilityMode
     $actualHash = (Get-FileHash -LiteralPath $ExpectedExecutable -Algorithm SHA256).Hash
     if ($ExpectedSha256 -notmatch '^[a-fA-F0-9]{64}$' -or $actualHash -ine $ExpectedSha256) { throw 'The copied updater did not install the exact expected managed binary.' }
     $ui = Assert-UpdatedUiReady $ExpectedExecutable $startedAtUtc
@@ -565,10 +590,13 @@ function New-FutureMigrationFixture([int]$VersionOffset = 1) {
     $payload = Join-Path $root 'payload'
     $published = Join-Path $root 'managed'
     $installerIntermediate = (Join-Path $root 'installer-obj') + '/'
+    $cetCompat = if ($CompatibilityMode) { 'false' } else { 'true' }
+    $compatibilityValue = if ($CompatibilityMode) { 'true' } else { 'false' }
+    $installationMode = if ($CompatibilityMode) { 'cet-disabled' } else { 'standard' }
     New-Item -ItemType Directory -Path $payload -Force | Out-Null
     Copy-Item -Path (Join-Path ([IO.Path]::GetDirectoryName($setup)) 'resodrive\*') -Destination $payload -Recurse -Force
     dotnet publish (Join-Path $PSScriptRoot '..\src\ResoDrive.App\ResoDrive.App.csproj') -c Release -r win-x64 --self-contained false --no-restore `
-        --output $published "-p:VersionPrefix=$nextVersion" | Out-Host
+        --output $published "-p:VersionPrefix=$nextVersion" "-p:CETCompat=$cetCompat" "-p:ResoDriveCompatibilityMode=$compatibilityValue" | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'Temporary future fixture publish failed.' }
     Get-ChildItem -LiteralPath $published -File | Where-Object { $_.Extension -ne '.pdb' -and $_.Name -ne 'packages.lock.json' } |
         Copy-Item -Destination $payload -Force
@@ -580,7 +608,7 @@ function New-FutureMigrationFixture([int]$VersionOffset = 1) {
         "-p:ResoDriveComponentSeed=$(Get-ResoDriveComponentSeed $nextVersion)" "-p:ResoDriveUpgradeCode=$sameVersionUpgradeCode" `
         "-p:ResoDriveProductName=$($props.ProductDisplayName)" "-p:ResoDrivePublisher=$($props.ProductPublisher)" `
         "-p:ResoDriveDescription=$($props.ProductDescription.Replace('%', '%25').Replace(';', '%3B').Replace(',', '%2C'))" `
-        '-p:ResoDriveExecutableBaseName=resodrive' '-p:ResoDriveExecutableName=resodrive.exe' | Out-Host
+        '-p:ResoDriveExecutableBaseName=resodrive' '-p:ResoDriveExecutableName=resodrive.exe' "-p:ResoDriveCompatibilityMode=$compatibilityValue" "-p:ResoDriveInstallationMode=$installationMode" | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'Temporary future fixture MSI build failed.' }
     return [pscustomobject]@{ Version = $nextVersion; Msi = (Join-Path $root "resodrive-win-x64-$nextVersion.msi");
         AppHash = (Get-FileHash -LiteralPath (Join-Path $payload 'resodrive.exe')).Hash }
@@ -646,7 +674,8 @@ $sameVersionPaths = @($SameVersionBaselineMsiPath, $SameVersionBaselineSetupPath
 $sameVersionRecovery = @($sameVersionPaths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -gt 0
 $bundleUpgradeCode = '{5B94F457-820F-4B41-B609-071179764B08}'
 $msiexec = Join-Path ([Environment]::SystemDirectory) 'msiexec.exe'
-$candidateMsi = Join-Path ([IO.Path]::GetDirectoryName($setup)) "resodrive-win-x64-$expectedVersion.msi"
+$candidateSuffix = if ($CompatibilityMode) { '-compatibility' } else { '' }
+$candidateMsi = Join-Path ([IO.Path]::GetDirectoryName($setup)) "resodrive-win-x64-$expectedVersion$candidateSuffix.msi"
 $candidateProductCode = Get-MsiProperty $candidateMsi 'ProductCode'
 $sameVersionUpgradeCode = Get-MsiProperty $candidateMsi 'UpgradeCode'
 $sameVersionReceipt = $null
@@ -690,6 +719,7 @@ try {
     Assert-OneRemovableAppEntry
     Assert-WerPolicy
     Assert-NativeInstalledLocator $app $expectedVersion
+    Assert-CompatibilityMode
     & (Join-Path $PSScriptRoot 'native-crash-smoke.ps1') -MonitorPath $launcher -VerifyWer -VerifyClipboard
     Assert-DataPreserved
     Invoke-Installer $setup "/uninstall /quiet /norestart /log `"$testRoot\unsupported-setup-uninstall.log`"" -ExpectFailure
@@ -923,6 +953,8 @@ try {
     }
     [ordered]@{
         Passed = $true
+        CetCompatibilityMode = [bool]$CompatibilityMode
+        CompatibilityChoicePreservedByModernUpdater = $true
         Version = $expectedVersion
         PreviousPublicVersion = $PreviousVersion
         LegacyHiddenMsiSetupVersion = $LegacySetupVersion

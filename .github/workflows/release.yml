@@ -10,7 +10,7 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Check out tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -57,6 +57,9 @@ jobs:
       - name: Build and verify release
         shell: pwsh
         run: .\build.ps1 -Configuration Release -BuildMsi $true
+      - name: Build and verify CET compatibility release
+        shell: pwsh
+        run: ./build.ps1 -Configuration Release -BuildMsi $true -CompatibilityMode -SkipTests
       - name: Verify native crash monitor with disposable processes
         shell: pwsh
         timeout-minutes: 4
@@ -66,7 +69,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: resodrive-symbols-${{ github.ref_name }}-${{ github.sha }}
-          path: artifacts/win-x64/symbols/*
+          path: |
+            artifacts/win-x64/symbols/*
+            artifacts/win-x64-compatibility/symbols/*
           retention-days: 90
           if-no-files-found: error
       - name: Verify installed application lifecycle
@@ -85,6 +90,11 @@ jobs:
             }
           }
           ./tests/installer-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName @recovery
+      - name: Verify CET compatibility installation, update and removal
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./tests/installer-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64-compatibility/*-setup.exe).FullName -CompatibilityMode
       - name: Verify different-account preparation on disposable user
         shell: pwsh
         timeout-minutes: 4
@@ -107,6 +117,8 @@ jobs:
           path: |
             ${{ runner.temp }}/resodrive-installer-smoke/*.log
             ${{ runner.temp }}/resodrive-installer-smoke/*.json
+            ${{ runner.temp }}/resodrive-installer-smoke-compatibility/*.log
+            ${{ runner.temp }}/resodrive-installer-smoke-compatibility/*.json
             ${{ runner.temp }}/resodrive-cross-account-smoke/*
           if-no-files-found: ignore
       - name: Preserve release artifacts
@@ -120,6 +132,12 @@ jobs:
             artifacts/win-x64/*.msi.sha256
             artifacts/win-x64/*.exe
             artifacts/win-x64/*.exe.sha256
+            artifacts/win-x64-compatibility/*.zip
+            artifacts/win-x64-compatibility/*.zip.sha256
+            artifacts/win-x64-compatibility/*.msi
+            artifacts/win-x64-compatibility/*.msi.sha256
+            artifacts/win-x64-compatibility/*.exe
+            artifacts/win-x64-compatibility/*.exe.sha256
           if-no-files-found: error
       - name: Stage GitHub release for desktop acceptance
         shell: pwsh
@@ -137,11 +155,18 @@ jobs:
           Copy-Item -LiteralPath $versionedSetup.FullName -Destination $stableSetup
           $hash = (Get-FileHash -LiteralPath $stableSetup -Algorithm SHA256).Hash.ToLowerInvariant()
           Set-Content -LiteralPath $stableChecksum -Value "$hash  ResoDrive-Setup.exe" -Encoding ascii
-          $assets = Get-ChildItem -LiteralPath $releaseDirectory -File |
+          $compatibilityDirectory = 'artifacts\win-x64-compatibility'
+          $compatibilitySetup = @(Get-ChildItem -LiteralPath $compatibilityDirectory -File -Filter 'resodrive-win-x64-*-compatibility-setup.exe')
+          if ($compatibilitySetup.Count -ne 1) { throw 'Expected one versioned compatibility Setup.' }
+          $stableCompatibility = Join-Path $compatibilityDirectory 'ResoDrive-Compatibility-Setup.exe'
+          Copy-Item -LiteralPath $compatibilitySetup[0].FullName -Destination $stableCompatibility
+          $compatibilityHash = (Get-FileHash -LiteralPath $stableCompatibility -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath "$stableCompatibility.sha256" -Value "$compatibilityHash  ResoDrive-Compatibility-Setup.exe" -Encoding ascii
+          $assets = Get-ChildItem -LiteralPath $releaseDirectory,$compatibilityDirectory -File |
             Where-Object Name -Match '\.(zip|msi|exe)(\.sha256)?$' |
             Sort-Object Name
-          if ($assets.Count -ne 8) {
-            throw "Expected eight release files, found $($assets.Count)."
+          if ($assets.Count -ne 16) {
+            throw "Expected sixteen standard and compatibility release files, found $($assets.Count)."
           }
           gh release create $env:RELEASE_TAG $assets.FullName `
             --draft --verify-tag --notes-file RELEASE_NOTES.md --title "ResoDrive $env:RELEASE_TAG"

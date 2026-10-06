@@ -9,6 +9,7 @@
 - Preserve account settings, credentials, pending-upload cache and process ownership across installation-folder changes.
 - Keep error details compact on screen while copying the complete available report; reject redirected diagnostic and installed-executable paths before access.
 - Refresh the missing-prerequisite Setup payload to .NET Desktop Runtime 10.0.12; retain normal same-major runtime selection and CET protection.
+- Provide a separately verified CET compatibility package using Microsoft's documented opt-out; preserve its selection in later updates and explain the reduced protection in Setup.
 
 ## [0.3.30] - 2026-10-05
 

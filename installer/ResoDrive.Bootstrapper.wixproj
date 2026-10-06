@@ -4,10 +4,15 @@
     <NuGetLockFilePath>packages.bootstrapper.lock.json</NuGetLockFilePath>
     <DefaultItemExcludes>$(DefaultItemExcludes);Package.wxs</DefaultItemExcludes>
     <OutputName>$(ResoDriveExecutableBaseName)-$(ResoDriveRuntime)-$(ResoDriveVersion)-setup</OutputName>
+    <ResoDriveCompatibilityMode Condition="'$(ResoDriveCompatibilityMode)' == ''">0</ResoDriveCompatibilityMode>
+    <ResoDriveBundleName>$(ResoDriveProductName)</ResoDriveBundleName>
+    <ResoDriveBundleName Condition="'$(ResoDriveCompatibilityMode)' == '1'">$(ResoDriveProductName) Compatibility</ResoDriveBundleName>
     <DefineConstants>
       MsiSource=$(MsiSource);
       ResoDriveVersion=$(ResoDriveVersion);
       ResoDriveProductName=$(ResoDriveProductName);
+      ResoDriveBundleName=$(ResoDriveBundleName);
+      ResoDriveCompatibilityMode=$(ResoDriveCompatibilityMode);
       ResoDrivePublisher=$(ResoDrivePublisher);
       ResoDriveBundleUpgradeCode=$(ResoDriveBundleUpgradeCode);
       DotNetDesktopRuntimeVersion=$(DotNetDesktopRuntimeVersion);
@@ -27,6 +32,7 @@
     <Error Condition="'$(ResoDriveProductName)' == ''" Text="ResoDriveProductName is required." />
     <Error Condition="'$(ResoDrivePublisher)' == ''" Text="ResoDrivePublisher is required." />
     <Error Condition="'$(ResoDriveBundleUpgradeCode)' == ''" Text="ResoDriveBundleUpgradeCode is required." />
+    <Error Condition="'$(ResoDriveCompatibilityMode)' != '0' AND '$(ResoDriveCompatibilityMode)' != '1'" Text="ResoDriveCompatibilityMode must be 0 or 1." />
     <Error Condition="'$(DotNetDesktopRuntimeVersion)' == ''" Text="DotNetDesktopRuntimeVersion is required." />
     <Error Condition="'$(DotNetDesktopRuntimeMinimumVersion)' == ''" Text="DotNetDesktopRuntimeMinimumVersion is required." />
     <Error Condition="'$(DotNetDesktopRuntimeUrl)' == ''" Text="DotNetDesktopRuntimeUrl is required." />

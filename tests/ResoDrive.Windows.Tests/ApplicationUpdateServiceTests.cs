@@ -8,6 +8,36 @@ namespace ResoDrive.Windows.Tests;
 
 public sealed class ApplicationUpdateServiceTests
 {
+    [Theory]
+    [InlineData(false, "resodrive-win-x64-0.3.0.msi")]
+    [InlineData(true, "resodrive-win-x64-0.3.0-compatibility.msi")]
+    public async Task CheckKeepsTheDeliberatelySelectedBuildVariant(bool compatibilityMode, string fileName)
+    {
+        using var client = Client(HttpStatusCode.OK,
+            "https://github.com/alphasixtyfive/resodrive/releases/tag/v0.3.0");
+        var service = new ApplicationUpdateService(client, ProductLinks.LatestRelease, compatibilityMode);
+        var result = await service.CheckAsync("0.2.28");
+        Assert.True(result.Succeeded);
+        Assert.EndsWith(fileName, result.Value!.InstallerDownload!.AbsoluteUri);
+        Assert.EndsWith(fileName + ".sha256", result.Value.ChecksumDownload!.AbsoluteUri);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DownloadRejectsTheOtherVariantBeforeAnyRequest(bool compatibilityMode)
+    {
+        using var client = new HttpClient(new NoRequestHandler());
+        var service = new ApplicationUpdateService(client, ProductLinks.LatestRelease, compatibilityMode);
+        var installer = new Uri(ProductLinks.Repository.AbsoluteUri + "/releases/download/v0.3.0/" +
+            ApplicationUpdateAssets.InstallerFileName("0.3.0", !compatibilityMode));
+        var update = new ApplicationUpdateCheck("0.2.29", "0.3.0", true,
+            ProductLinks.LatestRelease, installer, new Uri(installer.AbsoluteUri + ".sha256"));
+        var result = await service.DownloadInstallerAsync(update, Path.GetTempPath());
+        Assert.False(result.Succeeded);
+        Assert.Equal("app.update_download_invalid", result.Error?.Code);
+    }
+
     [Fact]
     public async Task CheckAsync_ReportsNewerStableRelease()
     {
@@ -106,16 +136,18 @@ public sealed class ApplicationUpdateServiceTests
     }
 
     [Theory]
-    [InlineData("resodrive")]
-    [InlineData("ResoDrive")]
-    public async Task DownloadInstallerAsync_VerifiesChecksumAndReplacesOldPackage(string repository)
+    [InlineData("resodrive", false)]
+    [InlineData("ResoDrive", false)]
+    [InlineData("ResoDrive", true)]
+    public async Task DownloadInstallerAsync_VerifiesChecksumAndReplacesOldPackage(string repository, bool compatibilityMode)
     {
+        var fileName = ApplicationUpdateAssets.InstallerFileName("0.3.0", compatibilityMode);
         var installerUri = new Uri(
-            $"https://github.com/alphasixtyfive/{repository}/releases/download/v0.3.0/resodrive-win-x64-0.3.0.msi");
+            $"https://github.com/alphasixtyfive/{repository}/releases/download/v0.3.0/{fileName}");
         var checksumUri = new Uri(installerUri.AbsoluteUri + ".sha256");
         var payload = Encoding.UTF8.GetBytes("verified installer payload");
         var checksum = Encoding.ASCII.GetBytes(
-            Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant() + "  resodrive-win-x64-0.3.0.msi");
+            Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant() + "  " + fileName);
         using var client = new HttpClient(new RoutingHandler(new Dictionary<string, byte[]>
         {
             [installerUri.AbsoluteUri] = payload,
@@ -123,7 +155,7 @@ public sealed class ApplicationUpdateServiceTests
         }));
         var service = new ApplicationUpdateService(
             client,
-            new Uri("https://api.github.test/releases/latest"));
+            new Uri("https://api.github.test/releases/latest"), compatibilityMode);
         var directory = Path.Combine(Path.GetTempPath(), "resodrive-app-update-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         File.WriteAllText(Path.Combine(directory, "resodrive-win-x64-0.2.29.msi"), "old");
@@ -140,6 +172,7 @@ public sealed class ApplicationUpdateServiceTests
                 directory);
 
             Assert.True(result.Succeeded, result.Error?.Message);
+            Assert.Equal(fileName, Path.GetFileName(result.Value!.InstallerPath));
             Assert.Equal(payload, await File.ReadAllBytesAsync(result.Value!.InstallerPath));
             Assert.False(File.Exists(Path.Combine(directory, "resodrive-win-x64-0.2.29.msi")));
         }

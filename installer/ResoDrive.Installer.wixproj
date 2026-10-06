@@ -22,6 +22,7 @@
       ResoDriveDescription=$(ResoDriveDescription);
       ResoDriveExecutableBaseName=$(ResoDriveExecutableBaseName);
       ResoDriveExecutableName=$(ResoDriveExecutableName);
+      ResoDriveInstallationMode=$(ResoDriveInstallationMode);
       DotNetDesktopRuntimeMinimumVersion=$(DotNetDesktopRuntimeMinimumVersion);
       IconSource=$(MSBuildProjectDirectory)\..\src\ResoDrive.App\resodrive.ico
     </DefineConstants>
@@ -38,6 +39,7 @@
     <Error Condition="'$(ResoDriveDescription)' == ''" Text="ResoDriveDescription is required." />
     <Error Condition="'$(ResoDriveExecutableBaseName)' == ''" Text="ResoDriveExecutableBaseName is required." />
     <Error Condition="'$(ResoDriveExecutableName)' == ''" Text="ResoDriveExecutableName is required." />
+    <Error Condition="'$(ResoDriveInstallationMode)' != 'standard' AND '$(ResoDriveInstallationMode)' != 'cet-disabled'" Text="ResoDriveInstallationMode must be standard or cet-disabled." />
     <Error Condition="'$(DotNetDesktopRuntimeMinimumVersion)' == ''" Text="DotNetDesktopRuntimeMinimumVersion is required." />
   </Target>
 

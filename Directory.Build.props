@@ -45,6 +45,7 @@
     <DebugSymbols Condition="'$(MSBuildProjectExtension)' == '.wixproj'">false</DebugSymbols>
   </PropertyGroup>
   <ItemGroup>
+    <AssemblyMetadata Include="ResoDriveCETCompatibility" Value="true" Condition="'$(ResoDriveCompatibilityMode)' == 'true'" />
     <AssemblyMetadata Include="DeveloperUrl" Value="$(DeveloperUrl)" />
     <AssemblyMetadata Include="RepositoryUrl" Value="$(RepositoryUrl)" />
     <AssemblyMetadata Include="RepositoryReleasesUrl" Value="$(RepositoryReleasesUrl)" />

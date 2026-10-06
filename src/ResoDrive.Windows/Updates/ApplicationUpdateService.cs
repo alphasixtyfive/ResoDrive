@@ -26,16 +26,18 @@ public sealed partial class ApplicationUpdateService
     private static readonly HttpClient SharedClient = CreateClient();
     private readonly HttpClient _client;
     private readonly Uri _endpoint;
+    private readonly bool _compatibilityMode;
 
     public ApplicationUpdateService()
         : this(SharedClient, ProductLinks.LatestRelease)
     {
     }
 
-    internal ApplicationUpdateService(HttpClient client, Uri endpoint)
+    internal ApplicationUpdateService(HttpClient client, Uri endpoint, bool? compatibilityMode = null)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
+        _compatibilityMode = compatibilityMode ?? ApplicationUpdateAssets.UsesCetCompatibility;
     }
 
     public async Task<OperationResult<ApplicationUpdateCheck>> CheckAsync(
@@ -83,7 +85,7 @@ public sealed partial class ApplicationUpdateService
             var downloadRoot = ProductLinks.Repository.AbsoluteUri.TrimEnd('/') +
                 $"/releases/download/v{version}/";
             var installer = updateAvailable
-                ? new Uri(downloadRoot + $"resodrive-win-x64-{version}.msi")
+                ? new Uri(downloadRoot + ApplicationUpdateAssets.InstallerFileName(version, _compatibilityMode))
                 : null;
             var checksum = updateAvailable
                 ? new Uri(installer!.AbsoluteUri + ".sha256")
@@ -136,7 +138,7 @@ public sealed partial class ApplicationUpdateService
         var directory = Path.GetFullPath(destinationDirectory);
         var installerPath = Path.Combine(
             directory,
-            $"resodrive-win-x64-{update.AvailableVersion}.msi");
+            ApplicationUpdateAssets.InstallerFileName(update.AvailableVersion, _compatibilityMode));
         var temporaryPath = installerPath + ".download";
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromHours(2));
@@ -250,7 +252,7 @@ public sealed partial class ApplicationUpdateService
         return !tag.Contains('/') && TryVersion(tag, out version);
     }
 
-    private static bool IsTrustedAsset(Uri uri, string version, bool checksum)
+    private bool IsTrustedAsset(Uri uri, string version, bool checksum)
     {
         var repositoryPath = ProductLinks.Repository.AbsolutePath.TrimEnd('/');
         return uri.Scheme == Uri.UriSchemeHttps &&
@@ -259,7 +261,8 @@ public sealed partial class ApplicationUpdateService
         uri.Host.Equals(ProductLinks.Repository.Host, StringComparison.OrdinalIgnoreCase) &&
         uri.AbsolutePath.StartsWith(repositoryPath + "/", StringComparison.OrdinalIgnoreCase) &&
         uri.AbsolutePath[repositoryPath.Length..].Equals(
-            $"/releases/download/v{version}/resodrive-win-x64-{version}.msi" + (checksum ? ".sha256" : string.Empty),
+            $"/releases/download/v{version}/" + ApplicationUpdateAssets.InstallerFileName(version, _compatibilityMode) +
+                (checksum ? ".sha256" : string.Empty),
             StringComparison.Ordinal);
     }
 

@@ -131,6 +131,11 @@
     </StandardDirectory>
 
     <ComponentGroup Id="ApplicationFiles" Directory="INSTALLFOLDER">
+      <!-- A package-owned receipt only: never changes Windows mitigation policy. -->
+      <Component Id="ResoDriveCompatibilityMode" Guid="EB2D8890-7E48-4200-9921-8BE34D12E2A7" Bitness="always64">
+        <RegistryValue Root="HKLM" Key="SOFTWARE\ResoDrive\Installation"
+          Name="CompatibilityMode" Type="string" Value="$(var.ResoDriveInstallationMode)" KeyPath="yes" />
+      </Component>
       <Files Include="$(var.PackageSource)\**">
         <Exclude Files="$(var.PackageSource)\$(var.ResoDriveExecutableName)" />
         <Exclude Files="$(var.PackageSource)\resodrive-launcher.exe" />
