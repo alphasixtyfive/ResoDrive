@@ -14,6 +14,7 @@
     <DefineConstants>
       PackageSource=$(PackageSource);
       ResoDriveVersion=$(ResoDriveVersion);
+      ResoDriveComponentSeed=$(ResoDriveComponentSeed);
       ResoDriveAllowSameVersionUpgrades=$(ResoDriveAllowSameVersionUpgrades);
       ResoDriveUpgradeCode=$(ResoDriveUpgradeCode);
       ResoDriveProductName=$(ResoDriveProductName);
@@ -29,6 +30,7 @@
   <Target Name="ValidateResoDriveInstallerProperties" BeforeTargets="Build">
     <Error Condition="'$(PackageSource)' == ''" Text="PackageSource must point to the staged ResoDrive release directory." />
     <Error Condition="'$(ResoDriveVersion)' == ''" Text="ResoDriveVersion is required." />
+    <Error Condition="'$(ResoDriveComponentSeed)' == ''" Text="ResoDriveComponentSeed is required; generate it with installer/ComponentIdentity.ps1." />
     <Error Condition="'$(ResoDriveRuntime)' == ''" Text="ResoDriveRuntime is required." />
     <Error Condition="'$(ResoDriveUpgradeCode)' == ''" Text="ResoDriveUpgradeCode is required." />
     <Error Condition="'$(ResoDriveProductName)' == ''" Text="ResoDriveProductName is required." />

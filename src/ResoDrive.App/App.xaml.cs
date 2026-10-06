@@ -44,7 +44,7 @@ public partial class App : System.Windows.Application
                 activated ? "activation.request_acknowledged" : "activation.request_timed_out");
             _activation.Dispose();
             _activation = null;
-            Shutdown(activated ? 0 : 2);
+            Shutdown(activated ? 0 : CrashMonitor.ActivationTimedOutExitCode);
             return;
         }
 
@@ -178,6 +178,10 @@ public partial class App : System.Windows.Application
     private void RegisterGlobalExceptionLogging()
     {
         DispatcherUnhandledException += Application_DispatcherUnhandledException;
+    }
+
+    internal static void RegisterProcessExceptionLogging()
+    {
         AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
         TaskScheduler.UnobservedTaskException += TaskScheduler_UnobservedTaskException;
     }
@@ -185,6 +189,10 @@ public partial class App : System.Windows.Application
     private void UnregisterGlobalExceptionLogging()
     {
         DispatcherUnhandledException -= Application_DispatcherUnhandledException;
+    }
+
+    internal static void UnregisterProcessExceptionLogging()
+    {
         AppDomain.CurrentDomain.UnhandledException -= CurrentDomain_UnhandledException;
         TaskScheduler.UnobservedTaskException -= TaskScheduler_UnobservedTaskException;
     }

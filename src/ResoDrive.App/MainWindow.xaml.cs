@@ -397,19 +397,7 @@ public partial class MainWindow : WpfWindow
     private async Task ReconcileAutostartAsync()
     {
         var autostart = new ScheduledTaskAutostartService(CurrentExecutablePath);
-        var current = await autostart.IsEnabledAsync(_lifetimeCancellation.Token);
-        if (!current.Succeeded)
-        {
-            _model.AddLogEntry(
-                "Windows startup task could not be checked",
-                current.Error?.Message ?? "The startup task could not be read.",
-                LogSeverity.Error);
-            return;
-        }
-        if (current.Value == _settings.Application.StartWithWindows)
-            return;
-
-        var changed = await autostart.SetEnabledAsync(
+        var changed = await autostart.ReconcileAsync(
             _settings.Application.StartWithWindows,
             _lifetimeCancellation.Token);
         if (!changed.Succeeded)
@@ -1751,9 +1739,9 @@ public partial class MainWindow : WpfWindow
     private static string CurrentExecutablePath =>
         Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "resodrive.exe");
 
-    private static string MsiInstalledExecutablePath => Path.Combine(
+    private static string MsiInstalledExecutablePath => InstalledApplicationLocator.ResolveExecutablePath() ?? Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-        "rdrive",
+        "ResoDrive",
         "resodrive.exe");
 
     private void ShowError(string title, string message)

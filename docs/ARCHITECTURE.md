@@ -20,6 +20,12 @@ type names.
 use a local, user-scoped named-pipe protocol. Closing the management window does
 not interrupt active work; there is no separate host executable to deploy.
 
+Normal installed launches use the small native `resodrive-launcher.exe`. It
+observes the managed process without a startup window and can display a standard
+Windows error dialog even if .NET never reaches Main. Direct managed launches
+attach an observer after Main; maintenance commands retain their existing
+executable and exit-code contracts. Windows Error Reporting owns dump capture.
+
 The host is the only component allowed to start or stop rclone. It serializes
 operations per mount, arbitrates drive targets globally, and publishes immutable
 status snapshots. The WPF process never infers ownership from a visible drive.
@@ -53,7 +59,9 @@ bounded newline-delimited JSON in the logs directory. Transient process state
 never contaminates user configuration.
 
 The WPF process writes a separate rolling event log for startup, activation, and
-unhandled failures. User-facing logs redact common secrets, credential-bearing
+unhandled failures. The host uses the same bounded, guarded diagnostic writer.
+Fatal background-service failures leave a nonzero exit rather than silently
+looking like a successful host shutdown. User-facing logs redact common secrets, credential-bearing
 URLs, host names, and absolute paths before display.
 
 Startup milestones are timestamped in
@@ -70,9 +78,10 @@ into the host.
 
 The application directory is read for binaries, assets, an optional `profiles.json`,
 and the inert `profiles.sample.json` template;
-ResoDrive never relocates itself. Mutable per-user state and the managed rclone
+Only Windows Installer can change the installed binary directory during a major
+upgrade. Mutable per-user state and the managed rclone
 runtime are kept in `%LOCALAPPDATA%\rdrive`. Optional startup is a current-user,
-interactive Windows Task Scheduler task that launches the installed executable
+interactive Windows Task Scheduler task that launches the adjacent native launcher
 with `--background`. It runs with the user's normal privileges and has no artificial
 delay or network-availability gate. A normal second launch restores the existing
 window; a background second launch exits silently.
@@ -94,7 +103,11 @@ when it is not already installed.
 
 ## Compatibility identities
 
-The user-data directory, host pipe and mutex names, and MSI installation directory
-use the internal `rdrive` identity. They are stable machine-facing identifiers,
-not user-facing product copy. Renaming them would orphan encrypted configuration,
-allow competing host instances, or break in-place MSI upgrades.
+The user-data directory and host pipe and mutex names retain the internal `rdrive`
+identity. Changing those independently would orphan encrypted configuration or
+allow competing host instances. The binary directory is separate: fresh installs
+use `%ProgramFiles%\ResoDrive`. Legacy upgrades preserve their registered folder
+until a compatibility-aware updater can request migration and reopen the app from
+its new MSI-registered location. The MSI UpgradeCode remains the permanent product
+family identity. See [crash diagnostics](CRASH-DIAGNOSTICS.md) and the installer
+documentation for evidence collection and upgrade acceptance.

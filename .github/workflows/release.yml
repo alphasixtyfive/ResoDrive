@@ -10,7 +10,7 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Check out tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -57,6 +57,18 @@ jobs:
       - name: Build and verify release
         shell: pwsh
         run: .\build.ps1 -Configuration Release -BuildMsi $true
+      - name: Verify native crash monitor with disposable processes
+        shell: pwsh
+        timeout-minutes: 4
+        run: ./tests/native-crash-smoke.ps1 -MonitorPath artifacts/win-x64/resodrive/resodrive-launcher.exe
+      - name: Preserve matching diagnostic symbols separately from release downloads
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: resodrive-symbols-${{ github.ref_name }}-${{ github.sha }}
+          path: artifacts/win-x64/symbols/*
+          retention-days: 90
+          if-no-files-found: error
       - name: Verify installed application lifecycle
         shell: pwsh
         env:

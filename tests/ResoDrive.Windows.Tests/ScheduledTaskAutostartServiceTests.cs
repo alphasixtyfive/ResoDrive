@@ -76,6 +76,20 @@ public sealed class ScheduledTaskAutostartServiceTests
     }
 
     [Fact]
+    public void Definition_OwnershipAcceptsOnlyTheFixedAdjacentLauncher()
+    {
+        var launcher = Path.Combine(Path.GetDirectoryName(_applicationPath)!, ApplicationLauncher.FileName);
+        Assert.True(ScheduledTaskDefinition.IsOwned(ScheduledTaskDefinition.CreateXml(launcher, UserId), _applicationPath, UserId));
+        Assert.False(ScheduledTaskDefinition.IsOwned(ScheduledTaskDefinition.CreateXml(@"C:\Other\resodrive-launcher.exe", UserId), _applicationPath, UserId));
+        Assert.False(ScheduledTaskDefinition.IsOwned(ScheduledTaskDefinition.CreateXml(launcher, "S-1-5-21-2000"), _applicationPath, UserId));
+
+        var document = XDocument.Parse(ScheduledTaskDefinition.CreateXml(launcher, UserId));
+        var ns = document.Root!.Name.Namespace;
+        document.Root.Element(ns + "Principals")!.Element(ns + "Principal")!.Element(ns + "RunLevel")!.Value = "HighestAvailable";
+        Assert.False(ScheduledTaskDefinition.IsOwned(document.ToString(), _applicationPath, UserId));
+    }
+
+    [Fact]
     public void Definition_OwnershipAcceptsTaskSchedulerNormalizedIdentityAndRunLevel()
     {
         var identity = WindowsIdentity.GetCurrent();
@@ -143,6 +157,172 @@ public sealed class ScheduledTaskAutostartServiceTests
         Assert.Contains(@"C:\Other\resodrive.exe", tasks.Record!.Xml, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task EnableUsesLauncherAndReconciliationDoesNotRewriteCorrectTask()
+    {
+        using var installation = new DisposableInstallation();
+        var tasks = new FakeTaskStore();
+        var service = new ScheduledTaskAutostartService(installation.ApplicationPath, UserId, tasks);
+        Assert.True((await service.SetEnabledAsync(true)).Succeeded);
+        Assert.True(ScheduledTaskDefinition.UsesCommand(tasks.Record!.Xml, installation.LauncherPath));
+        Assert.True((await service.ReconcileAsync(true)).Succeeded);
+        Assert.Equal(1, tasks.RegisterCount);
+        Assert.True((await service.IsEnabledAsync()).Value);
+    }
+
+    [Fact]
+    public async Task ReconciliationMigratesAnOwnedLegacyTaskOnce()
+    {
+        using var installation = new DisposableInstallation();
+        var tasks = new FakeTaskStore
+        {
+            Record = new(ScheduledTaskDefinition.CreateXml(installation.ApplicationPath, UserId), true)
+        };
+        var service = new ScheduledTaskAutostartService(installation.ApplicationPath, UserId, tasks);
+        Assert.True((await service.ReconcileAsync(true)).Succeeded);
+        Assert.True(ScheduledTaskDefinition.UsesCommand(tasks.Record!.Xml, installation.LauncherPath));
+        Assert.True((await service.ReconcileAsync(true)).Succeeded);
+        Assert.Equal(1, tasks.RegisterCount);
+    }
+
+    [Fact]
+    public async Task ReconciliationMigratesDisabledTaskWithoutEnablingIt()
+    {
+        using var installation = new DisposableInstallation();
+        var tasks = new FakeTaskStore
+        {
+            Record = new(ScheduledTaskDefinition.CreateXml(installation.ApplicationPath, UserId), false)
+        };
+        var service = new ScheduledTaskAutostartService(installation.ApplicationPath, UserId, tasks);
+        Assert.True((await service.ReconcileAsync(false)).Succeeded);
+        Assert.False(tasks.Record!.Enabled);
+        Assert.True(ScheduledTaskDefinition.UsesCommand(tasks.Record.Xml, installation.LauncherPath));
+        Assert.True((await service.ReconcileAsync(false)).Succeeded);
+        Assert.Equal(1, tasks.RegisterCount);
+        Assert.Equal(0, tasks.DeleteCount);
+    }
+
+    [Fact]
+    public async Task ReconciliationLeavesForeignLauncherTaskUnchanged()
+    {
+        using var installation = new DisposableInstallation();
+        var original = new StartupTaskRecord(ScheduledTaskDefinition.CreateXml(@"C:\Other\resodrive-launcher.exe", UserId), true);
+        var tasks = new FakeTaskStore { Record = original };
+        var result = await new ScheduledTaskAutostartService(installation.ApplicationPath, UserId, tasks).ReconcileAsync(true);
+        Assert.False(result.Succeeded);
+        Assert.Equal("autostart.foreign_task", result.Error?.Code);
+        Assert.Equal(original, tasks.Record);
+        Assert.Equal(0, tasks.RegisterCount);
+        Assert.Equal(0, tasks.DeleteCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task VerifiedInstallerReceiptMigratesOldDirectoryTaskOnceAndPreservesPreference(bool enabled)
+    {
+        using var installation = new DisposableInstallation();
+        var oldExecutable = @"C:\Program Files\rdrive\resodrive.exe";
+        var tasks = new FakeTaskStore { Record = new(ScheduledTaskDefinition.CreateXml(oldExecutable, UserId), enabled) };
+        var service = new ScheduledTaskAutostartService(installation.ApplicationPath, UserId, tasks,
+            current => current == installation.ApplicationPath ? oldExecutable : null);
+        Assert.True((await service.ReconcileAsync(enabled)).Succeeded);
+        Assert.True(ScheduledTaskDefinition.UsesCommand(tasks.Record!.Xml, installation.LauncherPath));
+        Assert.Equal(enabled, tasks.Record.Enabled);
+        Assert.True((await service.ReconcileAsync(enabled)).Succeeded);
+        Assert.Equal(1, tasks.RegisterCount);
+    }
+
+    [Fact]
+    public async Task InstallerReceiptCannotAdoptTaskForAnotherAccountOrInstallation()
+    {
+        using var installation = new DisposableInstallation();
+        var oldExecutable = @"C:\Program Files\rdrive\resodrive.exe";
+        var foreign = new StartupTaskRecord(ScheduledTaskDefinition.CreateXml(oldExecutable, "S-1-5-21-2000"), true);
+        var tasks = new FakeTaskStore { Record = foreign };
+        var service = new ScheduledTaskAutostartService(installation.ApplicationPath, UserId, tasks, _ => oldExecutable);
+        Assert.False((await service.ReconcileAsync(true)).Succeeded);
+        Assert.Equal(foreign, tasks.Record);
+        tasks.Record = new(ScheduledTaskDefinition.CreateXml(@"D:\portable\resodrive.exe", UserId), true);
+        Assert.False((await service.ReconcileAsync(true)).Succeeded);
+        Assert.Equal(0, tasks.RegisterCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedReceiptBackedMigrationRestoresTheExactOldDirectoryTask(bool enabled)
+    {
+        using var installation = new DisposableInstallation();
+        var oldExecutable = @"C:\Program Files\rdrive\resodrive.exe";
+        var previous = new StartupTaskRecord(ScheduledTaskDefinition.CreateXml(oldExecutable, UserId), enabled);
+        var tasks = new FakeTaskStore { Record = previous, ThrowVerificationRead = true };
+        var service = new ScheduledTaskAutostartService(installation.ApplicationPath, UserId, tasks, _ => oldExecutable);
+        Assert.False((await service.ReconcileAsync(enabled)).Succeeded);
+        Assert.Equal(previous, tasks.Record);
+    }
+
+    [Theory]
+    [InlineData("family")]
+    [InlineData("registered-path")]
+    [InlineData("receipt-path")]
+    [InlineData("relative-legacy")]
+    [InlineData("network-legacy")]
+    [InlineData("same-directory")]
+    public void MigrationReceiptMustAgreeWithTheRegisteredCurrentInstallation(string invalidField)
+    {
+        var current = @"C:\Program Files\ResoDrive\resodrive.exe";
+        var registration = invalidField == "registered-path" ? @"D:\portable\resodrive.exe" : current;
+        var family = invalidField == "family" ? Guid.NewGuid().ToString() : InstalledApplicationLocator.UpgradeCode;
+        var receipt = invalidField == "receipt-path" ? @"D:\Other" : @"C:\Program Files\ResoDrive";
+        var legacy = invalidField switch
+        {
+            "relative-legacy" => "rdrive",
+            "network-legacy" => @"\\server\share\rdrive",
+            "same-directory" => @"C:\Program Files\ResoDrive",
+            _ => @"C:\Program Files\rdrive"
+        };
+        Assert.Null(ScheduledTaskAutostartService.PreviousExecutableFromReceipt(current, registration, family, receipt, legacy));
+    }
+
+    [Fact]
+    public void ValidMigrationReceiptBindsOnlyTheRecordedPreviousExecutable()
+    {
+        var current = @"C:\Program Files\ResoDrive\resodrive.exe";
+        Assert.Equal(@"C:\Program Files\rdrive\resodrive.exe", ScheduledTaskAutostartService.PreviousExecutableFromReceipt(
+            current, current, InstalledApplicationLocator.UpgradeCode, @"C:\Program Files\ResoDrive\", @"C:\Program Files\rdrive\"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedLauncherMigrationRestoresTheOriginalTaskAndEnabledState(bool enabled)
+    {
+        using var installation = new DisposableInstallation();
+        var previous = new StartupTaskRecord(ScheduledTaskDefinition.CreateXml(installation.ApplicationPath, UserId), enabled);
+        var tasks = new FakeTaskStore { Record = previous, ThrowVerificationRead = true };
+        var result = await new ScheduledTaskAutostartService(installation.ApplicationPath, UserId, tasks).ReconcileAsync(enabled);
+        Assert.False(result.Succeeded);
+        Assert.Equal(previous, tasks.Record);
+    }
+
+    [Fact]
+    public async Task MissingLauncherKeepsLegacyTaskAndDisabledMissingTaskNeedsNoWrite()
+    {
+        using var installation = new DisposableInstallation(includeLauncher: false);
+        var tasks = new FakeTaskStore
+        {
+            Record = new(ScheduledTaskDefinition.CreateXml(installation.ApplicationPath, UserId), true)
+        };
+        var service = new ScheduledTaskAutostartService(installation.ApplicationPath, UserId, tasks);
+        Assert.True((await service.ReconcileAsync(true)).Succeeded);
+        Assert.Equal(0, tasks.RegisterCount);
+        tasks.Record = null;
+        Assert.True((await service.ReconcileAsync(false)).Succeeded);
+        Assert.Equal(0, tasks.RegisterCount);
+        Assert.Equal(0, tasks.DeleteCount);
+    }
+
     private ScheduledTaskAutostartService CreateService(IStartupTaskStore tasks) =>
         new(_applicationPath, UserId, tasks);
 
@@ -164,6 +344,8 @@ public sealed class ScheduledTaskAutostartServiceTests
     {
         public StartupTaskRecord? Record { get; set; }
         public bool ThrowVerificationRead { get; set; }
+        public int RegisterCount { get; private set; }
+        public int DeleteCount { get; private set; }
         private bool _registered;
 
         public StartupTaskRecord? Read(string taskName)
@@ -179,7 +361,10 @@ public sealed class ScheduledTaskAutostartServiceTests
         public void Register(string taskName, string xml)
         {
             _registered = true;
-            Record = new(xml, true);
+            RegisterCount++;
+            var document = XDocument.Parse(xml);
+            var root = document.Root!;
+            Record = new(xml, root.Element(root.Name.Namespace + "Settings")!.Element(root.Name.Namespace + "Enabled")!.Value == "true");
         }
 
         public void SetEnabled(string taskName, bool enabled)
@@ -188,7 +373,27 @@ public sealed class ScheduledTaskAutostartServiceTests
                 Record = Record with { Enabled = enabled };
         }
 
-        public void Delete(string taskName) => Record = null;
+        public void Delete(string taskName)
+        {
+            DeleteCount++;
+            Record = null;
+        }
+    }
+
+    private sealed class DisposableInstallation : IDisposable
+    {
+        private readonly string _root = Path.Combine(Path.GetTempPath(), "resodrive-autostart-tests", Guid.NewGuid().ToString("N"));
+        public DisposableInstallation(bool includeLauncher = true)
+        {
+            Directory.CreateDirectory(_root);
+            ApplicationPath = Path.Combine(_root, "resodrive.exe");
+            LauncherPath = Path.Combine(_root, ApplicationLauncher.FileName);
+            File.WriteAllText(ApplicationPath, "disposable app fixture");
+            if (includeLauncher) File.WriteAllText(LauncherPath, "disposable launcher fixture");
+        }
+        public string ApplicationPath { get; }
+        public string LauncherPath { get; }
+        public void Dispose() => Directory.Delete(_root, recursive: true);
     }
 
 }

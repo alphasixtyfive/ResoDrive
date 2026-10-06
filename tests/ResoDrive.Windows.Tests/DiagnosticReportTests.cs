@@ -5,6 +5,31 @@ namespace ResoDrive.Windows.Tests;
 
 public sealed class DiagnosticReportTests
 {
+    [Theory]
+    [InlineData("0.3.31+0123456789abcdef0123456789abcdef01234567", "0123456789abcdef0123456789abcdef01234567")]
+    [InlineData("0.3.31+abcdef1", "abcdef1")]
+    public void PreservesValidatedSourceIdentity(string version, string commit)
+    {
+        var report = DiagnosticReport.Create(new ManagerSettings(), new HostResponse(true), version, null, null, []);
+        Assert.Contains($"ResoDrive: {version}", report, StringComparison.Ordinal);
+        Assert.Contains($"Source commit: {commit}", report, StringComparison.Ordinal);
+        Assert.Contains($".NET runtime: {Environment.Version}", report, StringComparison.Ordinal);
+        Assert.Contains("Process architecture:", report, StringComparison.Ordinal);
+        Assert.Contains("Windows architecture:", report, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("0.3.31+token-private-value")]
+    [InlineData("0.3.31+abcdef1\nsecret")]
+    [InlineData("0.3.31+abcdef")]
+    public void RejectsUnvalidatedBuildMetadata(string version)
+    {
+        var report = DiagnosticReport.Create(new ManagerSettings(), new HostResponse(true), version, null, null, []);
+        Assert.Contains("ResoDrive: Unknown", report, StringComparison.Ordinal);
+        Assert.Contains("Source commit: Unknown", report, StringComparison.Ordinal);
+        Assert.DoesNotContain(version, report, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ExportsOnlyAllowlistedInformationEvenWhenInputsContainSecrets()
     {

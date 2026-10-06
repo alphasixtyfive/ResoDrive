@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.31] - 2026-10-06 (unpublished acceptance build)
+
+- Show a standard Windows error dialog for unexpected startup and process failures, with Copy details and local diagnostic evidence. Normal startup has no extra window.
+- Configure bounded Windows Error Reporting full dumps for installed copies, retain matching build symbols separately, and record guarded UI and host diagnostics.
+- Distinguish activation timeouts, handled startup failures and normal shutdown; make fatal host background-service failures observable.
+- Install fresh copies in `%ProgramFiles%\ResoDrive`; retain legacy updater compatibility and use Windows Installer for staged migration from `rdrive`.
+- Preserve account settings, credentials, pending-upload cache and process ownership across installation-folder changes.
+
 ## [0.3.30] - 2026-10-05
 
 - Combine the reviewed drive settings, quieter status and compact log changes with the input-validation and single-progress-window fixes.

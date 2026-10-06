@@ -201,7 +201,7 @@ public sealed class ApplicationUpdateHandoffTests
     }
 
     [Fact]
-    public async Task CompleteAsync_FallsBackToSourceWhenInstalledApplicationCannotStart()
+    public async Task CompleteAsync_DoesNotAcknowledgeAnOldPortableSourceWhenInstalledApplicationCannotStart()
     {
         using var directory = new TemporaryDirectory();
         var request = Request(directory.Path);
@@ -214,11 +214,50 @@ public sealed class ApplicationUpdateHandoffTests
 
         var exitCode = await ApplicationUpdateHandoff.CompleteAsync(request, runtime);
 
-        Assert.Equal(0, exitCode);
+        Assert.Equal(1, exitCode);
         Assert.Equal(
-            [request.InstalledExecutablePath, request.SourceExecutablePath],
+            [request.InstalledExecutablePath],
             runtime.StartedPaths);
-        Assert.True(ReadOutcome(request.OutcomePath).RelaunchAcknowledged);
+        Assert.False(ReadOutcome(request.OutcomePath).RelaunchAcknowledged);
+    }
+
+    [Fact]
+    public async Task CompleteAsync_UsesThePostInstallRegisteredDirectoryForLaunchAndReadiness()
+    {
+        using var directory = new TemporaryDirectory();
+        var request = Request(directory.Path);
+        var installed = Path.Combine(directory.Path, "ResoDrive", "resodrive.exe");
+        var runtime = new FakeRuntime { RegisteredExecutablePath = installed, ReadyAcknowledged = true };
+        Assert.Equal(0, await ApplicationUpdateHandoff.CompleteAsync(request, runtime));
+        Assert.Equal(installed, runtime.StartedPath);
+        Assert.Equal(App.CreateInstanceScope(Path.GetDirectoryName(installed)!), runtime.RequestedReadyScope);
+    }
+
+    [Fact]
+    public async Task CompleteAsync_ReportsInvalidRegistrationWithoutLaunchingAnOldSource()
+    {
+        using var directory = new TemporaryDirectory();
+        var request = Request(directory.Path);
+        var runtime = new FakeRuntime
+        {
+            ResolutionException = new InvalidOperationException("Installed identity did not match."),
+            ReadyAcknowledged = true
+        };
+        Assert.Equal(1, await ApplicationUpdateHandoff.CompleteAsync(request, runtime));
+        Assert.Empty(runtime.StartedPaths);
+        var outcome = ReadOutcome(request.OutcomePath);
+        Assert.Equal("succeeded", outcome.Status);
+        Assert.False(outcome.RelaunchAcknowledged);
+        Assert.Contains("identity did not match", outcome.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CurrentUpdaterOptsIntoCanonicalInstallMigrationWithoutChangingTheDataRoot()
+    {
+        var info = ApplicationUpdateHandoff.CreateInstallerStartInfo(@"C:\test\update.msi");
+        Assert.Contains("RDRIVE_MIGRATE_INSTALL=1", info.Arguments, StringComparison.Ordinal);
+        Assert.Contains("RDRIVE_DATA_ROOT=", info.Arguments, StringComparison.Ordinal);
+        Assert.Equal("runas", info.Verb);
     }
 
     [Fact]
@@ -393,6 +432,9 @@ public sealed class ApplicationUpdateHandoffTests
         public Exception? PreparationException { get; init; }
         public bool ReadyAcknowledged { get; init; }
         public Exception? FirstStartException { get; init; }
+        public Exception? ResolutionException { get; init; }
+        public string? RegisteredExecutablePath { get; init; }
+        public string? RequestedReadyScope { get; private set; }
         public bool ApplicationStarted { get; private set; }
         public string? StartedPath { get; private set; }
         public List<string> PreparedDirectories { get; } = [];
@@ -436,7 +478,15 @@ public sealed class ApplicationUpdateHandoffTests
             return true;
         }
 
-        public bool RequestReady(string activationScope, TimeSpan timeout) => ReadyAcknowledged;
+        public string ResolveInstalledExecutablePath(string expectedVersion) =>
+            ResolutionException is not null ? throw ResolutionException :
+            RegisteredExecutablePath ?? Path.Combine(PreparedDirectories[^1], "resodrive.exe");
+
+        public bool RequestReady(string activationScope, TimeSpan timeout)
+        {
+            RequestedReadyScope = activationScope;
+            return ReadyAcknowledged;
+        }
     }
 
     private sealed class TemporaryDirectory : IDisposable

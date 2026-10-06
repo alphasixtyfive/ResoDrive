@@ -36,6 +36,7 @@ internal interface IApplicationUpdateRuntime
         string expectedSha256,
         CancellationToken cancellationToken);
     bool StartApplication(string executablePath);
+    string ResolveInstalledExecutablePath(string expectedVersion);
     bool RequestReady(string activationScope, TimeSpan timeout);
 }
 
@@ -286,9 +287,20 @@ internal static class ApplicationUpdateHandoff
 
         var acknowledged = false;
         Exception? relaunchException = null;
-        var relaunchPaths = status == "succeeded"
-            ? new[] { request.InstalledExecutablePath, request.SourceExecutablePath }
-            : new[] { request.SourceExecutablePath };
+        string[] relaunchPaths;
+        if (status == "succeeded")
+        {
+            try { relaunchPaths = [runtime.ResolveInstalledExecutablePath(request.Version)]; }
+            catch (Exception exception) when (exception is Win32Exception or InvalidOperationException or
+                IOException or UnauthorizedAccessException)
+            {
+                // A stale portable or legacy source must not acknowledge an installed
+                // update. Keep the successful MSI result and report the relaunch failure.
+                relaunchException = exception;
+                relaunchPaths = [];
+            }
+        }
+        else relaunchPaths = [request.SourceExecutablePath];
         foreach (var relaunchPath in relaunchPaths)
         {
             try
@@ -309,7 +321,8 @@ internal static class ApplicationUpdateHandoff
             }
         }
         if (!acknowledged && relaunchException is not null)
-            message += " ResoDrive could not be reopened: " + relaunchException.Message;
+            message += " ResoDrive could not be reopened: " + relaunchException.Message +
+                (status == "succeeded" ? " Open ResoDrive from the Start menu or run the latest Setup again." : string.Empty);
 
         outcome = outcome with
         {
@@ -455,7 +468,7 @@ internal static class ApplicationUpdateHandoff
         return new ProcessStartInfo
         {
             FileName = Path.Combine(Environment.SystemDirectory, "msiexec.exe"),
-            Arguments = $"/i \"{installerPath}\" /passive /norestart /l*v \"{logPath}\" RDRIVE_DATA_ROOT=\"{Path.TrimEndingDirectorySeparator(dataRoot)}\\.\"",
+            Arguments = $"/i \"{installerPath}\" /passive /norestart /l*v \"{logPath}\" RDRIVE_DATA_ROOT=\"{Path.TrimEndingDirectorySeparator(dataRoot)}\\.\" RDRIVE_MIGRATE_INSTALL=1",
             UseShellExecute = true,
             Verb = "runas",
             WorkingDirectory = Path.GetDirectoryName(installerPath),
@@ -545,13 +558,13 @@ internal static class ApplicationUpdateHandoff
 
         public bool StartApplication(string executablePath)
         {
-            using var process = Process.Start(new ProcessStartInfo(executablePath)
-            {
-                UseShellExecute = false,
-                WorkingDirectory = Path.GetDirectoryName(executablePath),
-            });
+            using var process = Process.Start(ApplicationLauncher.CreateStartInfo(executablePath));
             return process is not null;
         }
+
+        public string ResolveInstalledExecutablePath(string expectedVersion) =>
+            InstalledApplicationLocator.ResolveExecutablePath(expectedVersion) ??
+                throw new InvalidOperationException("Windows did not register the updated ResoDrive installation. Open ResoDrive from the Start menu or run Setup again.");
 
         public bool RequestReady(string activationScope, TimeSpan timeout) =>
             SingleInstanceActivation.RequestShow(activationScope, timeout);

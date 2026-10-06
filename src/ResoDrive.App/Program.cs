@@ -10,6 +10,8 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        // Consume this once: hosts and helpers must start their own observer.
+        var supervised = CrashMonitor.ConsumeSupervisedMarker();
         if (args.Length is 3 or 4 && args[0].Equals("--prepare-install", StringComparison.OrdinalIgnoreCase))
         {
             if (args.Length == 4)
@@ -52,6 +54,7 @@ public static class Program
 
         if (args.Any(argument => argument.Equals("--host", StringComparison.OrdinalIgnoreCase)))
         {
+            CrashMonitor.ObserveCurrentProcess("host", supervised);
             HostApplication.RunAsync(args).GetAwaiter().GetResult();
             return 0;
         }
@@ -86,6 +89,9 @@ public static class Program
 
         try
         {
+            App.RegisterProcessExceptionLogging();
+            CrashMonitor.ObserveCurrentProcess("ui", supervised);
+            UiDiagnosticLog.Current.StartSession();
             var application = new App();
             application.InitializeComponent();
             return application.Run();
@@ -100,12 +106,18 @@ public static class Program
                     $"{ProductInfo.Name} startup error",
                     System.Windows.MessageBoxButton.OK,
                     System.Windows.MessageBoxImage.Error);
+                // Explicitly tell the native observer that this failure was displayed.
+                return CrashMonitor.FailureAlreadyDisplayedExitCode;
             }
             catch (Exception dialogException)
             {
                 UiDiagnosticLog.Current.Exception("startup.error_dialog_failed", dialogException);
             }
             return 1;
+        }
+        finally
+        {
+            App.UnregisterProcessExceptionLogging();
         }
     }
 
@@ -118,12 +130,9 @@ public static class Program
             if ((!File.Exists(paths.SettingsFile) && !File.Exists(paths.RemoteWipeStateFile)) || string.IsNullOrWhiteSpace(executablePath))
                 return;
 
-            using var process = Process.Start(new ProcessStartInfo(executablePath, "--host")
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = AppContext.BaseDirectory,
-            });
+            var startInfo = ApplicationLauncher.CreateStartInfo(executablePath);
+            startInfo.ArgumentList.Add("--host");
+            using var process = Process.Start(startInfo);
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or InvalidOperationException or

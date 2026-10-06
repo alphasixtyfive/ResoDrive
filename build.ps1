@@ -10,11 +10,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = $PSScriptRoot
+. (Join-Path $projectRoot 'installer\ComponentIdentity.ps1')
 $artifactRoot = Join-Path $projectRoot "artifacts\$Runtime"
 $stageRoot = Join-Path $artifactRoot '.stage'
 $appOutput = Join-Path $stageRoot 'app'
 $installerOutput = Join-Path $stageRoot 'installer'
 $bootstrapperOutput = Join-Path $stageRoot 'bootstrapper'
+$nativeOutput = Join-Path $stageRoot 'native'
+$symbolsOutput = Join-Path $artifactRoot 'symbols'
 $buildProperties = [xml](Get-Content -LiteralPath (Join-Path $projectRoot 'Directory.Build.props') -Raw)
 $versionNode = $buildProperties.SelectSingleNode('/Project/PropertyGroup/VersionPrefix')
 $releaseVersion = if ($null -eq $versionNode) { '' } else { $versionNode.InnerText.Trim() }
@@ -113,14 +116,33 @@ dotnet publish (Join-Path $projectRoot 'src\ResoDrive.App\ResoDrive.App.csproj')
     --output $appOutput
 if ($LASTEXITCODE -ne 0) { throw "App publish failed with exit code $LASTEXITCODE." }
 
+& (Join-Path $projectRoot 'native\ResoDrive.CrashMonitor\build.ps1') `
+    -OutputDirectory $nativeOutput -Configuration $Configuration
+if (-not (Test-Path -LiteralPath (Join-Path $nativeOutput 'resodrive-launcher.exe') -PathType Leaf)) {
+    throw 'The native crash monitor build did not produce resodrive-launcher.exe.'
+}
+
 New-Item -ItemType Directory -Path $packageOutput -Force | Out-Null
 Get-ChildItem -LiteralPath $appOutput -File |
     Where-Object { $_.Extension -ne '.pdb' -and $_.Name -ne 'packages.lock.json' } |
     Copy-Item -Destination $packageOutput -Force
+Copy-Item -LiteralPath (Join-Path $nativeOutput 'resodrive-launcher.exe') -Destination $packageOutput -Force
+New-Item -ItemType Directory -Path $symbolsOutput -Force | Out-Null
+foreach ($symbolSource in @($appOutput, $nativeOutput)) {
+    Get-ChildItem -LiteralPath $symbolSource -File -Filter '*.pdb' |
+        Copy-Item -Destination $symbolsOutput -Force
+}
+foreach ($requiredSymbol in @('resodrive.pdb', 'ResoDrive.Core.pdb', 'ResoDrive.Windows.pdb', 'ResoDrive.Host.pdb', 'resodrive-launcher.pdb')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $symbolsOutput $requiredSymbol) -PathType Leaf)) {
+        throw "The build did not retain matching diagnostic symbols: $requiredSymbol."
+    }
+}
 Copy-Item -LiteralPath (Join-Path $projectRoot 'profiles.sample.json') -Destination $packageOutput -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $packageOutput -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'CHANGELOG.md') -Destination $packageOutput -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'LICENSE') -Destination $packageOutput -Force
+Copy-Item -LiteralPath (Join-Path $projectRoot 'docs\CRASH-DIAGNOSTICS.md') -Destination $packageOutput -Force
+Copy-Item -LiteralPath (Join-Path $projectRoot 'docs\INSTALL-DIRECTORY-MIGRATION.md') -Destination $packageOutput -Force
 
 Get-ChildItem -LiteralPath $packageOutput -File |
     Where-Object Name -ne 'SHA256SUMS.txt' |
@@ -135,6 +157,7 @@ if ($BuildMsi) {
         --output $installerOutput `
         -p:PackageSource=$packageOutput `
         -p:ResoDriveVersion=$releaseVersion `
+        "-p:ResoDriveComponentSeed=$(Get-ResoDriveComponentSeed $releaseVersion)" `
         -p:ResoDriveRuntime=$Runtime `
         -p:ResoDriveUpgradeCode=$msiUpgradeCode `
         "-p:ResoDriveProductName=$productDisplayName" `
@@ -170,17 +193,73 @@ if ($BuildMsi) {
     }
     $view.GetType().InvokeMember('Close', 'InvokeMethod', $null, $view, $null) | Out-Null
     [Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) | Out-Null
+    $registryView = $database.GetType().InvokeMember(
+        'OpenView', 'InvokeMethod', $null, $database,
+        @('SELECT `Name`, `Value`, `Root`, `Key` FROM `Registry` WHERE `Component_` = ''ResoDriveLocalDumps'''))
+    $registryView.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $registryView, $null) | Out-Null
+    $dumpValues = @{}
+    while ($record = $registryView.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $registryView, $null)) {
+        $name = $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 1)
+        $value = $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 2)
+        $root = $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 3)
+        $key = $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 4)
+        $dumpValues[$name] = @{ Value = $value; Root = $root; Key = $key }
+        [Runtime.InteropServices.Marshal]::FinalReleaseComObject($record) | Out-Null
+    }
+    $registryView.GetType().InvokeMember('Close', 'InvokeMethod', $null, $registryView, $null) | Out-Null
+    [Runtime.InteropServices.Marshal]::FinalReleaseComObject($registryView) | Out-Null
+    # Check the compiled MSI, including formatted policy strings and the
+    # executable used by advertised shortcuts, rather than only its XML source.
+    $compiledChecks = @(
+        @{ Query = 'SELECT `DefaultDir` FROM `Directory` WHERE `Directory` = ''INSTALLFOLDER'''; Expected = 'ResoDrive'; LongName = $true },
+        @{ Query = 'SELECT `Source` FROM `CustomAction` WHERE `Action` = ''LaunchResoDrive'''; Expected = 'ResoDriveLauncherFile' },
+        @{ Query = 'SELECT `Component_` FROM `Shortcut` WHERE `Shortcut` = ''ResoDriveStartMenuShortcut'''; Expected = 'ResoDriveLauncher' },
+        @{ Query = 'SELECT `Type` FROM `CompLocator` WHERE `Signature_` = ''PreviousInstallFolder'''; Expected = '1' },
+        @{ Query = 'SELECT `Target` FROM `CustomAction` WHERE `Action` = ''RestoreInstalledFolder'''; Expected = '[RDRIVE_INSTALLED_ROOT]' }
+    )
+    foreach ($check in $compiledChecks) {
+        $checkView = $database.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $database, @($check.Query))
+        try {
+            $checkView.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $checkView, $null) | Out-Null
+            $record = $checkView.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $checkView, $null)
+            if ($null -eq $record) { throw "MSI validation found a missing installation contract: $($check.Query)" }
+            try {
+                $actual = [string]$record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 1)
+                if ($check.ContainsKey('LongName')) { $actual = ($actual -split '\|')[-1] }
+                if ($actual -cne $check.Expected) { throw "MSI validation found an incorrect installation contract: $($check.Query)" }
+            } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($record) | Out-Null }
+        } finally {
+            $checkView.GetType().InvokeMember('Close', 'InvokeMethod', $null, $checkView, $null) | Out-Null
+            [Runtime.InteropServices.Marshal]::FinalReleaseComObject($checkView) | Out-Null
+        }
+    }
     [Runtime.InteropServices.Marshal]::FinalReleaseComObject($database) | Out-Null
     [Runtime.InteropServices.Marshal]::FinalReleaseComObject($windowsInstaller) | Out-Null
     [GC]::Collect()
     [GC]::WaitForPendingFinalizers()
-    foreach ($requiredFile in @("$executableBaseName.exe", 'profiles.sample.json')) {
+    foreach ($requiredFile in @("$executableBaseName.exe", 'resodrive-launcher.exe', 'profiles.sample.json')) {
         if ($requiredFile -notin $packagedFiles) {
             throw "MSI validation could not find '$requiredFile' in the File table."
         }
     }
     if ('rclone.exe' -in $packagedFiles) {
         throw "MSI validation found rclone.exe, which must remain an app-managed per-user component."
+    }
+    if (@($packagedFiles | Where-Object { $_ -like '*.pdb' }).Count -ne 0) {
+        throw 'MSI validation found diagnostic symbols in the public package.'
+    }
+    $expectedDumpValues = @{
+        DumpFolder = '#%[\%]LOCALAPPDATA[\%]\rdrive-diagnostics\dumps'
+        DumpCount = '#3'
+        DumpType = '#2'
+    }
+    foreach ($name in $expectedDumpValues.Keys) {
+        if (-not $dumpValues.ContainsKey($name) -or
+            $dumpValues[$name].Value -cne $expectedDumpValues[$name] -or
+            $dumpValues[$name].Root -ne '2' -or
+            $dumpValues[$name].Key -cne 'SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\resodrive.exe') {
+            throw "MSI validation found incorrect Windows Error Reporting authoring: $name."
+        }
     }
 
     Copy-Item -LiteralPath $builtMsi -Destination $msiOutput -Force
@@ -221,8 +300,43 @@ Compress-Archive -Path (Join-Path $packageOutput '*') -DestinationPath $archiveO
 $archiveHash = (Get-FileHash -LiteralPath $archiveOutput -Algorithm SHA256).Hash.ToLowerInvariant()
 "$archiveHash  $(Split-Path -Leaf $archiveOutput)" |
     Set-Content -LiteralPath $archiveChecksumOutput -Encoding ascii
+
+# Symbols are workflow artifacts, never public release assets. Record the exact
+# shipped file hashes so a same-version rebuild cannot be mistaken for a match.
+$sourceCommit = git -C $projectRoot rev-parse HEAD
+if ($LASTEXITCODE -ne 0) { throw 'Could not record the build source commit.' }
+$sourceChanges = @(git -C $projectRoot status --porcelain)
+if ($LASTEXITCODE -ne 0) { throw 'Could not record the source working-tree state.' }
+$sdkVersion = dotnet --version
+if ($LASTEXITCODE -ne 0) { throw 'Could not record the .NET SDK version.' }
+$manifestFiles = @(Get-ChildItem -LiteralPath $packageOutput -File) +
+    @(Get-ChildItem -LiteralPath $symbolsOutput -File) +
+    @(Get-ChildItem -LiteralPath $artifactRoot -File | Where-Object { $_.Extension -in '.zip', '.msi', '.exe' })
+$manifest = [ordered]@{
+    schemaVersion = 1
+    product = $productDisplayName
+    version = $releaseVersion
+    runtime = $Runtime
+    configuration = $Configuration
+    sourceCommit = "$sourceCommit".Trim()
+    sourceModified = $sourceChanges.Count -ne 0
+    dotNetSdk = "$sdkVersion".Trim()
+    nativeCompilerVersion = (Get-Item -LiteralPath (Get-Command cl.exe).Source).VersionInfo.FileVersion
+    builtAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
+    workflowRunId = $env:GITHUB_RUN_ID
+    files = @($manifestFiles | Sort-Object FullName | ForEach-Object {
+        [ordered]@{
+            path = [IO.Path]::GetRelativePath($artifactRoot, $_.FullName).Replace('\', '/')
+            bytes = $_.Length
+            sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+    })
+}
+$manifest | ConvertTo-Json -Depth 5 |
+    Set-Content -LiteralPath (Join-Path $symbolsOutput 'build-manifest.json') -Encoding utf8
 Write-Host "Published $productDisplayName to $packageOutput"
 Write-Host "Release archive: $archiveOutput"
+Write-Host "Matching diagnostic symbols: $symbolsOutput"
 if ($BuildMsi) {
     Write-Host "Windows installer: $msiOutput"
     Write-Host "Windows setup: $setupOutput"

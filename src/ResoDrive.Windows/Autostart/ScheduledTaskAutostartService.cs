@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
 using System.Xml.Linq;
+using Microsoft.Win32;
 using ResoDrive.Core.Results;
 
 namespace ResoDrive.Windows;
@@ -15,19 +16,22 @@ public sealed class ScheduledTaskAutostartService
     private readonly string _taskName;
     private readonly string _userId;
     private readonly IStartupTaskStore _tasks;
+    private readonly Func<string, string?> _previousInstallation;
 
     public ScheduledTaskAutostartService(string applicationPath)
         : this(
             applicationPath,
             CurrentUserId(),
-            new ComStartupTaskStore())
+            new ComStartupTaskStore(),
+            PreviousRegisteredExecutable)
     {
     }
 
     internal ScheduledTaskAutostartService(
         string applicationPath,
         string userId,
-        IStartupTaskStore tasks)
+        IStartupTaskStore tasks,
+        Func<string, string?>? previousInstallation = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(applicationPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(userId);
@@ -35,6 +39,7 @@ public sealed class ScheduledTaskAutostartService
         _userId = userId;
         _taskName = TaskNameForUser(userId);
         _tasks = tasks ?? throw new ArgumentNullException(nameof(tasks));
+        _previousInstallation = previousInstallation ?? (static _ => null);
     }
 
     public Task<OperationResult<bool>> IsEnabledAsync(CancellationToken cancellationToken = default)
@@ -47,7 +52,7 @@ public sealed class ScheduledTaskAutostartService
             {
                 return Task.FromResult(Result.Success(false));
             }
-            if (!ScheduledTaskDefinition.IsOwned(task.Xml, _applicationPath, _userId))
+            if (!IsOwnedTask(task.Xml))
             {
                 return Task.FromResult(Result.Failure<bool>(
                     "autostart.foreign_task",
@@ -65,7 +70,17 @@ public sealed class ScheduledTaskAutostartService
 
     public Task<OperationResult> SetEnabledAsync(
         bool enabled,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        ChangeTaskAsync(enabled, reconcile: false, cancellationToken);
+
+    /// <summary>Reconciles the stored preference and launcher path without rewriting a correct task.</summary>
+    public Task<OperationResult> ReconcileAsync(
+        bool enabled,
+        CancellationToken cancellationToken = default) =>
+        ChangeTaskAsync(enabled, reconcile: true, cancellationToken);
+
+    private Task<OperationResult> ChangeTaskAsync(
+        bool enabled, bool reconcile, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         StartupTaskRecord? existingTask = null;
@@ -74,21 +89,31 @@ public sealed class ScheduledTaskAutostartService
         {
             existingTask = _tasks.Read(_taskName);
             if (existingTask is not null &&
-                !ScheduledTaskDefinition.IsOwned(existingTask.Xml, _applicationPath, _userId))
+                !IsOwnedTask(existingTask.Xml))
             {
                 return Task.FromResult(Result.Failure(
                     "autostart.foreign_task",
                     "The ResoDrive startup task belongs to a different installation and was left unchanged."));
             }
 
-            if (enabled)
+            var launchPath = ApplicationLauncher.Resolve(_applicationPath);
+            if (reconcile &&
+                (existingTask is null && !enabled ||
+                 existingTask is not null && existingTask.Enabled == enabled &&
+                 ScheduledTaskDefinition.UsesCommand(existingTask.Xml, launchPath)))
+                return Task.FromResult(Result.Success());
+
+            // A disabled owned task may still need its launch path migrated. Preserve
+            // its disabled state; explicit preference changes keep their existing semantics.
+            if (enabled || reconcile && existingTask is { Enabled: false })
             {
-                var xml = ScheduledTaskDefinition.CreateXml(_applicationPath, _userId);
+                var xml = ScheduledTaskDefinition.CreateXml(launchPath, _userId, enabled);
                 mutationAttempted = true;
                 _tasks.Register(_taskName, xml);
                 var verified = _tasks.Read(_taskName);
-                if (verified is null || !verified.Enabled ||
-                    !ScheduledTaskDefinition.IsOwned(verified.Xml, _applicationPath, _userId))
+                if (verified is null || verified.Enabled != enabled ||
+                    !ScheduledTaskDefinition.IsOwned(verified.Xml, _applicationPath, _userId) ||
+                    !ScheduledTaskDefinition.UsesCommand(verified.Xml, launchPath))
                 {
                     RestoreTask(existingTask);
                     return Task.FromResult(Result.Failure(
@@ -111,6 +136,44 @@ public sealed class ScheduledTaskAutostartService
                 "autostart.access_denied",
                 $"The Windows startup task could not be changed. {exception.Message}"));
         }
+    }
+
+    private bool IsOwnedTask(string xml)
+    {
+        if (ScheduledTaskDefinition.IsOwned(xml, _applicationPath, _userId)) return true;
+        var previous = _previousInstallation(_applicationPath);
+        return previous is not null && ScheduledTaskDefinition.IsOwned(xml, previous, _userId);
+    }
+
+    private static string? PreviousRegisteredExecutable(string currentExecutable)
+    {
+        using var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
+        using var receipt = machine.OpenSubKey(@"SOFTWARE\ResoDrive\Installation");
+        if (receipt is null) return null;
+        var installed = InstalledApplicationLocator.ResolveExecutablePath();
+        return PreviousExecutableFromReceipt(currentExecutable, installed,
+            receipt.GetValue("UpgradeCode") as string, receipt.GetValue("InstallLocation") as string,
+            receipt.GetValue("LegacyInstallLocation") as string);
+    }
+
+    internal static string? PreviousExecutableFromReceipt(string currentExecutable, string? registeredExecutable,
+        string? upgradeCode, string? installDirectory, string? legacyDirectory)
+    {
+        if (!Guid.TryParse(upgradeCode, out var family) || family != Guid.Parse(InstalledApplicationLocator.UpgradeCode) ||
+            string.IsNullOrWhiteSpace(registeredExecutable) || string.IsNullOrWhiteSpace(installDirectory) ||
+            string.IsNullOrWhiteSpace(legacyDirectory) || !Path.IsPathFullyQualified(installDirectory) ||
+            !Path.IsPathFullyQualified(legacyDirectory) || legacyDirectory.StartsWith(@"\\", StringComparison.Ordinal))
+            return null;
+        var registered = Path.GetFullPath(registeredExecutable);
+        var current = Path.GetFullPath(currentExecutable);
+        var installation = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDirectory));
+        var previous = Path.TrimEndingDirectorySeparator(Path.GetFullPath(legacyDirectory));
+        return registered.Equals(current, StringComparison.OrdinalIgnoreCase) &&
+            Path.GetFileName(current).Equals("resodrive.exe", StringComparison.OrdinalIgnoreCase) &&
+            installation.Equals(Path.GetDirectoryName(current), StringComparison.OrdinalIgnoreCase) &&
+            !previous.Equals(installation, StringComparison.OrdinalIgnoreCase) &&
+            !previous.Equals(Path.GetPathRoot(previous), StringComparison.OrdinalIgnoreCase)
+            ? Path.Combine(previous, "resodrive.exe") : null;
     }
 
     private void RestoreTask(StartupTaskRecord? previous)
@@ -151,7 +214,7 @@ public sealed class ScheduledTaskAutostartService
     }
 
     private static bool Expected(Exception exception) =>
-        exception is COMException or IOException or UnauthorizedAccessException or InvalidOperationException or
+        exception is COMException or IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception or
             ArgumentException or System.Security.SecurityException;
 }
 
@@ -295,7 +358,7 @@ internal static class ScheduledTaskDefinition
 {
     private static readonly XNamespace Namespace = "http://schemas.microsoft.com/windows/2004/02/mit/task";
 
-    internal static string CreateXml(string applicationPath, string userId)
+    internal static string CreateXml(string applicationPath, string userId, bool enabled = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(applicationPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(userId);
@@ -328,7 +391,7 @@ internal static class ScheduledTaskDefinition
                         new XElement(Namespace + "StopOnIdleEnd", false),
                         new XElement(Namespace + "RestartOnIdle", false)),
                     new XElement(Namespace + "AllowStartOnDemand", true),
-                    new XElement(Namespace + "Enabled", true),
+                    new XElement(Namespace + "Enabled", enabled),
                     new XElement(Namespace + "Hidden", false),
                     new XElement(Namespace + "RunOnlyIfIdle", false),
                     new XElement(Namespace + "WakeToRun", false),
@@ -367,13 +430,38 @@ internal static class ScheduledTaskDefinition
                 string.Equals(principal?.Element(ns + "LogonType")?.Value, "InteractiveToken", StringComparison.Ordinal) &&
                 IsLeastPrivilege(principal?.Element(ns + "RunLevel")?.Value) &&
                 IsSameUser(trigger?.Element(ns + "UserId")?.Value, userId) &&
-                string.Equals(action?.Element(ns + "Command")?.Value, Path.GetFullPath(applicationPath), StringComparison.OrdinalIgnoreCase) &&
+                IsInstallationCommand(action?.Element(ns + "Command")?.Value, applicationPath) &&
                 string.Equals(action?.Element(ns + "Arguments")?.Value, AutostartCommand.BackgroundArgument, StringComparison.Ordinal);
         }
         catch (Exception exception) when (exception is System.Xml.XmlException or InvalidOperationException or ArgumentException)
         {
             return false;
         }
+    }
+
+    internal static bool UsesCommand(string xml, string command)
+    {
+        try
+        {
+            var task = XDocument.Parse(xml).Root;
+            return task is not null && string.Equals(
+                task.Element(task.Name.Namespace + "Actions")?.Element(task.Name.Namespace + "Exec")?
+                    .Element(task.Name.Namespace + "Command")?.Value,
+                Path.GetFullPath(command), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception exception) when (exception is System.Xml.XmlException or InvalidOperationException or ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsInstallationCommand(string? command, string applicationPath)
+    {
+        var fullPath = Path.GetFullPath(applicationPath);
+        if (string.Equals(command, fullPath, StringComparison.OrdinalIgnoreCase)) return true;
+        return Path.GetFileName(fullPath).Equals("resodrive.exe", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(command, Path.Combine(Path.GetDirectoryName(fullPath)!, ApplicationLauncher.FileName),
+                StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsLeastPrivilege(string? runLevel) =>

@@ -24,6 +24,41 @@
     <Icon Id="resodrive.ico" SourceFile="$(var.IconSource)" />
     <Property Id="ARPPRODUCTICON" Value="resodrive.ico" />
     <Property Id="RDRIVE_FROM_SETUP" Secure="yes" />
+    <!-- Legacy updaters retain their original executable and activation paths.
+         A compatibility-aware updater or current Setup opts in to relocation. -->
+    <Property Id="RDRIVE_MIGRATE_INSTALL" Secure="yes" />
+    <Property Id="RDRIVE_PREVIOUS_INSTALL_ROOT" Secure="yes">
+      <!-- Frozen published SampleProfiles keypath. No Signature row: CompLocator
+           returns its containing directory rather than requiring a file signature. -->
+      <ComponentSearch Id="PreviousInstallFolder" Guid="2E1BB141-3D85-4177-8498-54A0833D2B23" Type="file" />
+    </Property>
+    <Property Id="RDRIVE_REGISTERED_INSTALL_ROOT" Secure="yes">
+      <RegistrySearch Id="RegisteredInstallFolder" Root="HKLM"
+        Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\[WIX_UPGRADE_DETECTED]"
+        Name="InstallLocation" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="RDRIVE_INSTALLED_ROOT" Secure="yes">
+      <RegistrySearch Id="OwnRegisteredInstallFolder" Root="HKLM"
+        Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\[ProductCode]"
+        Name="InstallLocation" Type="raw" Bitness="always64" />
+    </Property>
+    <SetProperty Id="RDRIVE_PREVIOUS_INSTALL_ROOT" Value="[RDRIVE_REGISTERED_INSTALL_ROOT]"
+      Before="CostFinalize" Sequence="both" Condition="WIX_UPGRADE_DETECTED AND RDRIVE_REGISTERED_INSTALL_ROOT" />
+    <SetProperty Id="INSTALLFOLDER" Value="[RDRIVE_PREVIOUS_INSTALL_ROOT]"
+      After="SetRDRIVE_PREVIOUS_INSTALL_ROOT" Sequence="both"
+      Condition="WIX_UPGRADE_DETECTED AND RDRIVE_PREVIOUS_INSTALL_ROOT AND RDRIVE_MIGRATE_INSTALL &lt;&gt; &quot;1&quot;" />
+    <!-- Repair/removal of this product must use its registered location, even
+         when this compatibility release was first installed into rdrive. -->
+    <SetProperty Id="INSTALLFOLDER" Action="RestoreInstalledFolder" Value="[RDRIVE_INSTALLED_ROOT]"
+      After="SetINSTALLFOLDER" Sequence="both" Condition="Installed AND RDRIVE_INSTALLED_ROOT" />
+    <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" Sequence="execute" />
+    <Property Id="RDRIVE_MIGRATED_FROM" Secure="yes">
+      <RegistrySearch Id="PreviousInstallMigration" Root="HKLM" Key="SOFTWARE\ResoDrive\Installation"
+        Name="LegacyInstallLocation" Type="raw" Bitness="always64" />
+    </Property>
+    <SetProperty Id="RDRIVE_MIGRATED_FROM" Value="[RDRIVE_PREVIOUS_INSTALL_ROOT]"
+      After="CostFinalize" Sequence="execute"
+      Condition="WIX_UPGRADE_DETECTED AND RDRIVE_PREVIOUS_INSTALL_ROOT AND RDRIVE_PREVIOUS_INSTALL_ROOT ~&lt;&gt; INSTALLFOLDER" />
     <!-- A legacy hidden MSI still has a visible Burn owner. Let Setup migrate
          that owner natively; an MSI-only update would leave two removable entries. -->
     <Property Id="RDRIVE_PREVIOUS_SYSTEM_COMPONENT" Secure="yes">
@@ -38,6 +73,23 @@
     </Property>
     <Property Id="RDRIVE_DATA_ROOT" Secure="yes" />
     <SetProperty Id="RDRIVE_DATA_ROOT" Value="[LocalAppDataFolder]rdrive" Before="CostFinalize" Sequence="execute" Condition="NOT RDRIVE_DATA_ROOT" />
+    <!-- Respect an administrator's existing per-executable WER policy as a whole.
+         The ownership marker permits our own policy to be replaced by a major upgrade. -->
+    <Property Id="RDRIVE_WER_OWNED" Secure="yes">
+      <RegistrySearch Id="WerPolicyOwner" Root="HKLM" Key="SOFTWARE\ResoDrive\Diagnostics" Name="LocalDumpsOwned" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="RDRIVE_WER_FOLDER" Secure="yes">
+      <RegistrySearch Id="ExistingWerFolder" Root="HKLM" Key="SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\resodrive.exe" Name="DumpFolder" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="RDRIVE_WER_COUNT" Secure="yes">
+      <RegistrySearch Id="ExistingWerCount" Root="HKLM" Key="SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\resodrive.exe" Name="DumpCount" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="RDRIVE_WER_TYPE" Secure="yes">
+      <RegistrySearch Id="ExistingWerType" Root="HKLM" Key="SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\resodrive.exe" Name="DumpType" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="RDRIVE_WER_FLAGS" Secure="yes">
+      <RegistrySearch Id="ExistingWerFlags" Root="HKLM" Key="SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\resodrive.exe" Name="CustomDumpFlags" Type="raw" Bitness="always64" />
+    </Property>
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch $(var.ResoDriveProductName)" />
     <netfx:DotNetCompatibilityCheck
@@ -46,6 +98,14 @@
       Platform="x64"
       Version="$(var.DotNetDesktopRuntimeMinimumVersion)"
       RollForward="minor"
+    />
+    <Launch
+      Condition="NOT (WIX_UPGRADE_DETECTED &gt;&lt; &quot;;&quot;)"
+      Message="Multiple ResoDrive installations are registered. Repair or remove the older entries in Windows Settings, then run the latest ResoDrive-Setup.exe again."
+    />
+    <Launch
+      Condition="Installed OR NOT WIX_UPGRADE_DETECTED OR RDRIVE_PREVIOUS_INSTALL_ROOT"
+      Message="The previous ResoDrive installation folder could not be verified. Repair that installation in Windows Settings before updating with the latest ResoDrive-Setup.exe."
     />
     <Launch
       Condition="Installed OR DOTNET_DESKTOP_RUNTIME_CHECK = 0"
@@ -57,7 +117,7 @@
     />
 
     <StandardDirectory Id="ProgramFiles64Folder">
-      <Directory Id="INSTALLFOLDER" Name="rdrive" />
+      <Directory Id="INSTALLFOLDER" Name="ResoDrive" ComponentGuidGenerationSeed="$(var.ResoDriveComponentSeed)" />
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder">
       <Directory Id="ApplicationProgramsFolder" Name="$(var.ResoDriveProductName)" />
@@ -66,9 +126,10 @@
     <ComponentGroup Id="ApplicationFiles" Directory="INSTALLFOLDER">
       <Files Include="$(var.PackageSource)\**">
         <Exclude Files="$(var.PackageSource)\$(var.ResoDriveExecutableName)" />
+        <Exclude Files="$(var.PackageSource)\resodrive-launcher.exe" />
         <Exclude Files="$(var.PackageSource)\profiles.sample.json" />
       </Files>
-      <Component Id="SampleProfiles" Guid="2E1BB141-3D85-4177-8498-54A0833D2B23">
+      <Component Id="SampleProfiles" Guid="*">
         <File Id="SampleProfilesFile" Source="$(var.PackageSource)\profiles.sample.json" KeyPath="yes" />
       </Component>
       <Component Id="ResoDriveExecutable" Guid="*">
@@ -76,7 +137,10 @@
           Id="ResoDriveExecutableFile"
           Source="$(var.PackageSource)\$(var.ResoDriveExecutableName)"
           KeyPath="yes"
-        >
+        />
+      </Component>
+      <Component Id="ResoDriveLauncher" Guid="*">
+        <File Id="ResoDriveLauncherFile" Source="$(var.PackageSource)\resodrive-launcher.exe" KeyPath="yes">
           <Shortcut
             Id="ResoDriveStartMenuShortcut"
             Directory="ApplicationProgramsFolder"
@@ -94,13 +158,37 @@
           On="uninstall"
         />
       </Component>
+      <Component Id="ResoDriveLocalDumps" Guid="4FD2C558-1556-4B77-A6A3-BB16B2CCF592" Bitness="always64"
+        NeverOverwrite="yes" Condition="RDRIVE_WER_OWNED = &quot;#1&quot; OR NOT (RDRIVE_WER_FOLDER OR RDRIVE_WER_COUNT OR RDRIVE_WER_TYPE OR RDRIVE_WER_FLAGS)">
+        <!-- Registry values are MSI-formatted: escape the percent signs so this
+             remains REG_EXPAND_SZ for the crashing user, never the installing admin. -->
+        <RegistryValue Root="HKLM" Key="SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\resodrive.exe"
+          Name="DumpFolder" Type="expandable" Value="[\%]LOCALAPPDATA[\%]\rdrive-diagnostics\dumps" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\resodrive.exe"
+          Name="DumpCount" Type="integer" Value="3" />
+        <RegistryValue Root="HKLM" Key="SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\resodrive.exe"
+          Name="DumpType" Type="integer" Value="2" />
+        <RegistryValue Root="HKLM" Key="SOFTWARE\ResoDrive\Diagnostics"
+          Name="LocalDumpsOwned" Type="integer" Value="1" />
+      </Component>
+      <!-- Machine-owned receipt authorizes migration of each user's exact old
+           startup task after a real MSI relocation. Carry it through later upgrades. -->
+      <Component Id="ResoDriveInstallMigration" Guid="82FBFCB2-D17C-4D0C-8141-6C41C7E38F86"
+        Bitness="always64" Condition="(Installed OR WIX_UPGRADE_DETECTED) AND RDRIVE_MIGRATED_FROM">
+        <RegistryValue Root="HKLM" Key="SOFTWARE\ResoDrive\Installation"
+          Name="LegacyInstallLocation" Type="string" Value="[RDRIVE_MIGRATED_FROM]" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="SOFTWARE\ResoDrive\Installation"
+          Name="InstallLocation" Type="string" Value="[INSTALLFOLDER]" />
+        <RegistryValue Root="HKLM" Key="SOFTWARE\ResoDrive\Installation"
+          Name="UpgradeCode" Type="string" Value="$(var.ResoDriveUpgradeCode)" />
+      </Component>
     </ComponentGroup>
 
     <ui:WixUI Id="WixUI_Minimal" />
 
     <CustomAction
       Id="LaunchResoDrive"
-      FileRef="ResoDriveExecutableFile"
+      FileRef="ResoDriveLauncherFile"
       ExeCommand=""
       Execute="immediate"
       Return="asyncNoWait"
@@ -108,6 +196,12 @@
     />
     <!-- Always use preparation code shipped by THIS package, including for legacy upgrades. -->
     <Binary Id="ResoDriveInstallationHelper" SourceFile="$(var.PackageSource)\$(var.ResoDriveExecutableName)" />
+    <CustomAction
+      Id="PreparePreviousResoDriveForUpgrade"
+      BinaryRef="ResoDriveInstallationHelper"
+      ExeCommand="--prepare-install &quot;[RDRIVE_PREVIOUS_INSTALL_ROOT].&quot; [UILevel] &quot;[RDRIVE_DATA_ROOT]\.&quot;"
+      Execute="immediate" Return="check" Impersonate="yes"
+    />
     <CustomAction
       Id="PrepareInstalledResoDriveForUpgrade"
       BinaryRef="ResoDriveInstallationHelper"
@@ -135,6 +229,8 @@
         Drain work before replacing or removing installed files. Match processes
         by installation path so portable copies are never stopped.
       -->
+      <Custom Action="PreparePreviousResoDriveForUpgrade" Before="PrepareInstalledResoDriveForUpgrade"
+        Condition="WIX_UPGRADE_DETECTED AND RDRIVE_PREVIOUS_INSTALL_ROOT AND RDRIVE_PREVIOUS_INSTALL_ROOT ~&lt;&gt; INSTALLFOLDER" />
       <Custom
         Action="PrepareInstalledResoDriveForUpgrade"
         Before="InstallValidate"
@@ -148,6 +244,7 @@
     </InstallExecuteSequence>
 
     <UI>
+      <ProgressText Action="PreparePreviousResoDriveForUpgrade" Message="Safely stopping the previous ResoDrive installation" />
       <ProgressText Action="PrepareInstalledResoDriveForUpgrade" Message="Safely stopping ResoDrive before installation" />
       <Publish
         Dialog="ExitDialog"

@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory)][string]$SetupPath,
     [string]$PreviousVersion = '',
+    [string]$LegacySetupVersion = '0.3.20',
     [string]$SameVersionBaselineMsiPath = '',
     [string]$SameVersionBaselineSetupPath = '',
     [string]$CandidateMsiPath = ''
@@ -25,10 +26,13 @@ if ([string]::IsNullOrWhiteSpace($PreviousVersion)) {
     $PreviousVersion = $previousVersions[0].ToString()
 }
 if ($PreviousVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid previous version.' }
+if ($LegacySetupVersion -notmatch '^\d+\.\d+\.\d+$' -or [version]$LegacySetupVersion -ge $targetVersion) { throw 'The hidden-MSI Setup fixture must be an older published version.' }
 Write-Output "Testing upgrade from public ResoDrive $PreviousVersion."
 $setup = (Resolve-Path -LiteralPath $SetupPath).Path
-$app = Join-Path $env:ProgramFiles 'rdrive\resodrive.exe'
-if (Test-Path -LiteralPath $app) { throw 'Refusing to overwrite a pre-existing installation.' }
+$app = Join-Path $env:ProgramFiles 'ResoDrive\resodrive.exe'
+$legacyApp = Join-Path $env:ProgramFiles 'rdrive\resodrive.exe'
+$launcher = Join-Path $env:ProgramFiles 'ResoDrive\resodrive-launcher.exe'
+if ((Test-Path -LiteralPath $app) -or (Test-Path -LiteralPath $legacyApp)) { throw 'Refusing to overwrite a pre-existing installation.' }
 $testRoot = Join-Path $env:RUNNER_TEMP 'resodrive-installer-smoke'
 New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
 $oldDataRoot = $env:RDRIVE_DATA_DIR
@@ -46,12 +50,90 @@ $managedCopy = Join-Path $env:RDRIVE_DATA_DIR 'managed-sync\00000000000000000000
 New-Item -ItemType Directory -Path (Split-Path -Parent $managedCopy) -Force | Out-Null
 [IO.File]::WriteAllText($managedCopy, 'Managed copies survive upgrades and uninstall; only an accepted remote wipe removes them.')
 $managedCopyHash = (Get-FileHash -LiteralPath $managedCopy).Hash
+# Disposable fixture only: use the real persisted filenames and unchanged DPAPI
+# entropy, without a configured remote or an enabled mount.
+$config = Join-Path $env:RDRIVE_DATA_DIR 'rclone.conf'
+$secret = Join-Path $env:RDRIVE_DATA_DIR 'config-pass.dpapi'
+[IO.File]::WriteAllText($config, '', [Text.Encoding]::ASCII)
+$fixtureSecret = [Text.Encoding]::UTF8.GetBytes('disposable-installer-smoke-password')
+$fixtureEntropy = [Text.Encoding]::UTF8.GetBytes('rdrive/rclone/config-password/v1')
+$protectedSecret = [Security.Cryptography.ProtectedData]::Protect($fixtureSecret, $fixtureEntropy,
+    [Security.Cryptography.DataProtectionScope]::CurrentUser)
+[IO.File]::WriteAllText($secret, [Convert]::ToBase64String($protectedSecret), [Text.Encoding]::ASCII)
+$configHash = (Get-FileHash -LiteralPath $config).Hash
+$secretHash = (Get-FileHash -LiteralPath $secret).Hash
 
-function Invoke-Installer([string]$Executable, [string]$Arguments, [switch]$ExpectFailure) {
+$werKeyPath = 'SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps'
+function Get-WerPolicySnapshot([string]$KeyPath) {
+    $base = $key = $null
+    try {
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+            [Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+        $key = $base.OpenSubKey($KeyPath)
+        if ($null -eq $key) { return '<absent>' }
+        $values = @($key.GetValueNames() | Sort-Object | ForEach-Object {
+            [ordered]@{
+                Name = $_
+                Kind = $key.GetValueKind($_).ToString()
+                Value = $key.GetValue($_, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            }
+        })
+        return ConvertTo-Json -InputObject $values -Depth 5 -Compress
+    } finally {
+        if ($null -ne $key) { $key.Dispose() }
+        if ($null -ne $base) { $base.Dispose() }
+    }
+}
+function Get-GlobalWerPolicySnapshot {
+    $snapshot = Get-WerPolicySnapshot $werKeyPath
+    # Creating/removing a child key can leave an empty parent; only global
+    # policy values matter, not the existence of that empty container.
+    if ($snapshot -ceq '<absent>') { return '[]' }
+    return $snapshot
+}
+$initialGlobalWerPolicy = Get-GlobalWerPolicySnapshot
+if ((Get-WerPolicySnapshot "$werKeyPath\resodrive.exe") -cne '<absent>') {
+    throw 'The disposable runner has an existing ResoDrive WER policy; leave administrator settings unchanged.'
+}
+function Assert-WerPolicy {
+    if ((Get-GlobalWerPolicySnapshot) -cne $initialGlobalWerPolicy) {
+        throw 'Installation changed the global Windows Error Reporting policy.'
+    }
+    $base = $key = $owner = $null
+    try {
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+            [Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+        $key = $base.OpenSubKey("$werKeyPath\resodrive.exe")
+        $owner = $base.OpenSubKey('SOFTWARE\ResoDrive\Diagnostics')
+        if ($null -eq $key -or $null -eq $owner -or $owner.GetValue('LocalDumpsOwned') -ne 1) {
+            throw 'The installed candidate did not create its owned per-executable WER policy.'
+        }
+        if ($key.GetValueKind('DumpFolder') -ne [Microsoft.Win32.RegistryValueKind]::ExpandString -or
+            $key.GetValue('DumpFolder', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) -cne '%LOCALAPPDATA%\rdrive-diagnostics\dumps' -or
+            $key.GetValueKind('DumpCount') -ne [Microsoft.Win32.RegistryValueKind]::DWord -or $key.GetValue('DumpCount') -ne 3 -or
+            $key.GetValueKind('DumpType') -ne [Microsoft.Win32.RegistryValueKind]::DWord -or $key.GetValue('DumpType') -ne 2) {
+            throw 'Installed WER policy does not contain user-expanded bounded full-dump settings.'
+        }
+    } finally {
+        foreach ($item in @($owner, $key, $base)) { if ($null -ne $item) { $item.Dispose() } }
+    }
+}
+function Assert-WerPolicyRemoved {
+    $snapshot = Get-WerPolicySnapshot "$werKeyPath\resodrive.exe"
+    if ($snapshot -cnotin @('<absent>', '[]')) {
+        throw 'Uninstall left installer-owned per-executable Windows Error Reporting settings.'
+    }
+    if ((Get-GlobalWerPolicySnapshot) -cne $initialGlobalWerPolicy) {
+        throw 'Uninstall changed the pre-existing global Windows Error Reporting policy.'
+    }
+}
+
+function Invoke-Installer([string]$Executable, [string]$Arguments, [switch]$ExpectFailure, [switch]$LegacyUpdater) {
     # Windows Installer's service does not inherit process-local RDRIVE_DATA_DIR.
     # Pass the isolated root through the supported bundle/MSI property instead.
     if ([IO.Path]::GetFileName($Executable) -ieq 'msiexec.exe') {
         $Arguments += " RDRIVE_DATA_ROOT=`"$([IO.Path]::TrimEndingDirectorySeparator($env:RDRIVE_DATA_DIR))\.`""
+        if (-not $LegacyUpdater) { $Arguments += ' RDRIVE_MIGRATE_INSTALL=1' }
     } else {
         $Arguments += " ResoDriveDataRoot=`"$env:RDRIVE_DATA_DIR`""
     }
@@ -68,20 +150,26 @@ function Invoke-Installer([string]$Executable, [string]$Arguments, [switch]$Expe
 function Assert-DataPreserved {
     if ((Get-FileHash -LiteralPath $settings).Hash -ne $settingsHash -or
         (Get-FileHash -LiteralPath $marker).Hash -ne $markerHash -or
-        (Get-FileHash -LiteralPath $managedCopy).Hash -ne $managedCopyHash) { throw 'Installation changed user settings, cache or managed copies.' }
+        (Get-FileHash -LiteralPath $managedCopy).Hash -ne $managedCopyHash -or
+        (Get-FileHash -LiteralPath $config).Hash -ne $configHash -or
+        (Get-FileHash -LiteralPath $secret).Hash -ne $secretHash) { throw 'Installation changed user settings, cache, managed copies or disposable credential/config fixtures.' }
+    $decoded = [Security.Cryptography.ProtectedData]::Unprotect(
+        [Convert]::FromBase64String([IO.File]::ReadAllText($secret)), $fixtureEntropy,
+        [Security.Cryptography.DataProtectionScope]::CurrentUser)
+    if ([Text.Encoding]::UTF8.GetString($decoded) -cne 'disposable-installer-smoke-password') { throw 'The preserved DPAPI secret no longer decrypts.' }
 }
-function Start-TestApplication {
-    if (-not (Test-Path -LiteralPath $app)) { throw 'The installed app is missing.' }
-    $process = Start-Process -FilePath $app -WindowStyle Hidden -PassThru
+function Start-TestApplication([string]$Executable = $app) {
+    if (-not (Test-Path -LiteralPath $Executable)) { throw 'The installed app is missing.' }
+    $process = Start-Process -FilePath $Executable -WindowStyle Hidden -PassThru
     Start-Sleep -Seconds 5
     $process.Refresh()
     if ($process.HasExited) { throw 'The installed application exited unexpectedly.' }
     return $process
 }
-function Assert-Stopped($Process) {
+function Assert-Stopped($Process, [string]$Executable = $app) {
     try {
         if (-not $Process.WaitForExit(15000)) { throw 'Installer left the old application running.' }
-        $remaining = @(Get-Process resodrive -ErrorAction SilentlyContinue | Where-Object Path -EQ $app)
+        $remaining = @(Get-Process resodrive -ErrorAction SilentlyContinue | Where-Object Path -EQ $Executable)
         if ($remaining.Count -gt 0) { throw 'Installer left a background host running.' }
     } finally { $Process.Dispose() }
 }
@@ -163,12 +251,12 @@ function Assert-BundleCount([int]$Expected) {
     if ($entries.Count -ne $Expected) { throw "Expected $Expected related bundle entries, found: $($entries -join ', ')." }
 }
 
-function Assert-OneRemovableAppEntry {
-    Assert-OneRelatedMsiProduct $candidateProductCode
+function Assert-OneRemovableAppEntry([string]$ProductCode = $candidateProductCode, [string]$Version = $expectedVersion) {
+    Assert-OneRelatedMsiProduct $ProductCode
     Assert-BundleCount 0
-    $entry = Get-ItemProperty -LiteralPath "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$candidateProductCode"
+    $entry = Get-ItemProperty -LiteralPath "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$ProductCode"
     $hidden = $entry.PSObject.Properties['SystemComponent']
-    if (($null -ne $hidden -and $hidden.Value -eq 1) -or $entry.DisplayVersion -ne $expectedVersion) {
+    if (($null -ne $hidden -and $hidden.Value -eq 1) -or $entry.DisplayVersion -ne $Version) {
         throw 'The current MSI is not a visible, correctly versioned Windows app entry.'
     }
 }
@@ -183,11 +271,164 @@ function Assert-VerifiedAsset([string]$Path) {
     return $hash
 }
 
-function Assert-CandidateInstalled {
-    if ((Get-FileHash -LiteralPath $app -Algorithm SHA256).Hash -ine $candidateAppHash -or
-        (Get-Item -LiteralPath $app).VersionInfo.ProductVersion -cne $candidateProductVersion) {
+function Assert-CandidateInstalled([string]$Executable = $app) {
+    if (-not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $Executable) 'resodrive-launcher.exe') -PathType Leaf)) { throw 'The installed native launcher is missing.' }
+    Assert-WerPolicy
+    if ((Get-FileHash -LiteralPath $Executable -Algorithm SHA256).Hash -ine $candidateAppHash -or
+        (Get-Item -LiteralPath $Executable).VersionInfo.ProductVersion -cne $candidateProductVersion) {
         throw 'The installed executable does not match the exact candidate bundle payload.'
     }
+    Assert-NativeInstalledLocator $Executable $expectedVersion
+}
+
+function Assert-NativeInstalledLocator([string]$Executable, [string]$Version) {
+    $oldPath = $env:RDRIVE_TEST_INSTALLED_MSI_PATH
+    $oldVersion = $env:RDRIVE_TEST_INSTALLED_MSI_VERSION
+    try {
+        $env:RDRIVE_TEST_INSTALLED_MSI_PATH = $Executable
+        $env:RDRIVE_TEST_INSTALLED_MSI_VERSION = $Version
+        dotnet test (Join-Path $PSScriptRoot 'ResoDrive.Windows.Tests') -c Release --no-build --no-restore `
+            --filter FullyQualifiedName~NativeWindowsInstallerCatalogFindsExactIsolatedInstalledApplication
+        if ($LASTEXITCODE -ne 0) { throw 'Real Windows Installer registration lookup failed.' }
+    } finally {
+        $env:RDRIVE_TEST_INSTALLED_MSI_PATH = $oldPath
+        $env:RDRIVE_TEST_INSTALLED_MSI_VERSION = $oldVersion
+    }
+}
+
+function Assert-MigrationReceipt {
+    $receipt = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\ResoDrive\Installation'
+    if ([IO.Path]::TrimEndingDirectorySeparator($receipt.LegacyInstallLocation) -ine (Split-Path -Parent $legacyApp) -or
+        [IO.Path]::TrimEndingDirectorySeparator($receipt.InstallLocation) -ine (Split-Path -Parent $app) -or
+        $receipt.UpgradeCode.Trim('{}') -ine $sameVersionUpgradeCode.Trim('{}')) { throw 'The installed migration receipt does not prove the exact related-product relocation.' }
+}
+
+$startupFixtureCreated = $false
+$startupFixtureName = $null
+function Get-StartupFixtureFolder {
+    $service = New-Object -ComObject Schedule.Service
+    try { $service.Connect(); return $service.GetFolder('\') }
+    finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($service) | Out-Null }
+}
+function Test-StartupFixtureExists($Folder) {
+    $tasks = $Folder.GetTasks(1) # Include disabled tasks.
+    try {
+        for ($index = 1; $index -le $tasks.Count; $index++) {
+            $task = $tasks.Item($index)
+            try { if ($task.Name -ceq $startupFixtureName) { return $true } }
+            finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($task) | Out-Null }
+        }
+        return $false
+    } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($tasks) | Out-Null }
+}
+function New-DisabledStartupFixture {
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($sid)))
+    $script:startupFixtureName = 'ResoDrive Startup - ' + $hash.Substring(0, 12)
+    $folder = Get-StartupFixtureFolder
+    try {
+        if (Test-StartupFixtureExists $folder) {
+            throw 'Refusing to replace a pre-existing startup task on the hosted runner.'
+        }
+        $command = [Security.SecurityElement]::Escape($legacyApp)
+        $directory = [Security.SecurityElement]::Escape((Split-Path -Parent $legacyApp))
+        $xml = @"
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>Starts ResoDrive for this user at sign-in. Managed by ResoDrive.</Description></RegistrationInfo>
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>$sid</UserId></LogonTrigger></Triggers>
+  <Principals><Principal id="CurrentUser"><UserId>$sid</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings><Enabled>false</Enabled></Settings>
+  <Actions Context="CurrentUser"><Exec><Command>$command</Command><Arguments>--background</Arguments><WorkingDirectory>$directory</WorkingDirectory></Exec></Actions>
+</Task>
+"@
+        # TASK_CREATE only; never replace an unrelated definition after the check.
+        $registered = $folder.RegisterTask($startupFixtureName, $xml, 2, $null, $null, 3, $null)
+        [Runtime.InteropServices.Marshal]::FinalReleaseComObject($registered) | Out-Null
+        $script:startupFixtureCreated = $true
+    } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($folder) | Out-Null }
+}
+function Assert-DisabledStartupFixtureMigrated {
+    $folder = Get-StartupFixtureFolder
+    $task = $null
+    try {
+        $task = $folder.GetTask($startupFixtureName)
+        if ($task.Enabled) { throw 'Migration enabled a disabled startup task.' }
+        $xml = [xml]$task.Xml
+        $ns = [Xml.XmlNamespaceManager]::new($xml.NameTable)
+        $ns.AddNamespace('t', 'http://schemas.microsoft.com/windows/2004/02/mit/task')
+        $actions = $xml.SelectNodes('/t:Task/t:Actions/*', $ns)
+        $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        if ($actions.Count -ne 1 -or $actions[0].LocalName -cne 'Exec' -or
+            $actions[0].SelectSingleNode('t:Command', $ns).InnerText -ine $launcher -or
+            $actions[0].SelectSingleNode('t:Arguments', $ns).InnerText -cne '--background' -or
+            $xml.SelectSingleNode('/t:Task/t:Principals/t:Principal/t:UserId', $ns).InnerText -cne $sid -or
+            $xml.SelectSingleNode('/t:Task/t:Principals/t:Principal/t:LogonType', $ns).InnerText -cne 'InteractiveToken' -or
+            $xml.SelectSingleNode('/t:Task/t:Principals/t:Principal/t:RunLevel', $ns).InnerText -cne 'LeastPrivilege' -or
+            $xml.SelectSingleNode('/t:Task/t:Triggers/t:LogonTrigger/t:UserId', $ns).InnerText -cne $sid) {
+            throw 'The receipt-backed startup migration did not preserve the exact user, privilege, activation and disabled-state contract.'
+        }
+    } finally {
+        foreach ($item in @($task, $folder)) { if ($null -ne $item) { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($item) | Out-Null } }
+    }
+}
+function Remove-StartupFixture {
+    if (-not $startupFixtureCreated) { return }
+    $folder = Get-StartupFixtureFolder
+    try { if (Test-StartupFixtureExists $folder) { $folder.DeleteTask($startupFixtureName, 0) } }
+    finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($folder) | Out-Null }
+}
+
+function Invoke-CopiedUpdater([string]$Source, [string]$Msi, [string]$Version, [string]$ExpectedExecutable) {
+    $updates = Join-Path $env:RDRIVE_DATA_DIR 'updates'
+    New-Item -ItemType Directory -Path $updates -Force | Out-Null
+    $helper = Join-Path $updates 'resodrive-update-helper.exe'
+    $stagedMsi = Join-Path $updates "resodrive-win-x64-$Version.msi"
+    $outcome = Join-Path $updates 'application-update-result.json'
+    Copy-Item -LiteralPath $Source -Destination $helper -Force
+    Copy-Item -LiteralPath $Msi -Destination $stagedMsi -Force
+    if (Test-Path -LiteralPath $outcome) { Remove-Item -LiteralPath $outcome }
+    $parent = Start-Process -FilePath (Join-Path ([Environment]::SystemDirectory) 'cmd.exe') -ArgumentList '/c exit 0' -WindowStyle Hidden -PassThru
+    try { $parentId = $parent.Id; $parent.WaitForExit() } finally { $parent.Dispose() }
+    $arguments = '--complete-update ' + $Version + ' "' + $stagedMsi + '" "' + $Source + '" "' + $Source + '" "' + $outcome + '" ' +
+        (Get-FileHash -LiteralPath $stagedMsi -Algorithm SHA256).Hash + ' ' + $parentId
+    $oldHandoff = $env:RDRIVE_UPDATE_HANDOFF_DIR
+    $env:RDRIVE_UPDATE_HANDOFF_DIR = $updates
+    try {
+        $process = Start-Process -FilePath $helper -ArgumentList $arguments -WindowStyle Hidden -PassThru
+        try {
+            if (-not $process.WaitForExit(240000)) { throw 'Copied updater timed out.' }
+            if ($process.ExitCode -ne 0) { throw "Copied updater failed ($($process.ExitCode))." }
+        } finally { $process.Dispose() }
+    } finally { $env:RDRIVE_UPDATE_HANDOFF_DIR = $oldHandoff }
+    $result = Get-Content -LiteralPath $outcome -Raw | ConvertFrom-Json
+    Copy-Item -LiteralPath $outcome -Destination (Join-Path $testRoot "update-outcome-$Version-$([IO.Path]::GetFileName((Split-Path -Parent $ExpectedExecutable))).json") -Force
+    if ($result.status -cne 'succeeded' -or -not $result.finalized -or -not $result.relaunchAcknowledged) { throw 'Copied updater did not confirm the updated window was ready.' }
+    Assert-NativeInstalledLocator $ExpectedExecutable $Version
+}
+
+function New-FutureMigrationFixture {
+    $nextVersion = '{0}.{1}.{2}' -f $targetVersion.Major, $targetVersion.Minor, ($targetVersion.Build + 1)
+    $root = Join-Path $testRoot 'future-fixture'
+    $payload = Join-Path $root 'payload'
+    $published = Join-Path $root 'managed'
+    New-Item -ItemType Directory -Path $payload -Force | Out-Null
+    Copy-Item -Path (Join-Path ([IO.Path]::GetDirectoryName($setup)) 'resodrive\*') -Destination $payload -Recurse -Force
+    dotnet publish (Join-Path $PSScriptRoot '..\src\ResoDrive.App\ResoDrive.App.csproj') -c Release -r win-x64 --self-contained false --no-restore `
+        --output $published "-p:VersionPrefix=$nextVersion" | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw 'Temporary future fixture publish failed.' }
+    Get-ChildItem -LiteralPath $published -File | Where-Object { $_.Extension -ne '.pdb' -and $_.Name -ne 'packages.lock.json' } |
+        Copy-Item -Destination $payload -Force
+    . (Join-Path $PSScriptRoot '..\installer\ComponentIdentity.ps1')
+    $props = $project.SelectSingleNode('/Project/PropertyGroup')
+    dotnet build (Join-Path $PSScriptRoot '..\installer\ResoDrive.Installer.wixproj') -c Release --no-restore --output $root `
+        "-p:PackageSource=$payload" "-p:ResoDriveVersion=$nextVersion" '-p:ResoDriveRuntime=win-x64' `
+        "-p:ResoDriveComponentSeed=$(Get-ResoDriveComponentSeed $nextVersion)" "-p:ResoDriveUpgradeCode=$sameVersionUpgradeCode" `
+        "-p:ResoDriveProductName=$($props.ProductDisplayName)" "-p:ResoDrivePublisher=$($props.ProductPublisher)" `
+        "-p:ResoDriveDescription=$($props.ProductDescription.Replace('%', '%25').Replace(';', '%3B').Replace(',', '%2C'))" `
+        '-p:ResoDriveExecutableBaseName=resodrive' '-p:ResoDriveExecutableName=resodrive.exe' | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw 'Temporary future fixture MSI build failed.' }
+    return [pscustomobject]@{ Version = $nextVersion; Msi = (Join-Path $root "resodrive-win-x64-$nextVersion.msi");
+        AppHash = (Get-FileHash -LiteralPath (Join-Path $payload 'resodrive.exe')).Hash }
 }
 
 $sameVersionPaths = @($SameVersionBaselineMsiPath, $SameVersionBaselineSetupPath, $CandidateMsiPath)
@@ -236,22 +477,30 @@ try {
     $candidateProductVersion = (Get-Item -LiteralPath $app).VersionInfo.ProductVersion
     if (($candidateProductVersion -split '\+', 2)[0] -cne $expectedVersion) { throw 'Fresh installation has an unexpected product version.' }
     Assert-OneRemovableAppEntry
+    Assert-WerPolicy
+    Assert-NativeInstalledLocator $app $expectedVersion
+    & (Join-Path $PSScriptRoot 'native-crash-smoke.ps1') -MonitorPath $launcher -VerifyWer -VerifyClipboard
+    Assert-DataPreserved
     Invoke-Installer $setup "/uninstall /quiet /norestart /log `"$testRoot\unsupported-setup-uninstall.log`"" -ExpectFailure
     Assert-CandidateInstalled
     Assert-OneRemovableAppEntry
     $running = Start-TestApplication
     Invoke-Installer $setup "/repair /quiet /norestart /log `"$testRoot\repair.log`""
     Assert-Stopped $running
+    Assert-WerPolicy
     Assert-OneRemovableAppEntry
     Assert-DataPreserved
     $running = Start-TestApplication
     Invoke-Installer $msiexec "/x $candidateProductCode /quiet /norestart /l*v `"$testRoot\uninstall.log`""
     Assert-Stopped $running
     if (Test-Path -LiteralPath $app) { throw 'Uninstall left the application executable.' }
+    Assert-WerPolicyRemoved
     Assert-BundleCount 0
     Assert-DataPreserved
 
-    # Upgrade the preceding public MSI while its application is running.
+    # Older copied updaters must retain their original relaunch/activation path.
+    # Then a real newer helper opts in to relocation using a separately published
+    # increasing-version fixture, never a mismatched MSI/application version.
     $name = "resodrive-win-x64-$PreviousVersion.msi"
     $previous = Join-Path $testRoot $name
     $url = "https://github.com/alphasixtyfive/ResoDrive/releases/download/v$PreviousVersion/$name"
@@ -262,33 +511,84 @@ try {
     if (-not $match.Success -or $match.Groups[2].Value -cne $name -or
         (Get-FileHash -LiteralPath $previous).Hash -ine $match.Groups[1].Value) { throw 'Previous installer checksum is invalid.' }
     Invoke-Installer $msiexec "/i `"$previous`" /quiet /norestart /l*v `"$testRoot\previous.log`""
-    $running = Start-TestApplication
-    Invoke-Installer $msiexec "/i `"$candidateMsi`" /quiet /norestart /l*v `"$testRoot\upgrade.log`""
-    Assert-Stopped $running
-    Assert-CandidateInstalled
+    if (-not (Test-Path -LiteralPath $legacyApp) -or (Test-Path -LiteralPath $app)) { throw 'The public baseline must install into rdrive.' }
+    $running = Start-TestApplication $legacyApp
+    Invoke-CopiedUpdater $legacyApp $candidateMsi $expectedVersion $legacyApp
+    if (-not $running.WaitForExit(15000)) { throw 'The old UI survived its copied updater.' }
+    $running.Dispose()
+    Assert-CandidateInstalled $legacyApp
+    if (Test-Path -LiteralPath $app) { throw 'The legacy updater prematurely moved its activation path.' }
     Assert-OneRemovableAppEntry
     Assert-DataPreserved
-    $running = Start-TestApplication
-    Invoke-Installer $msiexec "/x $candidateProductCode /quiet /norestart /l*v `"$testRoot\upgrade-uninstall.log`""
-    Assert-Stopped $running
-    if (Test-Path -LiteralPath $app) { throw 'Upgraded application was not removed.' }
+
+    # Maintenance must restore the own-product registered location even though
+    # Setup/MSI authoring defaults to ResoDrive and repair passes migration=1.
+    $current = @(Get-Process resodrive -ErrorAction SilentlyContinue | Where-Object Path -EQ $legacyApp | Where-Object MainWindowHandle -NE 0)
+    if ($current.Count -ne 1) { throw 'The compatibility updater did not relaunch exactly one UI.' }
+    Invoke-Installer $msiexec "/i `"$candidateMsi`" REINSTALL=ALL REINSTALLMODE=amus /quiet /norestart /l*v `"$testRoot\compatibility-repair.log`""
+    Assert-Stopped $current[0] $legacyApp
+    Assert-CandidateInstalled $legacyApp
+    if (Test-Path -LiteralPath $app) { throw 'Repair relocated an installed product.' }
+    $future = New-FutureMigrationFixture
+    $futureCode = Get-MsiProperty $future.Msi 'ProductCode'
+    $legacyUnowned = Join-Path (Split-Path -Parent $legacyApp) 'user-owned-preserve.txt'
+    [IO.File]::WriteAllText($legacyUnowned, 'Installer must not recursively delete unrelated old-directory files.')
+    New-DisabledStartupFixture
+    $running = Start-TestApplication $legacyApp
+    Invoke-CopiedUpdater $legacyApp $future.Msi $future.Version $app
+    if (-not $running.WaitForExit(15000)) { throw 'The compatibility UI survived its relocation updater.' }
+    $running.Dispose()
+    if ((Test-Path -LiteralPath $legacyApp) -or (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $legacyApp) 'resodrive-launcher.exe'))) { throw 'Migration left duplicate old application files.' }
+    if (-not (Test-Path -LiteralPath $legacyUnowned)) { throw 'Migration removed an unrelated file in the previous installation folder.' }
+    Assert-MigrationReceipt
+    Assert-DisabledStartupFixtureMigrated
+    Assert-OneRemovableAppEntry $futureCode $future.Version
+    Assert-WerPolicy
+    if ((Get-FileHash -LiteralPath $app).Hash -ine $future.AppHash) { throw 'The future fixture installed different managed binaries.' }
+    Assert-DataPreserved
+    Invoke-Installer $msiexec "/x $futureCode /quiet /norestart /l*v `"$testRoot\future-uninstall.log`""
+    if ((Test-Path -LiteralPath $app) -or (Test-Path -LiteralPath $legacyApp)) { throw 'Migration uninstall left an executable.' }
+    Assert-WerPolicyRemoved
+    Assert-DataPreserved
+    Remove-Item -LiteralPath $legacyUnowned
+
+    # Skipping this candidate must still preserve .30's hardcoded activation path.
+    Invoke-Installer $msiexec "/i `"$previous`" /quiet /norestart /l*v `"$testRoot\skip-baseline.log`""
+    $running = Start-TestApplication $legacyApp
+    Invoke-CopiedUpdater $legacyApp $future.Msi $future.Version $legacyApp
+    if (-not $running.WaitForExit(15000)) { throw 'Skipped-version updater left the old UI alive.' }
+    $running.Dispose()
+    Assert-OneRemovableAppEntry $futureCode $future.Version
+    if ((Test-Path -LiteralPath $app) -or (Get-FileHash -LiteralPath $legacyApp).Hash -ine $future.AppHash) { throw 'Skipped-version legacy update failed to preserve its registered folder.' }
+    Assert-DataPreserved
+    Invoke-Installer $msiexec "/x $futureCode /quiet /norestart /l*v `"$testRoot\skip-uninstall.log`""
+    if (Test-Path -LiteralPath $legacyApp) { throw 'Skipped-version uninstall left its executable.' }
+    Assert-WerPolicyRemoved
     Assert-DataPreserved
 
     # A legacy Setup owns a hidden MSI. Reject MSI-only migration before any
     # preparation or replacement, then let native Burn remove its own old entry.
-    $previousSetupName = "resodrive-win-x64-$PreviousVersion-setup.exe"
+    # v0.3.20 is a frozen published hidden-MSI/Burn fixture. The latest public
+    # v0.3.30 Setup already has corrected MSI ownership and cannot cover this case.
+    $previousSetupName = "resodrive-win-x64-$LegacySetupVersion-setup.exe"
     $previousSetup = Join-Path $testRoot $previousSetupName
-    $previousSetupUrl = "https://github.com/alphasixtyfive/ResoDrive/releases/download/v$PreviousVersion/$previousSetupName"
+    $previousSetupUrl = "https://github.com/alphasixtyfive/ResoDrive/releases/download/v$LegacySetupVersion/$previousSetupName"
     Invoke-WebRequest -Uri $previousSetupUrl -OutFile $previousSetup
     Invoke-WebRequest -Uri "$previousSetupUrl.sha256" -OutFile ($previousSetup + '.sha256')
     Assert-VerifiedAsset $previousSetup | Out-Null
     Invoke-Installer $previousSetup "/install /quiet /norestart /log `"$testRoot\legacy-setup.log`""
     Assert-BundleCount 1
-    $legacyHash = (Get-FileHash -LiteralPath $app).Hash
-    $running = Start-TestApplication
+    $legacyProducts = @(Get-RelatedMsiProducts $sameVersionUpgradeCode)
+    if ($legacyProducts.Count -ne 1) { throw 'The legacy Setup did not register exactly one related MSI.' }
+    $legacyEntry = Get-ItemProperty -LiteralPath "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$($legacyProducts[0])"
+    if ($legacyEntry.SystemComponent -ne 1 -or $legacyEntry.DisplayVersion -cne $LegacySetupVersion) {
+        throw 'The frozen legacy Setup fixture does not own a hidden MSI of the expected version.'
+    }
+    $legacyHash = (Get-FileHash -LiteralPath $legacyApp).Hash
+    $running = Start-TestApplication $legacyApp
     $blockedLog = Join-Path $testRoot 'legacy-msi-blocked.log'
     Invoke-Installer $msiexec "/i `"$candidateMsi`" /quiet /norestart /l*v `"$blockedLog`"" -ExpectFailure
-    if ((Get-FileHash -LiteralPath $app).Hash -ine $legacyHash -or $running.HasExited) {
+    if ((Get-FileHash -LiteralPath $legacyApp).Hash -ine $legacyHash -or $running.HasExited) {
         throw 'The rejected MSI migration changed or stopped the legacy installation.'
     }
     if (-not (Select-String -LiteralPath $blockedLog -Pattern 'Use ResoDrive-Setup\.exe to update this installation' -Quiet) -or
@@ -298,8 +598,10 @@ try {
     Assert-BundleCount 1
     Assert-DataPreserved
     Invoke-Installer $setup "/install /quiet /norestart /log `"$testRoot\legacy-setup-migration.log`""
-    Assert-Stopped $running
+    Assert-Stopped $running $legacyApp
     Assert-CandidateInstalled
+    Assert-MigrationReceipt
+    if (Test-Path -LiteralPath $legacyApp) { throw 'Current Setup left a duplicate legacy application.' }
     Assert-OneRemovableAppEntry
     Assert-DataPreserved
     $running = Start-TestApplication
@@ -307,10 +609,12 @@ try {
     # Reinstall maintenance accepts the root and exercises the same native repair.
     Invoke-Installer $msiexec "/i `"$candidateMsi`" REINSTALL=ALL REINSTALLMODE=amus /quiet /norestart /l*v `"$testRoot\migrated-msi-repair.log`""
     Assert-Stopped $running
+    Assert-WerPolicy
     Assert-OneRemovableAppEntry
     Assert-DataPreserved
     Invoke-Installer $msiexec "/x $candidateProductCode /quiet /norestart /l*v `"$testRoot\migrated-msi-uninstall.log`""
     if (Test-Path -LiteralPath $app) { throw 'The migrated MSI could not remove the application.' }
+    Assert-WerPolicyRemoved
     Assert-BundleCount 0
     Assert-DataPreserved
     if ($sameVersionRecovery) {
@@ -362,6 +666,8 @@ try {
         Passed = $true
         Version = $expectedVersion
         PreviousPublicVersion = $PreviousVersion
+        LegacyHiddenMsiSetupVersion = $LegacySetupVersion
+        LegacyHiddenMsiSetupSha256 = (Get-FileHash -LiteralPath $previousSetup).Hash
         OneRemovableMsiEntry = $true
         RetainedSetupBundleEntries = 0
         DirectMsiUpgradePassed = $true
@@ -369,17 +675,28 @@ try {
         LegacySetupMigrationPassed = $true
         RunningAppRepairAndRemovalPassed = $true
         UserDataPreserved = $true
+        DisposableDpapiSecretAndConfigPreserved = $true
+        LegacyCopiedUpdaterPreservedActivation = $true
+        CompatibilityRepairPreservedRegisteredLocation = $true
+        ModernCopiedUpdaterRelocationAcknowledged = $true
+        OwnedDisabledStartupTaskMigrated = $true
+        SkippedVersionLegacyUpdaterPreservedActivation = $true
+        FutureFixtureVersion = $future.Version
+        FutureFixtureMsiSha256 = (Get-FileHash -LiteralPath $future.Msi).Hash
+        InstalledWerPolicyVerified = $true
+        ActualWerDumpVerified = $true
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $testRoot 'installer-ownership-result.json') -Encoding utf8
     Write-Output 'Installer smoke passed: one removable app entry, fresh install, running-app repair/removal, direct MSI upgrade, blocked legacy MSI migration, native Setup migration and preserved user data.'
 } finally {
     try {
-        foreach ($diagnosticRoot in @($env:RDRIVE_DATA_DIR, (Join-Path $env:LOCALAPPDATA 'rdrive'))) {
-            foreach ($relative in @('logs\resodrive-ui.log', 'updates\installer-preparation.json')) {
-                $diagnostic = Join-Path $diagnosticRoot $relative
-                if (Test-Path -LiteralPath $diagnostic) {
-                    $prefix = if ($diagnosticRoot -eq $env:RDRIVE_DATA_DIR) { 'isolated-' } else { 'default-' }
-                    Copy-Item -LiteralPath $diagnostic -Destination (Join-Path $testRoot ($prefix + [IO.Path]::GetFileName($diagnostic) + '.log'))
-                }
+        Remove-StartupFixture
+        if ((Get-GlobalWerPolicySnapshot) -cne $initialGlobalWerPolicy) {
+            throw 'Installer lifecycle changed the pre-existing global Windows Error Reporting policy.'
+        }
+        foreach ($relative in @('logs\resodrive-ui.log', 'updates\installer-preparation.json')) {
+            $diagnostic = Join-Path $env:RDRIVE_DATA_DIR $relative
+            if (Test-Path -LiteralPath $diagnostic) {
+                Copy-Item -LiteralPath $diagnostic -Destination (Join-Path $testRoot ('isolated-' + [IO.Path]::GetFileName($diagnostic) + '.log'))
             }
         }
     } finally { $env:RDRIVE_DATA_DIR = $oldDataRoot }

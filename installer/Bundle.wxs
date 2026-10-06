@@ -20,8 +20,8 @@
         Theme="hyperlinkLicense" ThemeFile="SetupTheme.xml"
         LicenseUrl="https://github.com/alphasixtyfive/ResoDrive/blob/main/LICENSE"
         LogoFile="$(var.LogoSource)" SuppressOptionsUI="yes"
-        LaunchTarget="[ProgramFiles64Folder]rdrive\resodrive.exe"
-        LaunchWorkingFolder="[ProgramFiles64Folder]rdrive" />
+        LaunchTarget="[ProgramFiles64Folder]ResoDrive\resodrive-launcher.exe"
+        LaunchWorkingFolder="[ProgramFiles64Folder]ResoDrive" />
       <Payload SourceFile="$(var.IconSource)" Name="app.ico" />
     </BootstrapperApplication>
 
@@ -54,6 +54,7 @@
       <!-- Windows Installer owns app maintenance; Burn only installs this final package. -->
       <MsiPackage SourceFile="$(var.MsiSource)" Compressed="yes" Vital="yes" Permanent="yes" Visible="yes">
         <MsiProperty Name="RDRIVE_FROM_SETUP" Value="1" />
+        <MsiProperty Name="RDRIVE_MIGRATE_INSTALL" Value="1" />
         <MsiProperty Name="RDRIVE_DATA_ROOT" Value="[ResoDriveDataRoot]" Condition="ResoDriveDataRoot" />
       </MsiPackage>
     </Chain>

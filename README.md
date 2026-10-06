@@ -94,6 +94,11 @@ Application and rclone downloads can continue from a partial file after a droppe
 connection, which avoids starting large transfers again on metered or satellite links.
 Downloads can be cancelled from Settings and resumed later.
 
+For the portable package, open `resodrive-launcher.exe` beside `resodrive.exe`.
+The launcher has no splash screen. If startup fails, it can show a Windows error
+dialog even when .NET has not started. See [crash diagnostics](docs/CRASH-DIAGNOSTICS.md)
+for local logs and optional memory dumps.
+
 Left-click the tray icon, or choose **Transfers** in its menu, to see queued uploads,
 active sync jobs, modified files waiting to close, and upload errors. Active sync
 jobs show their direction, progress and speed; finished and idle jobs stay out of
@@ -157,7 +162,7 @@ have their own options and do not inherit mount cache or timeout flags.
 <details>
 <summary><strong>Build from source</strong></summary>
 
-Install the .NET 10 SDK, then run:
+Install the .NET 10 SDK and Visual Studio C++ x64 Build Tools with the Windows SDK, then run:
 
 ```powershell
 dotnet test resodrive.slnx --configuration Release

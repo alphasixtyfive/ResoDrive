@@ -41,6 +41,12 @@ credentials, private service addresses, configuration files, or unredacted logs.
 - Diagnostic exports use an allowlist of component versions, numeric performance
   options, enumerated states and UI error IDs. They do not include raw configuration,
   raw exception messages, process arguments, server addresses, paths or account names.
+- Installed copies configure bounded Windows Error Reporting full memory dumps.
+  Dumps can contain credentials and file contents; they are separate sensitive
+  local evidence, never automatically exported or uploaded. The native reporter's
+  copied summary contains process/build and correlated event metadata. OS dump
+  files live outside the managed account directory and are outside its remote-wipe
+  cleanup contract. Review [crash diagnostics](CRASH-DIAGNOSTICS.md) before sharing.
 - Mount upload statistics are fetched from authenticated IPv4 loopback control
   endpoints with proxies and redirects disabled, a three-second deadline, and a
   bounded response size. An unavailable result is never presented as zero uploads.

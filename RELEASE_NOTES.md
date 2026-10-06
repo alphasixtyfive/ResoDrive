@@ -1,14 +1,10 @@
-This update cleans up drive settings, transfer status and the log, and fixes a few rough edges when setting up or updating ResoDrive.
+ResoDrive 0.3.31 is an unpublished acceptance build for crash diagnostics and installation-folder compatibility.
 
-- Routine upload checks stay quiet. Transfer progress appears when there is work to show, and drive cards give activity and warnings their own space.
-- Drive settings open straight away with a small loading message. The server address and port are clearly read-only, field values stay stable while loading, and drive-letter choices avoid letters already in use.
-- Settings have more breathing room, shorter labels and consistent Advanced sections. Reconnect attempts use an Unlimited checkbox or a numeric limit from 1 to 100.
-- Setup and sync catch invalid inputs before connecting or saving. Errors appear beside the relevant controls, and custom values are preserved when an option is switched off.
-- The log shows compact entries with timestamps, useful details and room for the scrollbar. Extra event popups and oversized blocks are gone.
-- Sidebar icons line up consistently with their labels, including Settings.
-- Installation and updates use one progress window. Pending uploads still block installation and explain what needs attention.
-- Windows keeps one app entry for repair and removal. Setup no longer leaves a separate entry behind after installing the app.
+- Unexpected startup and process failures show a standard Windows error dialog with Copy details and access to local diagnostics. Normal startup has no splash screen.
+- Installed copies use Windows Error Reporting to collect up to three full dumps. Startup and host logs retain error references and build/runtime details. Matching symbols are retained separately for analysis.
+- Fresh installations use Program Files\ResoDrive. Older in-app updaters retain their registered folder for a compatibility update; the newer updater can then migrate through Windows Installer and reopen the installed app correctly.
+- Settings, credentials, queued-upload cache and other account data remain in their existing location. Upload protection continues to block unsafe installation.
 
-This release includes all of the changes from the withdrawn 0.3.25 update and the fixes reviewed in the local test builds.
+Memory dumps may contain sensitive data. They stay local and are not sent automatically. Copy details provides a small diagnostic summary; dumps are separate, optional support attachments.
 
-Download **ResoDrive-Setup.exe** below. If an older version was installed using Setup, use this download for this update. It replaces the old installer entry and preserves your settings and cache. After that, you can use the in-app updater normally.
+These changes improve diagnosis. They do not yet establish or fix the cause of the reported vessel runtime crash. Publication requires the installer lifecycle, UAC and actual prior-version updater acceptance checks in docs/RELEASING.md.

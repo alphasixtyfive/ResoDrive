@@ -23,12 +23,10 @@ public partial class MainWindow
                 "host.not_found",
                 $"{ProductInfo.Name} was not found at '{hostPath}'."
             );
-        using var hostProcess = Process.Start(new ProcessStartInfo(hostPath, "--host")
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = AppContext.BaseDirectory,
-        }) ?? throw new InvalidOperationException("The background host could not be started.");
+        var startInfo = ApplicationLauncher.CreateStartInfo(hostPath);
+        startInfo.ArgumentList.Add("--host");
+        using var hostProcess = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("The background host could not be started.");
         return null;
     }
 

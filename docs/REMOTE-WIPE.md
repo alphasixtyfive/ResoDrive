@@ -71,6 +71,14 @@ deploying a device. Upload-source folders, arbitrary exports and copies moved ou
 of managed storage are not wiped. Other WebDAV services, SFTP and connections
 without a recovered Nextcloud wipe entry cannot enable managed local copies.
 
+Windows crash dumps are also outside the account-directory cleanup scope. An
+installed copy can retain up to three full memory dumps in
+`%LOCALAPPDATA%\rdrive-diagnostics\dumps`; these may contain credentials or file
+contents captured before a wipe. They are local diagnostic evidence, not managed
+download copies, and are not sent automatically. Review and manage this separate
+retention according to the deployment's requirements; see
+[crash diagnostics](CRASH-DIAGNOSTICS.md).
+
 ## Send the wipe request
 
 ### One device: the account owner's web UI
