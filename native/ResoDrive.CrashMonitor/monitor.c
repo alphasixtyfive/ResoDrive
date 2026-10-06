@@ -379,11 +379,18 @@ static void record_incident(void) {
     StringCchPrintfW(when, ARRAYSIZE(when), L"%04u-%02u-%02uT%02u:%02u:%02u.%03uZ",
         utc.wYear, utc.wMonth, utc.wDay, utc.wHour, utc.wMinute, utc.wSecond, utc.wMilliseconds);
     // The supportedOS manifest makes GetVersionEx report the actual Windows build.
+    USHORT processMachine = IMAGE_FILE_MACHINE_UNKNOWN, nativeMachine = IMAGE_FILE_MACHINE_UNKNOWN;
+    const wchar_t *nativeArchitecture = L"unavailable";
+    if (IsWow64Process2(GetCurrentProcess(), &processMachine, &nativeMachine)) {
+        if (nativeMachine == IMAGE_FILE_MACHINE_AMD64) nativeArchitecture = L"x64";
+        else if (nativeMachine == IMAGE_FILE_MACHINE_ARM64) nativeArchitecture = L"ARM64";
+        else if (nativeMachine == IMAGE_FILE_MACHINE_I386) nativeArchitecture = L"x86";
+    }
     OSVERSIONINFOW version = {0};
     version.dwOSVersionInfoSize = sizeof(version);
 #pragma warning(push)
 #pragma warning(disable: 4996)
-    if (GetVersionExW(&version)) StringCchPrintfW(os, ARRAYSIZE(os), L"Windows %lu.%lu build %lu (x64)", version.dwMajorVersion, version.dwMinorVersion, version.dwBuildNumber);
+    if (GetVersionExW(&version)) StringCchPrintfW(os, ARRAYSIZE(os), L"Windows %lu.%lu build %lu (native architecture: %s)", version.dwMajorVersion, version.dwMinorVersion, version.dwBuildNumber, nativeArchitecture);
     else StringCchCopyW(os, ARRAYSIZE(os), L"unavailable");
 #pragma warning(pop)
     StringCchCopyW(incident.utc, ARRAYSIZE(incident.utc), when);
@@ -397,7 +404,7 @@ static void record_incident(void) {
         L"Event: %s\r\nRole: %s\r\nProcess ID: %lu\r\nProcess creation FILETIME: %llu\r\n"
         L"Failure already displayed by application: %s\r\n"
         L"Exit code: 0x%08lX (%lu)\r\nWindows message: %s\r\n"
-        L"Executable: %.4096s\r\nFile version: %s\r\nExecutable file SHA-256 at observer startup: %s\r\nOS: %s\r\n"
+        L"Executable: %.4096s\r\nFile version: %s\r\nExecutable file SHA-256 at observer startup: %s\r\nOS: %s\r\nObserver/application package architecture: x64\r\n"
         L"Observer inherited error mode: 0x%08lX\r\nObserver normalized error mode: 0x%08lX (child mode is not inspected)\r\n"
         L"WER capture settings: %s\r\n"
         L"Managed startup/exception details: consult the application's guarded logs.\r\n"

@@ -9,6 +9,23 @@ namespace ResoDrive.Windows.Tests;
 public sealed class ApplicationUpdateServiceTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RelativeAssetLinksFailValidationWithoutARequest(bool relativeChecksum)
+    {
+        using var client = new HttpClient(new NoRequestHandler());
+        var service = new ApplicationUpdateService(client, ProductLinks.LatestRelease);
+        var installer = new Uri(ProductLinks.Repository.AbsoluteUri +
+            "/releases/download/v0.3.0/resodrive-win-x64-0.3.0.msi");
+        var update = new ApplicationUpdateCheck("0.2.29", "0.3.0", true, ProductLinks.LatestRelease,
+            relativeChecksum ? installer : new Uri("installer.msi", UriKind.Relative),
+            relativeChecksum ? new Uri("installer.msi.sha256", UriKind.Relative) : new Uri(installer.AbsoluteUri + ".sha256"));
+        var result = await service.DownloadInstallerAsync(update, Path.GetTempPath());
+        Assert.False(result.Succeeded);
+        Assert.Equal("app.update_download_invalid", result.Error?.Code);
+    }
+
+    [Theory]
     [InlineData(false, "resodrive-win-x64-0.3.0.msi")]
     [InlineData(true, "resodrive-win-x64-0.3.0-compatibility.msi")]
     public async Task CheckKeepsTheDeliberatelySelectedBuildVariant(bool compatibilityMode, string fileName)

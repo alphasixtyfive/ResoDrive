@@ -98,26 +98,6 @@ if (Test-Path -LiteralPath $resolvedArtifacts) {
         Remove-Item -Recurse -Force
 }
 
-foreach ($generatedPath in @(
-    $stageRoot,
-    $packageOutput,
-    $archiveOutput,
-    $archiveChecksumOutput,
-    $msiOutput,
-    $msiChecksumOutput,
-    $setupOutput,
-    $setupChecksumOutput
-)) {
-    $resolvedParent = [IO.Path]::GetFullPath((Split-Path -Parent $generatedPath))
-    $resolvedArtifacts = [IO.Path]::GetFullPath($artifactRoot)
-    if (-not $resolvedParent.StartsWith($resolvedArtifacts, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "Refusing to clean a build path outside $artifactRoot."
-    }
-    if (Test-Path -LiteralPath $generatedPath) {
-        Remove-Item -LiteralPath $generatedPath -Recurse -Force
-    }
-}
-
 dotnet restore (Join-Path $projectRoot 'resodrive.slnx') --locked-mode
 if ($LASTEXITCODE -ne 0) { throw "Restore failed with exit code $LASTEXITCODE." }
 dotnet restore (Join-Path $projectRoot 'installer\ResoDrive.Installer.wixproj') --locked-mode

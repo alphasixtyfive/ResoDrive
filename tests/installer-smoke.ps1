@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory)][string]$SetupPath,
     [string]$PreviousVersion = '',
+    [string]$LegacyUpdaterVersion = '0.3.30',
     [string]$LegacySetupVersion = '0.3.20',
     [string]$SameVersionBaselineMsiPath = '',
     [string]$SameVersionBaselineSetupPath = '',
@@ -26,7 +27,8 @@ if ([string]::IsNullOrWhiteSpace($PreviousVersion)) {
     if ($previousVersions.Count -eq 0) { throw 'No earlier public installer is available.' }
     $PreviousVersion = $previousVersions[0].ToString()
 }
-if ($PreviousVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid previous version.' }
+if ($PreviousVersion -notmatch '^\d+\.\d+\.\d+$' -or [version]$PreviousVersion -ge $targetVersion) { throw 'The previous public version must be older than the candidate.' }
+if ($LegacyUpdaterVersion -notmatch '^\d+\.\d+\.\d+$' -or [version]$LegacyUpdaterVersion -ge $targetVersion) { throw 'The frozen legacy updater must be older than the candidate.' }
 if ($LegacySetupVersion -notmatch '^\d+\.\d+\.\d+$' -or [version]$LegacySetupVersion -ge $targetVersion) { throw 'The hidden-MSI Setup fixture must be an older published version.' }
 Write-Output "Testing upgrade from public ResoDrive $PreviousVersion."
 $setup = (Resolve-Path -LiteralPath $SetupPath).Path
@@ -270,6 +272,20 @@ function Assert-VerifiedAsset([string]$Path) {
         throw "Asset checksum does not match '$Path'."
     }
     return $hash
+}
+
+function Get-VerifiedPublicMsi([string]$Version) {
+    $name = "resodrive-win-x64-$Version.msi"
+    $path = Join-Path $testRoot $name
+    $url = "https://github.com/alphasixtyfive/ResoDrive/releases/download/v$Version/$name"
+    Invoke-WebRequest -Uri $url -OutFile $path
+    Invoke-WebRequest -Uri "$url.sha256" -OutFile ($path + '.sha256')
+    Assert-VerifiedAsset $path | Out-Null
+    if ((Get-MsiProperty $path 'ProductVersion') -cne $Version -or
+        (Get-MsiProperty $path 'UpgradeCode') -ine $sameVersionUpgradeCode) {
+        throw 'The published MSI does not match the requested version and product family.'
+    }
+    return $path
 }
 
 function Assert-CandidateInstalled([string]$Executable = $app) {
@@ -522,15 +538,14 @@ function Save-IsolatedUpdaterEvidence([string]$UpdatesDirectory, [string]$Destin
 }
 
 function Invoke-CopiedUpdater([string]$Source, [string]$Msi, [string]$Version,
-    [string]$ExpectedExecutable, [string]$ExpectedSha256) {
+    [string]$ExpectedExecutable, [string]$ExpectedSha256, [switch]$LegacyProtocol) {
     $sourceVersion = (Get-Item -LiteralPath $Source).VersionInfo.ProductVersion
     $updates = Join-Path $env:RDRIVE_DATA_DIR 'updates'
     New-Item -ItemType Directory -Path $updates -Force | Out-Null
     $helper = Join-Path $updates 'resodrive-update-helper.exe'
     # Frozen legacy helpers require the original filename. The new compatibility
     # helper retains its explicit variant in the filename and checksum contract.
-    $sourceNumericVersion = [version](($sourceVersion -split '\+', 2)[0])
-    $variantSuffix = if ($CompatibilityMode -and $sourceNumericVersion -ge $targetVersion) { '-compatibility' } else { '' }
+    $variantSuffix = if ($CompatibilityMode -and -not $LegacyProtocol) { '-compatibility' } else { '' }
     $stagedMsi = Join-Path $updates "resodrive-win-x64-$Version$variantSuffix.msi"
     $outcome = Join-Path $updates 'application-update-result.json'
     Copy-Item -LiteralPath $Source -Destination $helper -Force
@@ -739,22 +754,40 @@ try {
     Assert-BundleCount 0
     Assert-DataPreserved
 
-    # Older copied updaters must retain their original relaunch/activation path.
-    # Then a real newer helper opts in to relocation using a separately published
-    # increasing-version fixture, never a mismatched MSI/application version.
-    $name = "resodrive-win-x64-$PreviousVersion.msi"
-    $previous = Join-Path $testRoot $name
-    $url = "https://github.com/alphasixtyfive/ResoDrive/releases/download/v$PreviousVersion/$name"
-    Invoke-WebRequest -Uri $url -OutFile $previous
-    $checksum = (Invoke-WebRequest -Uri "$url.sha256").Content
-    if ($checksum -is [byte[]]) { $checksum = [Text.Encoding]::ASCII.GetString($checksum) }
-    $match = [regex]::Match($checksum.Trim(), '\A([0-9a-fA-F]{64})\s+\*?(.+)\z')
-    if (-not $match.Success -or $match.Groups[2].Value -cne $name -or
-        (Get-FileHash -LiteralPath $previous).Hash -ine $match.Groups[1].Value) { throw 'Previous installer checksum is invalid.' }
+    # Cover the actual previous public MSI independently of the frozen updater
+    # protocol. Its fresh installation can be either legacy or canonical.
+    $latestPublic = Get-VerifiedPublicMsi $PreviousVersion
+    $latestPublicCode = Get-MsiProperty $latestPublic 'ProductCode'
+    Invoke-Installer $msiexec "/i `"$latestPublic`" /quiet /norestart /l*v `"$testRoot\latest-public-baseline.log`""
+    Assert-OneRemovableAppEntry $latestPublicCode $PreviousVersion
+    $latestPublicApps = @(@($app, $legacyApp) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+    if ($latestPublicApps.Count -ne 1) { throw 'The previous public MSI must install exactly one application.' }
+    $latestPublicApp = $latestPublicApps[0]
+    Assert-NativeInstalledLocator $latestPublicApp $PreviousVersion
+    Assert-DataPreserved
+    $running = Start-TestApplication $latestPublicApp
+    Invoke-Installer $setup "/install /quiet /norestart /log `"$testRoot\latest-public-upgrade.log`""
+    Assert-Stopped $running $latestPublicApp
+    Assert-CandidateInstalled
+    Assert-OneRemovableAppEntry
+    if (Test-Path -LiteralPath $legacyApp) { throw 'The current Setup left an old application after the latest public upgrade.' }
+    Assert-DataPreserved
+    $running = Start-TestApplication
+    Invoke-Installer $msiexec "/x $candidateProductCode /quiet /norestart /l*v `"$testRoot\latest-public-uninstall.log`""
+    Assert-Stopped $running
+    if ((Test-Path -LiteralPath $app) -or (Test-Path -LiteralPath $legacyApp)) { throw 'The latest public upgrade uninstall left an application.' }
+    Assert-WerPolicyRemoved
+    if (@(Get-RelatedMsiProducts $sameVersionUpgradeCode).Count -ne 0) { throw 'The latest public upgrade uninstall left a registered product.' }
+    Assert-BundleCount 0
+    Assert-DataPreserved
+
+    # Frozen older copied updaters must retain their original activation path.
+    # A current helper then relocates an independently published future version.
+    $previous = if ($LegacyUpdaterVersion -ceq $PreviousVersion) { $latestPublic } else { Get-VerifiedPublicMsi $LegacyUpdaterVersion }
     Invoke-Installer $msiexec "/i `"$previous`" /quiet /norestart /l*v `"$testRoot\previous.log`""
-    if (-not (Test-Path -LiteralPath $legacyApp) -or (Test-Path -LiteralPath $app)) { throw 'The public baseline must install into rdrive.' }
+    if (-not (Test-Path -LiteralPath $legacyApp) -or (Test-Path -LiteralPath $app)) { throw 'The frozen legacy updater baseline must install into rdrive.' }
     $running = Start-TestApplication $legacyApp
-    Invoke-CopiedUpdater $legacyApp $candidateMsi $expectedVersion $legacyApp $candidateAppHash
+    Invoke-CopiedUpdater $legacyApp $candidateMsi $expectedVersion $legacyApp $candidateAppHash -LegacyProtocol
     if (-not $running.WaitForExit(15000)) { throw 'The old UI survived its copied updater.' }
     $running.Dispose()
     Assert-CandidateInstalled $legacyApp
@@ -766,7 +799,14 @@ try {
     # Setup/MSI authoring defaults to ResoDrive and repair passes migration=1.
     $current = @(Get-Process resodrive -ErrorAction SilentlyContinue | Where-Object Path -EQ $legacyApp | Where-Object MainWindowHandle -NE 0)
     if ($current.Count -ne 1) { throw 'The compatibility updater did not relaunch exactly one UI.' }
-    Invoke-Installer $msiexec "/i `"$candidateMsi`" REINSTALL=ALL REINSTALLMODE=amus /quiet /norestart /l*v `"$testRoot\compatibility-repair.log`""
+    # Windows Installer records the source filename used at installation. The
+    # frozen updater intentionally stages the original name, even when supplied
+    # the compatibility fixture. Repair must use that same verified source.
+    $repairMsi = Join-Path $env:RDRIVE_DATA_DIR "updates\resodrive-win-x64-$expectedVersion.msi"
+    if ((Get-FileHash -LiteralPath $repairMsi).Hash -ine (Get-FileHash -LiteralPath $candidateMsi).Hash) {
+        throw 'The legacy-updater repair source differs from the accepted candidate.'
+    }
+    Invoke-Installer $msiexec "/i `"$repairMsi`" REINSTALL=ALL REINSTALLMODE=amus /quiet /norestart /l*v `"$testRoot\compatibility-repair.log`""
     Assert-Stopped $current[0] $legacyApp
     Assert-CandidateInstalled $legacyApp
     if (Test-Path -LiteralPath $app) { throw 'Repair relocated an installed product.' }
@@ -844,7 +884,7 @@ try {
     # Skipping this candidate must still preserve .30's hardcoded activation path.
     Invoke-Installer $msiexec "/i `"$previous`" /quiet /norestart /l*v `"$testRoot\skip-baseline.log`""
     $running = Start-TestApplication $legacyApp
-    Invoke-CopiedUpdater $legacyApp $future.Msi $future.Version $legacyApp $future.AppHash
+    Invoke-CopiedUpdater $legacyApp $future.Msi $future.Version $legacyApp $future.AppHash -LegacyProtocol
     if (-not $running.WaitForExit(15000)) { throw 'Skipped-version updater left the old UI alive.' }
     $running.Dispose()
     Assert-OneRemovableAppEntry $futureCode $future.Version
@@ -957,6 +997,8 @@ try {
         CompatibilityChoicePreservedByModernUpdater = $true
         Version = $expectedVersion
         PreviousPublicVersion = $PreviousVersion
+        LatestPublicUpgradePassed = $true
+        FrozenLegacyUpdaterVersion = $LegacyUpdaterVersion
         LegacyHiddenMsiSetupVersion = $LegacySetupVersion
         LegacyHiddenMsiSetupSha256 = (Get-FileHash -LiteralPath $previousSetup).Hash
         OneRemovableMsiEntry = $true

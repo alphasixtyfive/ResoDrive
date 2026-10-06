@@ -242,7 +242,7 @@ public sealed partial class ApplicationUpdateService
     private static bool TryReadRelease(Uri? uri, out Version version)
     {
         version = null!;
-        if (uri is null || uri.Scheme != Uri.UriSchemeHttps ||
+        if (uri is null || !uri.IsAbsoluteUri || uri.Scheme != Uri.UriSchemeHttps ||
             !uri.Host.Equals(ProductLinks.Repository.Host, StringComparison.OrdinalIgnoreCase))
             return false;
         var prefix = ProductLinks.Repository.AbsolutePath.TrimEnd('/') + "/releases/tag/v";
@@ -255,7 +255,7 @@ public sealed partial class ApplicationUpdateService
     private bool IsTrustedAsset(Uri uri, string version, bool checksum)
     {
         var repositoryPath = ProductLinks.Repository.AbsolutePath.TrimEnd('/');
-        return uri.Scheme == Uri.UriSchemeHttps &&
+        return uri.IsAbsoluteUri && uri.Scheme == Uri.UriSchemeHttps &&
         uri.IsDefaultPort && string.IsNullOrEmpty(uri.UserInfo) &&
         string.IsNullOrEmpty(uri.Query) && string.IsNullOrEmpty(uri.Fragment) &&
         uri.Host.Equals(ProductLinks.Repository.Host, StringComparison.OrdinalIgnoreCase) &&
