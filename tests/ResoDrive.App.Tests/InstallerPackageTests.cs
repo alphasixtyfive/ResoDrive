@@ -185,6 +185,40 @@ public sealed class InstallerPackageTests
     }
 
     [Fact]
+    public void MigrationReceiptSourceIsCalculatedBeforeCostingFromTheFinalSelectedDirectory()
+    {
+        // Component conditions are evaluated during costing. Computing the source
+        // afterward silently omits the receipt even when relocation succeeds.
+        var document = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Package.wxs"));
+        var canonical = Assert.Single(document.Descendants(Wix + "SetProperty"), item =>
+            (string?)item.Attribute("Action") == "SetCanonicalInstallFolder");
+        Assert.Equal("[ProgramFiles64Folder]ResoDrive\\", (string?)canonical.Attribute("Value"));
+        Assert.Equal("SetINSTALLFOLDER", (string?)canonical.Attribute("After"));
+        Assert.Equal("both", (string?)canonical.Attribute("Sequence"));
+        Assert.Equal("NOT Installed AND WIX_UPGRADE_DETECTED AND RDRIVE_PREVIOUS_INSTALL_ROOT AND RDRIVE_MIGRATE_INSTALL = \"1\" AND ProgramFiles64Folder", (string?)canonical.Attribute("Condition"));
+        var repair = Assert.Single(document.Descendants(Wix + "SetProperty"), item =>
+            (string?)item.Attribute("Action") == "RestoreInstalledFolder");
+        Assert.Equal("SetCanonicalInstallFolder", (string?)repair.Attribute("After"));
+        var source = Assert.Single(document.Descendants(Wix + "SetProperty"), item =>
+            (string?)item.Attribute("Id") == "RDRIVE_MIGRATED_FROM");
+        Assert.Equal("RestoreInstalledFolder", (string?)source.Attribute("After"));
+        Assert.Equal("both", (string?)source.Attribute("Sequence"));
+        Assert.Equal("[RDRIVE_PREVIOUS_INSTALL_ROOT]", (string?)source.Attribute("Value"));
+        Assert.Equal("WIX_UPGRADE_DETECTED AND RDRIVE_PREVIOUS_INSTALL_ROOT AND INSTALLFOLDER AND RDRIVE_PREVIOUS_INSTALL_ROOT ~<> INSTALLFOLDER", (string?)source.Attribute("Condition"));
+        // The chain is anchored before launch validation, hence before costing.
+        var anchor = Assert.Single(document.Descendants(Wix + "SetProperty"), item =>
+            (string?)item.Attribute("Id") == "RDRIVE_PREVIOUS_INSTALL_ROOT");
+        Assert.Equal("LaunchConditions", (string?)anchor.Attribute("Before"));
+        // A later upgrade at the same target leaves the existing legacy source
+        // loaded by AppSearch; it must not replace that source with the current path.
+        var existing = Assert.Single(document.Descendants(Wix + "RegistrySearch"), item =>
+            (string?)item.Attribute("Id") == "PreviousInstallMigration");
+        Assert.Equal("LegacyInstallLocation", (string?)existing.Attribute("Name"));
+        Assert.Equal("HKLM", (string?)existing.Attribute("Root"));
+        Assert.Equal("always64", (string?)existing.Attribute("Bitness"));
+    }
+
+    [Fact]
     public void RelocationDrainsBothDirectoriesAndRecordsMachineOwnedTaskMigrationProof()
     {
         var document = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Package.wxs"));
@@ -209,12 +243,18 @@ public sealed class InstallerPackageTests
     }
 
     [Fact]
-    public void LocalDumpsUseUserExpandedBoundedFullDumpsAndRespectExistingPolicy()
+    public void LocalDumpsRestoreOwnedPolicyAcrossEarlyMajorUpgradesAndRespectExternalPolicy()
     {
         var document = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Package.wxs"));
         var component = Assert.Single(document.Descendants(Wix + "Component"), item => (string?)item.Attribute("Id") == "ResoDriveLocalDumps");
         Assert.Equal("always64", (string?)component.Attribute("Bitness"));
-        Assert.Equal("yes", (string?)component.Attribute("NeverOverwrite"));
+        // CostFinalize runs before RemoveExistingProducts. NeverOverwrite would
+        // skip the new component while the old policy still exists, then the
+        // old product would remove that policy without a new registry write.
+        Assert.Null(component.Attribute("NeverOverwrite"));
+        Assert.Equal("4FD2C558-1556-4B77-A6A3-BB16B2CCF592", (string?)component.Attribute("Guid"));
+        var upgrade = Assert.Single(document.Descendants(Wix + "MajorUpgrade"));
+        Assert.Equal("afterInstallInitialize", (string?)upgrade.Attribute("Schedule"));
         Assert.Null(component.Attribute("Permanent"));
         Assert.Equal("RDRIVE_WER_OWNED = \"#1\" OR NOT (RDRIVE_WER_FOLDER OR RDRIVE_WER_COUNT OR RDRIVE_WER_TYPE OR RDRIVE_WER_FLAGS)", (string?)component.Attribute("Condition"));
         var values = component.Elements(Wix + "RegistryValue").ToArray();
@@ -224,6 +264,8 @@ public sealed class InstallerPackageTests
         Assert.Equal("yes", (string?)folder.Attribute("KeyPath"));
         Assert.Equal("3", (string?)Assert.Single(values, item => (string?)item.Attribute("Name") == "DumpCount").Attribute("Value"));
         Assert.Equal("2", (string?)Assert.Single(values, item => (string?)item.Attribute("Name") == "DumpType").Attribute("Value"));
+        Assert.All(values.Where(item => (string?)item.Attribute("Name") is "DumpCount" or "DumpType" or "LocalDumpsOwned"), item =>
+            Assert.Equal("integer", (string?)item.Attribute("Type")));
         Assert.All(values.Where(item => (string?)item.Attribute("Name") != "LocalDumpsOwned"), item =>
         {
             Assert.Equal("HKLM", (string?)item.Attribute("Root"));

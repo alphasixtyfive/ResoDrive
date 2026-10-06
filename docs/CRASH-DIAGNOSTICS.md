@@ -69,12 +69,14 @@ global WER settings are left alone.
 
 If any supported per-executable dump setting already exists, the MSI leaves that
 administrator-configured policy unchanged and does not claim its ownership. A
-separate marker identifies a policy created by ResoDrive so later major upgrades
-can reinstall it. The component uses `NeverOverwrite` to preserve an existing
-keypath during repair. Settings created by the MSI participate in its rollback
-and removal; dump files themselves are user evidence and are retained. Changing
-an MSI-owned policy afterward does not transfer its registry ownership to the
-administrator: removal can still remove those owned values.
+separate marker identifies a policy created by ResoDrive. Repair and every major
+upgrade restore those MSI-owned values to the defaults above. The component must
+remain writable: Windows Installer plans the new component before the early
+major upgrade removes the old product and its registry values. Settings created
+by the MSI participate in its rollback and are removed on uninstall; dump files
+themselves are user evidence and are retained. Changing an MSI-owned policy
+afterward does not transfer its registry ownership to the administrator: repair
+and upgrade restore its defaults, and uninstall removes those owned values.
 
 This machine policy cannot interpolate `RDRIVE_DATA_DIR` separately for every
 running process. Custom account roots change metadata placement, while WER uses

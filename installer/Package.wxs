@@ -49,18 +49,23 @@
     <SetProperty Id="INSTALLFOLDER" Value="[RDRIVE_PREVIOUS_INSTALL_ROOT]"
       After="SetRDRIVE_PREVIOUS_INSTALL_ROOT" Sequence="both"
       Condition="WIX_UPGRADE_DETECTED AND RDRIVE_PREVIOUS_INSTALL_ROOT AND RDRIVE_MIGRATE_INSTALL &lt;&gt; &quot;1&quot;" />
+    <!-- Directory defaults are resolved only during costing. Choose the opted-in
+         upgrade target now so the migration component condition has both paths. -->
+    <SetProperty Id="INSTALLFOLDER" Action="SetCanonicalInstallFolder" Value="[ProgramFiles64Folder]ResoDrive\"
+      After="SetINSTALLFOLDER" Sequence="both"
+      Condition="NOT Installed AND WIX_UPGRADE_DETECTED AND RDRIVE_PREVIOUS_INSTALL_ROOT AND RDRIVE_MIGRATE_INSTALL = &quot;1&quot; AND ProgramFiles64Folder" />
     <!-- Repair/removal of this product must use its registered location, even
          when this compatibility release was first installed into rdrive. -->
     <SetProperty Id="INSTALLFOLDER" Action="RestoreInstalledFolder" Value="[RDRIVE_INSTALLED_ROOT]"
-      After="SetINSTALLFOLDER" Sequence="both" Condition="Installed AND RDRIVE_INSTALLED_ROOT" />
+      After="SetCanonicalInstallFolder" Sequence="both" Condition="Installed AND RDRIVE_INSTALLED_ROOT" />
     <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" Sequence="execute" />
     <Property Id="RDRIVE_MIGRATED_FROM" Secure="yes">
       <RegistrySearch Id="PreviousInstallMigration" Root="HKLM" Key="SOFTWARE\ResoDrive\Installation"
         Name="LegacyInstallLocation" Type="raw" Bitness="always64" />
     </Property>
     <SetProperty Id="RDRIVE_MIGRATED_FROM" Value="[RDRIVE_PREVIOUS_INSTALL_ROOT]"
-      After="CostFinalize" Sequence="execute"
-      Condition="WIX_UPGRADE_DETECTED AND RDRIVE_PREVIOUS_INSTALL_ROOT AND RDRIVE_PREVIOUS_INSTALL_ROOT ~&lt;&gt; INSTALLFOLDER" />
+      After="RestoreInstalledFolder" Sequence="both"
+      Condition="WIX_UPGRADE_DETECTED AND RDRIVE_PREVIOUS_INSTALL_ROOT AND INSTALLFOLDER AND RDRIVE_PREVIOUS_INSTALL_ROOT ~&lt;&gt; INSTALLFOLDER" />
     <!-- A legacy hidden MSI still has a visible Burn owner. Let Setup migrate
          that owner natively; an MSI-only update would leave two removable entries. -->
     <Property Id="RDRIVE_PREVIOUS_SYSTEM_COMPONENT" Secure="yes">
@@ -161,7 +166,10 @@
         />
       </Component>
       <Component Id="ResoDriveLocalDumps" Guid="4FD2C558-1556-4B77-A6A3-BB16B2CCF592" Bitness="always64"
-        NeverOverwrite="yes" Condition="RDRIVE_WER_OWNED = &quot;#1&quot; OR NOT (RDRIVE_WER_FOLDER OR RDRIVE_WER_COUNT OR RDRIVE_WER_TYPE OR RDRIVE_WER_FLAGS)">
+        Condition="RDRIVE_WER_OWNED = &quot;#1&quot; OR NOT (RDRIVE_WER_FOLDER OR RDRIVE_WER_COUNT OR RDRIVE_WER_TYPE OR RDRIVE_WER_FLAGS)">
+        <!-- NeverOverwrite would skip this component before the transactional
+             major upgrade removes the old policy, leaving no dump collection.
+             MSI-owned values are restored by repair and every major upgrade. -->
         <!-- Registry values are MSI-formatted: escape the percent signs so this
              remains REG_EXPAND_SZ for the crashing user, never the installing admin. -->
         <RegistryValue Root="HKLM" Key="SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\resodrive.exe"
