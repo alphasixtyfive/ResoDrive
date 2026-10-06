@@ -123,6 +123,12 @@ event messages and dump contents. Microsoft documents that
 and the inherited `SEM_NOGPFAULTERRORBOX`
 [error mode](https://learn.microsoft.com/en-us/windows/win32/api/errhandlingapi/nf-errhandlingapi-seterrormode)
 can prevent WER collection; the test records evidence before attributing a cause.
+The launcher clears only that inherited WER-suppression flag at entry and enables
+`SEM_FAILCRITICALERRORS`, preserving every other error-mode bit. This changes its
+own process and subsequent child inheritance, never machine policy or its parent.
+Incident summaries label inherited/normalized observer modes and read-only
+automatic-debugging/reporting switches; an attached raw process's error mode is
+not inspected or changed. Fixture metadata also records immediate-job limit flags.
 `-VerifyClipboard` is also restricted to a disposable hosted runner: it invokes
 the real Copy details button and compares the complete Unicode clipboard value
 with the saved report. Local visual tests leave the user's clipboard untouched.

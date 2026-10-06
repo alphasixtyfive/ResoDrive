@@ -8,6 +8,12 @@ before the first managed instruction. Directly running `resodrive.exe` bypasses
 this outer observation, but keeps the application's managed diagnostics and any
 Windows Error Reporting policy.
 
+The launcher clears an inherited Windows error-mode flag that would disable WER,
+while retaining the other flags and protecting against critical-error prompts.
+This process-local normalization changes no machine policy. Summaries report the
+observer's inherited and normalized modes and read-only automatic-debugging/WER
+settings; they do not claim to inspect an already-running raw process's mode.
+
 The launcher is a local observer, not a debugger or an uploader. It must not
 terminate the managed host, change upload protection, edit account data, or
 reinterpret a normal secondary launch as a crashed primary process. Internal

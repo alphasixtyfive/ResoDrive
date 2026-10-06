@@ -34,6 +34,8 @@ typedef struct {
     wchar_t dumpPolicy[512];
     wchar_t dumpPreparation[512];
     wchar_t eventEvidence[4096];
+    DWORD inheritedErrorMode;
+    DWORD observerErrorMode;
     DWORD pid;
     FILETIME creation;
     DWORD exitCode;
@@ -309,9 +311,56 @@ static void prune_summaries(void) {
     }
 }
 
+// Bounded read-only switches; never render debugger commands or arbitrary registry text.
+static void registry_switch(HKEY hive, const wchar_t *path, const wchar_t *name, BOOL stringBoolean, wchar_t result[48]) {
+    HKEY key = NULL;
+    LSTATUS opened = RegOpenKeyExW(hive, path, 0, KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key);
+    StringCchCopyW(result, 48, opened == ERROR_FILE_NOT_FOUND ? L"absent" : L"unavailable");
+    if (opened != ERROR_SUCCESS) return;
+    BYTE value[32] = {0};
+    DWORD bytes = sizeof(value), type = 0;
+    LSTATUS read = RegQueryValueExW(key, name, NULL, &type, value, &bytes);
+    RegCloseKey(key);
+    if (read == ERROR_FILE_NOT_FOUND) StringCchCopyW(result, 48, L"absent");
+    else if (read == ERROR_SUCCESS && type == REG_DWORD && bytes == sizeof(DWORD)) {
+        DWORD number;
+        CopyMemory(&number, value, sizeof(number));
+        StringCchPrintfW(result, 48, L"%lu", number);
+    } else if (read == ERROR_SUCCESS && stringBoolean && type == REG_SZ && bytes == 2 * sizeof(wchar_t) &&
+        (((wchar_t *)value)[0] == L'0' || ((wchar_t *)value)[0] == L'1') && ((wchar_t *)value)[1] == L'\0')
+        StringCchPrintfW(result, 48, L"%c", ((wchar_t *)value)[0]);
+    else StringCchCopyW(result, 48, L"present but unsupported/unreadable");
+}
+
+static void wer_blocker_evidence(wchar_t *result, size_t capacity) {
+    const wchar_t *aePath = L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AeDebug";
+    const wchar_t *werPath = L"SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting";
+    const wchar_t *policyPath = L"SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Error Reporting";
+    wchar_t automatic[48], exclusion[48], machine[48], user[48], machinePolicy[48], userPolicy[48];
+    const wchar_t *debugger = L"unavailable";
+    HKEY key = NULL;
+    LSTATUS opened = RegOpenKeyExW(HKEY_LOCAL_MACHINE, aePath, 0, KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key);
+    if (opened == ERROR_FILE_NOT_FOUND) debugger = L"absent";
+    if (opened == ERROR_SUCCESS) {
+        DWORD bytes = 0;
+        LSTATUS read = RegQueryValueExW(key, L"Debugger", NULL, NULL, NULL, &bytes);
+        debugger = read == ERROR_SUCCESS ? L"present (command excluded)" : read == ERROR_FILE_NOT_FOUND ? L"absent" : L"unavailable";
+        RegCloseKey(key);
+    }
+    registry_switch(HKEY_LOCAL_MACHINE, aePath, L"Auto", TRUE, automatic);
+    registry_switch(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AeDebug\\AutoExclusionList", L"resodrive.exe", FALSE, exclusion);
+    registry_switch(HKEY_LOCAL_MACHINE, werPath, L"Disabled", FALSE, machine);
+    registry_switch(HKEY_CURRENT_USER, werPath, L"Disabled", FALSE, user);
+    registry_switch(HKEY_LOCAL_MACHINE, policyPath, L"Disabled", FALSE, machinePolicy);
+    registry_switch(HKEY_CURRENT_USER, policyPath, L"Disabled", FALSE, userPolicy);
+    StringCchPrintfW(result, capacity, L"Read-only x64 settings: AeDebug Auto=%s; Debugger=%s; resodrive.exe automatic-debugging exclusion=%s; "
+        L"WER Disabled machine=%s, user=%s, machine policy=%s, user policy=%s. Automatic debugging can prevent LocalDumps; Disabled values concern WER reporting and do not alone establish LocalDumps availability.",
+        automatic, debugger, exclusion, machine, user, machinePolicy, userPolicy);
+}
+
 static void record_incident(void) {
     SYSTEMTIME utc;
-    wchar_t error[512], reference[128], when[64], os[256];
+    wchar_t error[512], reference[128], when[64], os[256], blockers[768];
     BYTE random[8];
     GetSystemTime(&utc);
     ZeroMemory(random, sizeof(random));
@@ -332,6 +381,7 @@ static void record_incident(void) {
 #pragma warning(pop)
     system_error(incident.exitCode, error, ARRAYSIZE(error));
     dump_evidence();
+    wer_blocker_evidence(blockers, ARRAYSIZE(blockers));
     collect_crash_events(incident.pid, incident.creation, incident.eventEvidence, ARRAYSIZE(incident.eventEvidence));
     StringCchPrintfW(incident.details, TEXT_CAP,
         L"ResoDrive incident summary v1\r\nError reference: %s\r\nUTC: %s\r\n"
@@ -339,6 +389,8 @@ static void record_incident(void) {
         L"Failure already displayed by application: %s\r\n"
         L"Exit code: 0x%08lX (%lu)\r\nWindows message: %s\r\n"
         L"Executable: %.4096s\r\nFile version: %s\r\nExecutable file SHA-256 at observer startup: %s\r\nOS: %s\r\n"
+        L"Observer inherited error mode: 0x%08lX\r\nObserver normalized error mode: 0x%08lX (child mode is not inspected)\r\n"
+        L"WER capture settings: %s\r\n"
         L"Managed startup/exception details: consult the application's guarded logs.\r\n"
         L"Crash dump candidate (contents not validated): %.4096s\r\nDump policy: %s\r\nDump folder preflight: %s\r\n"
         L"Background transfers: status unknown; no process was stopped by this observer.\r\n"
@@ -347,7 +399,7 @@ static void record_incident(void) {
         reference, when, incident.launchFailed ? L"launch-failed" :
         (incident.exitCode == ACTIVATION_TIMED_OUT ? L"activation-timeout" : L"unexpected-exit"), incident.role,
         incident.pid, filetime_number(incident.creation), incident.exitCode == FAILURE_ALREADY_DISPLAYED ? L"yes" : L"no", incident.exitCode, incident.exitCode, error,
-        incident.executable, incident.version, incident.hash, os,
+        incident.executable, incident.version, incident.hash, os, incident.inheritedErrorMode, incident.observerErrorMode, blockers,
         incident.dump[0] ? incident.dump : L"No matching nonempty dump was found at reporting time. WER capture is independent; check again later.", incident.dumpPolicy, incident.dumpPreparation, incident.eventEvidence);
     incident.recordingError = ERROR_SUCCESS;
     if (!diagnostics_path() || !safe_directory(incident.diagnostics)) {
@@ -547,6 +599,11 @@ static BOOL parse_decimal(const wchar_t *text, ULONGLONG *result) {
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, int show) {
     (void)instance; (void)previous; (void)show;
+    // Children inherit this mode. SEM_NOGPFAULTERRORBOX disables WER entirely,
+    // so clear it before any worker/child starts, retaining the other flags.
+    incident.inheritedErrorMode = GetErrorMode();
+    SetErrorMode((incident.inheritedErrorMode & ~SEM_NOGPFAULTERRORBOX) | SEM_FAILCRITICALERRORS);
+    incident.observerErrorMode = GetErrorMode();
     incident.role = L"ui";
     wchar_t noDialog[8];
     incident.noDialog = GetEnvironmentVariableW(L"RDRIVE_CRASH_NO_DIALOG", noDialog, ARRAYSIZE(noDialog)) == 1 && noDialog[0] == L'1';

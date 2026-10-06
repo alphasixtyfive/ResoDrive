@@ -45,6 +45,12 @@ function Write-WerFailureEvidence {
     if (Test-Path -LiteralPath $runtimePath) {
         $runtime = Get-Content -LiteralPath $runtimePath -Raw | ConvertFrom-Json
         $runtimeEvidence = @{ errorMode = [uint32]$runtime.errorMode; werFlags = [uint32]$runtime.werFlags; werSetResult = [int]$runtime.werSetResult; debuggerPresent = [bool]$runtime.debuggerPresent }
+        if ($null -ne $runtime.PSObject.Properties['inJob']) {
+            $runtimeEvidence.inJob = [bool]$runtime.inJob
+            $runtimeEvidence.jobLimitsRead = [bool]$runtime.jobLimitsRead
+            $runtimeEvidence.jobLimitFlags = [uint32]$runtime.jobLimitFlags
+            $runtimeEvidence.jobQueryError = [uint32]$runtime.jobQueryError
+        }
     }
     $events = [Collections.Generic.List[object]]::new()
     $eventError = $null

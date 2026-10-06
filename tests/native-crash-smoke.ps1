@@ -18,6 +18,8 @@ if (-not ('NativeCrashWindowProbe' -as [type])) {
 using System;
 using System.Runtime.InteropServices;
 public static class NativeCrashWindowProbe {
+    [DllImport("kernel32.dll")] public static extern uint GetErrorMode();
+    [DllImport("kernel32.dll")] public static extern uint SetErrorMode(uint mode);
     public delegate bool Callback(IntPtr window, IntPtr parameter);
     [DllImport("user32.dll")] static extern bool EnumWindows(Callback callback, IntPtr parameter);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
@@ -128,6 +130,24 @@ Assert ((Wait-TestProcess $process) -eq 0) 'Normal process exit is propagated.'
 Assert ((Reports $normalRoot).Count -eq 0) 'Normal exit writes no incident.'
 Assert (-not (Test-Path -LiteralPath $normalRoot)) 'Native launcher does not create account data.'
 
+$modeRoot = Join-Path $runRoot 'inherited-mode-data'
+$modeEvidence = Join-Path $runRoot 'inherited-mode.json'
+$beforeMode = [NativeCrashWindowProbe]::GetErrorMode()
+$null = [NativeCrashWindowProbe]::SetErrorMode($beforeMode -bor 0x8002)
+try {
+    # Fixture exits normally. Only this PowerShell process's temporary mode changes.
+    $inheritedMode = [NativeCrashWindowProbe]::GetErrorMode()
+    $process = Start-TestProcess $launcher @('--runtime-evidence', $modeEvidence, '--exit', '0') $modeRoot
+    Assert ((Wait-TestProcess $process) -eq 0) 'Inherited WER suppression fixture completes without causing a real crash.'
+} finally { $null = [NativeCrashWindowProbe]::SetErrorMode($beforeMode) }
+$modeResult = Get-Content -LiteralPath $modeEvidence -Raw | ConvertFrom-Json
+$childMode = $modeResult.errorMode
+if ($childMode -ne (($inheritedMode -band (-bnot 2)) -bor 1)) {
+    Write-Host ('Controlled normal fixture runtime flags: ' + ($modeResult | ConvertTo-Json -Compress))
+}
+Assert ($childMode -eq (($inheritedMode -band (-bnot 2)) -bor 1)) 'Launcher clears inherited SEM_NOGPFAULTERRORBOX, adds critical-error protection and retains the other flags in its child.'
+Assert ((Reports $modeRoot).Count -eq 0) 'Error-mode normalization creates no false incident on an orderly exit.'
+
 $fatalRoot = Join-Path $runRoot 'fatal-data'
 $process = Start-TestProcess $launcher @('--exit', '0x80131506') $fatalRoot
 $code = Wait-TestProcess $process
@@ -136,6 +156,7 @@ $reports = Reports $fatalRoot
 Assert ($reports.Count -eq 1) 'Fatal exit creates one metadata report.'
 $summary = Get-Content -LiteralPath $reports[0].FullName -Raw
 Assert ($summary -match '0x80131506' -and $summary -match 'SHA-256 at observer startup: [0-9A-F]{64}' -and $summary -match 'Process creation FILETIME: [1-9]') 'Report contains failure code, on-disk executable hash and process identity.'
+Assert ($summary -match 'Observer inherited error mode: 0x[0-9A-F]{8}' -and $summary -match 'Observer normalized error mode: 0x[0-9A-F]{8} \(child mode is not inspected\)' -and $summary -match 'AeDebug Auto=' -and $summary -match 'WER Disabled machine=') 'Saved summary exposes observer mode normalization and read-only Windows capture settings without debugger commands.'
 Assert (-not (Test-Path -LiteralPath $fatalRoot)) 'Crash reporting never recreates account data.'
 
 $displayedRoot = Join-Path $runRoot 'already-displayed-data'

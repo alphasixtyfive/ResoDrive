@@ -19,6 +19,16 @@ internal static class Program
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     private static extern int WerGetFlags(IntPtr process, out uint flags);
 
+    [DllImport("kernel32.dll", ExactSpelling = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsProcessInJob(IntPtr process, IntPtr job, [MarshalAs(UnmanagedType.Bool)] out bool result);
+
+    [DllImport("kernel32.dll", ExactSpelling = true, SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryInformationJobObject(IntPtr job, int informationClass, [Out] byte[] information, uint size, IntPtr returnLength);
+
     private static int Main(string[] args)
     {
         // This fixture can neither crash locally nor acquire any production account data.
@@ -33,10 +43,17 @@ internal static class Program
 
         using var current = Process.GetCurrentProcess();
         var queried = WerGetFlags(current.Handle, out var flags);
+        _ = IsProcessInJob(current.Handle, IntPtr.Zero, out var inJob);
+        // x64 JOBOBJECT_BASIC_LIMIT_INFORMATION: 64 bytes, LimitFlags at offset 16.
+        var jobInformation = new byte[64];
+        var jobRead = inJob && QueryInformationJobObject(IntPtr.Zero, 2, jobInformation, (uint)jobInformation.Length, IntPtr.Zero);
+        var jobError = inJob && !jobRead ? Marshal.GetLastPInvokeError() : 0;
         File.WriteAllText(args[1] + ".runtime.json", JsonSerializer.Serialize(new
         {
             errorMode = GetErrorMode(), werFlags = queried == 0 ? flags : 0,
-            werSetResult = configured, debuggerPresent = Debugger.IsAttached
+            werSetResult = configured, debuggerPresent = Debugger.IsAttached,
+            inJob, jobLimitsRead = jobRead, jobLimitFlags = jobRead ? BitConverter.ToUInt32(jobInformation, 16) : 0,
+            jobQueryError = jobError
         }));
         File.WriteAllLines(args[1],
         [
