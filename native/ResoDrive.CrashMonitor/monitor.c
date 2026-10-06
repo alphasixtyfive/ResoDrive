@@ -35,6 +35,9 @@ typedef struct {
     wchar_t dumpPolicy[512];
     wchar_t dumpPreparation[512];
     wchar_t eventEvidence[4096];
+    wchar_t reference[128];
+    wchar_t utc[64];
+    wchar_t os[256];
     DWORD inheritedErrorMode;
     DWORD observerErrorMode;
     DWORD pid;
@@ -120,23 +123,18 @@ static BOOL diagnostics_path(void) {
 
 // Walk every existing component, refusing junctions/symlinks rather than writing through them.
 // CREATE_NEW and a non-following handle also protect the individual report file.
-static BOOL safe_directory(const wchar_t *path) {
+static BOOL safe_directory(const wchar_t *path, BOOL createMissing) {
     wchar_t prefix[PATH_CAP];
     size_t length = wcslen(path), start = 3;
     if (!local_filesystem_path(path)) return FALSE;
     if (length >= PATH_CAP || length < 3) { SetLastError(ERROR_BAD_PATHNAME); return FALSE; }
     if (wcsncmp(path, L"\\\\?\\", 4) == 0) start = 7;
-    else if (path[0] == L'\\' && path[1] == L'\\') {
-        const wchar_t *server = wcschr(path + 2, L'\\');
-        const wchar_t *share = server ? wcschr(server + 1, L'\\') : NULL;
-        if (!share) { SetLastError(ERROR_BAD_PATHNAME); return FALSE; }
-        start = (size_t)(share - path) + 1;
-    }
     for (size_t index = start; index <= length; ++index) {
         if (index != length && path[index] != L'\\' && path[index] != L'/') continue;
         if (FAILED(StringCchCopyNW(prefix, PATH_CAP, path, index))) return FALSE;
         DWORD attributes = GetFileAttributesW(prefix);
         if (attributes == INVALID_FILE_ATTRIBUTES) {
+            if (!createMissing) return FALSE;
             DWORD error = GetLastError();
             if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) return FALSE;
             if (!CreateDirectoryW(prefix, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) return FALSE;
@@ -174,7 +172,7 @@ static void prepare_owned_dump_folder(void) {
     BOOL copied = join_path(expected, PATH_CAP, local, L"rdrive-diagnostics\\dumps");
     CoTaskMemFree(local);
     if (!copied || _wcsicmp(expanded, expected) != 0) return;
-    if (safe_directory(expected)) {
+    if (safe_directory(expected, TRUE)) {
         StringCchCopyW(incident.dumpPreparation, ARRAYSIZE(incident.dumpPreparation), L"MSI-owned default WER folder exists before application execution. This does not guarantee capture.");
     } else {
         DWORD error = GetLastError();
@@ -185,8 +183,13 @@ static void prepare_owned_dump_folder(void) {
 static void executable_metadata(void) {
     StringCchCopyW(incident.version, ARRAYSIZE(incident.version), L"unavailable");
     StringCchCopyW(incident.hash, ARRAYSIZE(incident.hash), L"unavailable");
-    if (!local_filesystem_path(incident.executable)) {
-        StringCchCopyW(incident.hash, ARRAYSIZE(incident.hash), L"unavailable (network executable was not read by the observer)");
+    if (!safe_directory(incident.directory, FALSE)) {
+        StringCchCopyW(incident.hash, ARRAYSIZE(incident.hash), L"unavailable (network, reparse or unavailable executable directory was not read by the observer)");
+        return;
+    }
+    DWORD attributes = GetFileAttributesW(incident.executable);
+    if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY))) {
+        StringCchCopyW(incident.hash, ARRAYSIZE(incident.hash), L"unavailable (reparse or directory executable was not read by the observer)");
         return;
     }
     DWORD unused = 0;
@@ -212,8 +215,10 @@ static void executable_metadata(void) {
     if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, NULL, 0) < 0) goto done;
     if (BCryptCreateHash(algorithm, &hash, NULL, 0, NULL, 0, 0) < 0) goto done;
     file = CreateFileW(incident.executable, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, NULL,
-        OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+        OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, NULL);
     if (file == INVALID_HANDLE_VALUE) goto done;
+    BY_HANDLE_FILE_INFORMATION fileInfo;
+    if (!GetFileInformationByHandle(file, &fileInfo) || (fileInfo.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) goto done;
     for (;;) {
         if (!ReadFile(file, buffer, sizeof(buffer), &read, NULL)) goto done;
         if (!read) break;
@@ -275,8 +280,8 @@ static void dump_evidence(void) {
     }
     StringCchPrintfW(incident.dumpPolicy, ARRAYSIZE(incident.dumpPolicy), L"WER LocalDumps policy is readable; DumpType=%lu. Capture success remains independent of this observer.", dumpType);
     if (!folderConfigured || !incident.pid || !filetime_number(incident.creation)) return;
-    if (!local_filesystem_path(folder)) {
-        StringCchCatW(incident.dumpPolicy, ARRAYSIZE(incident.dumpPolicy), L" A remote/unsupported dump folder was not probed.");
+    if (!safe_directory(folder, FALSE)) {
+        StringCchCatW(incident.dumpPolicy, ARRAYSIZE(incident.dumpPolicy), L" A remote, reparse, unsupported or unavailable dump folder was not probed.");
         return;
     }
     StringCchPrintfW(filename, ARRAYSIZE(filename), L"resodrive.exe.%lu.dmp", incident.pid);
@@ -370,6 +375,7 @@ static void record_incident(void) {
     StringCchPrintfW(reference, ARRAYSIZE(reference), L"%04u%02u%02u-%02u%02u%02u-%lu-%02X%02X%02X%02X",
         utc.wYear, utc.wMonth, utc.wDay, utc.wHour, utc.wMinute, utc.wSecond,
         incident.pid, random[0], random[1], random[2], random[3]);
+    StringCchCopyW(incident.reference, ARRAYSIZE(incident.reference), reference);
     StringCchPrintfW(when, ARRAYSIZE(when), L"%04u-%02u-%02uT%02u:%02u:%02u.%03uZ",
         utc.wYear, utc.wMonth, utc.wDay, utc.wHour, utc.wMinute, utc.wSecond, utc.wMilliseconds);
     // The supportedOS manifest makes GetVersionEx report the actual Windows build.
@@ -380,6 +386,8 @@ static void record_incident(void) {
     if (GetVersionExW(&version)) StringCchPrintfW(os, ARRAYSIZE(os), L"Windows %lu.%lu build %lu (x64)", version.dwMajorVersion, version.dwMinorVersion, version.dwBuildNumber);
     else StringCchCopyW(os, ARRAYSIZE(os), L"unavailable");
 #pragma warning(pop)
+    StringCchCopyW(incident.utc, ARRAYSIZE(incident.utc), when);
+    StringCchCopyW(incident.os, ARRAYSIZE(incident.os), os);
     system_error(incident.exitCode, error, ARRAYSIZE(error));
     dump_evidence();
     wer_blocker_evidence(blockers, ARRAYSIZE(blockers));
@@ -403,7 +411,7 @@ static void record_incident(void) {
         incident.executable, incident.version, incident.hash, os, incident.inheritedErrorMode, incident.observerErrorMode, blockers,
         incident.dump[0] ? incident.dump : L"No matching nonempty dump was found at reporting time. WER capture is independent; check again later.", incident.dumpPolicy, incident.dumpPreparation, incident.eventEvidence);
     incident.recordingError = ERROR_SUCCESS;
-    if (!diagnostics_path() || !safe_directory(incident.diagnostics)) {
+    if (!diagnostics_path() || !safe_directory(incident.diagnostics, TRUE)) {
         incident.recordingError = GetLastError();
         if (!incident.recordingError) incident.recordingError = ERROR_BAD_PATHNAME;
     } else {
@@ -455,7 +463,7 @@ static HRESULT CALLBACK dialog_callback(HWND window, UINT notification, WPARAM b
         wchar_t status[2304];
         StringCchPrintfW(status, ARRAYSIZE(status), L"%s\n\n%s", (const wchar_t *)context,
             copy_details(window) ? L"Details copied to the clipboard." :
-            L"Windows could not copy the details. Try again, or expand Technical details to read them.");
+            L"Windows could not copy the details. Try again. Technical details shows the essential evidence.");
         SendMessageW(window, TDM_SET_ELEMENT_TEXT, TDE_CONTENT, (LPARAM)status);
         return S_FALSE;
     }
@@ -499,6 +507,26 @@ static BOOL acquire_dialog_gate(HANDLE *gate) {
     return result != WAIT_TIMEOUT;
 }
 
+static void fallback_summary(wchar_t *text, size_t capacity, const wchar_t *instruction) {
+    // Full metadata stays in the saved report; the emergency UI remains readable.
+    StringCchPrintfW(text, capacity,
+        L"%.64s\n\nError reference: %.64s\nUTC: %.32s\nExit code: 0x%08lX\nRole: %.8s\nProcess ID: %lu\nProcess creation FILETIME: %llu\n"
+        L"File version: %.64s\nOS: %.64s\nExecutable file SHA-256 (observer startup): %.128s\nSummary saving Windows status: %lu\nSaved report: %.768s%s\n\n"
+        L"Press Ctrl+C to copy this message for support. Background transfer status is unknown; this observer stopped no process.",
+        instruction, incident.reference, incident.utc, incident.exitCode, incident.role, incident.pid, filetime_number(incident.creation), incident.version, incident.os, incident.hash,
+        incident.recordingError, incident.report[0] ? incident.report : L"unavailable; summary storage and the detailed task dialog could not be used",
+        wcslen(incident.report) > 768 ? L"... (path shortened)" : L"");
+}
+
+static void display_details(wchar_t *text, size_t capacity) {
+    // TaskDialog expanders do not scroll. The full report is saved/copied separately.
+    StringCchPrintfW(text, capacity,
+        L"Error reference: %s\nUTC: %s\nExit code: 0x%08lX\nRole: %s\nProcess ID: %lu\nFile version: %.64s\nOS: %.64s\n\n"
+        L"Copy details includes the complete diagnostic summary. %s",
+        incident.reference, incident.utc, incident.exitCode, incident.role, incident.pid, incident.version, incident.os,
+        incident.recordingError ? L"Summary storage is unavailable; copying still includes the available evidence." : L"Open diagnostics folder to find its saved file.");
+}
+
 static void show_incident(void) {
     if (incident.noDialog || incident.sessionEnding || GetSystemMetrics(SM_SHUTTINGDOWN) || incident.exitCode == FAILURE_ALREADY_DISPLAYED) return;
     HANDLE gate = NULL;
@@ -506,7 +534,8 @@ static void show_incident(void) {
     INITCOMMONCONTROLSEX controls = {sizeof(controls), ICC_STANDARD_CLASSES};
     (void)InitCommonControlsEx(&controls);
     TASKDIALOG_BUTTON buttons[] = {{COPY_BUTTON, L"Copy details"}, {FOLDER_BUTTON, L"Open diagnostics folder"}, {IDCANCEL, L"Close"}};
-    wchar_t content[2048];
+    wchar_t content[2048], expanded[1024];
+    display_details(expanded, ARRAYSIZE(expanded));
     StringCchPrintfW(content, ARRAYSIZE(content),
         L"%s\n\nExit code: 0x%08lX\n%s\n\nBackground transfers may still be running. This report did not stop them.",
         incident.launchFailed ? L"Windows could not start ResoDrive." :
@@ -521,7 +550,7 @@ static void show_incident(void) {
         (incident.exitCode == ACTIVATION_TIMED_OUT ? L"ResoDrive did not respond" : L"ResoDrive closed unexpectedly");
     dialog.pszMainIcon = TD_ERROR_ICON;
     dialog.pszContent = content;
-    dialog.pszExpandedInformation = incident.details;
+    dialog.pszExpandedInformation = expanded;
     dialog.pszExpandedControlText = L"Hide technical details";
     dialog.pszCollapsedControlText = L"Technical details";
     dialog.cButtons = incident.recordingError ? 1 : 3;
@@ -531,9 +560,8 @@ static void show_incident(void) {
     dialog.pfCallback = dialog_callback;
     dialog.lpCallbackData = (LONG_PTR)content;
     if (FAILED(TaskDialogIndirect(&dialog, NULL, NULL, NULL))) {
-        // Minimal fallback still works if common controls cannot create the dialog.
-        StringCchCatW(content, ARRAYSIZE(content), L"\n\n");
-        StringCchCatW(content, ARRAYSIZE(content), incident.details);
+        // Keep this emergency UI bounded. Windows MessageBox Ctrl+C copies its text.
+        fallback_summary(content, ARRAYSIZE(content), dialog.pszMainInstruction);
         MessageBoxW(NULL, content, L"ResoDrive", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
     }
     if (gate) { ReleaseMutex(gate); CloseHandle(gate); }

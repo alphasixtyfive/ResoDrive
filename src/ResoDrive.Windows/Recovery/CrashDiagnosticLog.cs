@@ -190,8 +190,10 @@ public sealed partial class CrashDiagnosticLog
                     (attributes & FileAttributes.ReparsePoint) != 0)
                     throw new IOException("Diagnostic directory ancestors must not redirect account writes.");
             }
-            catch (FileNotFoundException) { return; }
-            catch (DirectoryNotFoundException) { return; }
+            // Missing descendants are expected before the first write. Still inspect
+            // independent account files, especially an existing account-lock redirect.
+            catch (FileNotFoundException) { break; }
+            catch (DirectoryNotFoundException) { break; }
         }
         var candidates = _paths is null ? [_directory, LogFile, LogFile + ".1"] :
             new[] { _paths.Root, _directory, LogFile, LogFile + ".1", Path.Combine(_paths.Root, ".account-data.lock") };

@@ -558,9 +558,10 @@ function Invoke-CopiedUpdater([string]$Source, [string]$Msi, [string]$Version,
     } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $testRoot "update-handoff-$Version-$([IO.Path]::GetFileName((Split-Path -Parent $ExpectedExecutable))).json") -Encoding utf8
 }
 
-function New-FutureMigrationFixture {
-    $nextVersion = '{0}.{1}.{2}' -f $targetVersion.Major, $targetVersion.Minor, ($targetVersion.Build + 1)
-    $root = Join-Path $testRoot 'future-fixture'
+function New-FutureMigrationFixture([int]$VersionOffset = 1) {
+    if ($VersionOffset -lt 1 -or $VersionOffset -gt 3) { throw 'Invalid isolated future fixture version offset.' }
+    $nextVersion = '{0}.{1}.{2}' -f $targetVersion.Major, $targetVersion.Minor, ($targetVersion.Build + $VersionOffset)
+    $root = Join-Path $testRoot "future-fixture-$nextVersion"
     $payload = Join-Path $root 'payload'
     $published = Join-Path $root 'managed'
     $installerIntermediate = (Join-Path $root 'installer-obj') + '/'
@@ -583,6 +584,62 @@ function New-FutureMigrationFixture {
     if ($LASTEXITCODE -ne 0) { throw 'Temporary future fixture MSI build failed.' }
     return [pscustomobject]@{ Version = $nextVersion; Msi = (Join-Path $root "resodrive-win-x64-$nextVersion.msi");
         AppHash = (Get-FileHash -LiteralPath (Join-Path $payload 'resodrive.exe')).Hash }
+}
+
+function New-RollbackFailureFixture([string]$Msi) {
+    # Only the disposable copy is changed. Production packages contain no test
+    # action or switch. Execute the pending native script before failing so the
+    # test exercises replacement and rollback, rather than just script creation.
+    $copy = Join-Path $testRoot 'rollback-failure.msi'
+    Copy-Item -LiteralPath $Msi -Destination $copy
+    $installer = $database = $view = $record = $null
+    try {
+        $installer = New-Object -ComObject WindowsInstaller.Installer
+        $database = $installer.OpenDatabase($copy, 1)
+        $view = $database.OpenView('SELECT `Action`, `Sequence` FROM `InstallExecuteSequence`')
+        $view.Execute() | Out-Null
+        $actions = @{}
+        while ($null -ne ($record = $view.Fetch())) {
+            $name = [string]$record.StringData(1)
+            $actions[$name] = [int]$record.IntegerData(2)
+            [Runtime.InteropServices.Marshal]::FinalReleaseComObject($record) | Out-Null
+            $record = $null
+        }
+        $view.Close() | Out-Null
+        [Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) | Out-Null
+        $view = $null
+        if (-not $actions.ContainsKey('InstallFinalize') -or -not $actions.ContainsKey('InstallInitialize') -or
+            -not $actions.ContainsKey('RemoveExistingProducts') -or -not $actions.ContainsKey('WriteRegistryValues') -or
+            $actions.ContainsKey('InstallExecute') -or $actions.ContainsKey('InstallExecuteAgain')) {
+            throw 'Rollback fixture requires the expected native transaction sequence.'
+        }
+        $executeSequence = $actions['InstallFinalize'] - 2
+        $failureSequence = $executeSequence + 1
+        if ($actions['RemoveExistingProducts'] -le $actions['InstallInitialize'] -or
+            $actions['RemoveExistingProducts'] -ge $actions['WriteRegistryValues'] -or
+            @($actions.Values | Where-Object { $_ -ge $executeSequence -and $_ -lt $actions['InstallFinalize'] }).Count -ne 0) {
+            throw 'Rollback fixture could not reserve actions inside the transaction.'
+        }
+        $queries = @(
+            'INSERT INTO `CustomAction` (`Action`, `Type`, `Target`) VALUES (''SmokeRollbackFailure'', 19, ''Intentional disposable rollback fixture failure.'')',
+            ('INSERT INTO `InstallExecuteSequence` (`Action`, `Condition`, `Sequence`) VALUES (''InstallExecute'', ''NOT Installed AND WIX_UPGRADE_DETECTED'', {0})' -f $executeSequence),
+            ('INSERT INTO `InstallExecuteSequence` (`Action`, `Condition`, `Sequence`) VALUES (''SmokeRollbackFailure'', ''NOT Installed AND WIX_UPGRADE_DETECTED'', {0})' -f $failureSequence)
+        )
+        foreach ($query in $queries) {
+            $view = $database.OpenView($query)
+            $view.Execute() | Out-Null
+            $view.Close() | Out-Null
+            [Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) | Out-Null
+            $view = $null
+        }
+        $database.Commit() | Out-Null
+        return $copy
+    } finally {
+        if ($null -ne $view) { $view.Close() | Out-Null }
+        foreach ($item in @($record, $view, $database, $installer)) {
+            if ($null -ne $item) { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($item) | Out-Null }
+        }
+    }
 }
 
 $sameVersionPaths = @($SameVersionBaselineMsiPath, $SameVersionBaselineSetupPath, $CandidateMsiPath)
@@ -700,7 +757,55 @@ try {
     Assert-WerPolicy
     if ((Get-FileHash -LiteralPath $app).Hash -ine $future.AppHash) { throw 'The future fixture installed different managed binaries.' }
     Assert-DataPreserved
-    Invoke-Installer $msiexec "/x $futureCode /quiet /norestart /l*v `"$testRoot\future-uninstall.log`""
+    # A user can return after several releases with an owned task still pointing
+    # at the original folder. Retain that receipt through a canonical upgrade.
+    $later = New-FutureMigrationFixture 2
+    $laterCode = Get-MsiProperty $later.Msi 'ProductCode'
+    Remove-StartupFixture
+    New-DisabledStartupFixture
+    $current = @(Get-Process resodrive -ErrorAction SilentlyContinue | Where-Object Path -EQ $app | Where-Object MainWindowHandle -NE 0)
+    if ($current.Count -ne 1) { throw 'The first canonical updater did not relaunch exactly one UI.' }
+    Invoke-CopiedUpdater $app $later.Msi $later.Version $app $later.AppHash
+    try {
+        if (-not $current[0].WaitForExit(15000)) { throw 'The first canonical UI survived the next copied updater.' }
+    } finally { $current[0].Dispose() }
+    Assert-MigrationReceipt
+    Assert-DisabledStartupFixtureMigrated
+    Assert-OneRemovableAppEntry $laterCode $later.Version
+    Assert-WerPolicy
+    Assert-DataPreserved
+    if ((Test-Path -LiteralPath $legacyApp) -or -not (Test-Path -LiteralPath $legacyUnowned)) { throw 'The next canonical upgrade changed the old folder unexpectedly.' }
+    $rollback = New-FutureMigrationFixture 3
+    $rollbackMsi = New-RollbackFailureFixture $rollback.Msi
+    $rollbackLog = Join-Path $testRoot 'transactional-rollback.log'
+    $priorWerPolicy = Get-WerPolicySnapshot "$werKeyPath\resodrive.exe"
+    $current = @(Get-Process resodrive -ErrorAction SilentlyContinue | Where-Object Path -EQ $app | Where-Object MainWindowHandle -NE 0)
+    if ($current.Count -ne 1) { throw 'The next canonical updater did not relaunch exactly one UI.' }
+    Invoke-Installer $msiexec "/i `"$rollbackMsi`" /quiet /norestart /l*v `"$rollbackLog`"" -ExpectFailure
+    Assert-Stopped $current[0]
+    $rollbackText = [IO.File]::ReadAllText($rollbackLog)
+    $removed = [regex]::Match($rollbackText, 'Action ended [^\r\n]*RemoveExistingProducts\. Return value 1\.')
+    $executed = [regex]::Match($rollbackText, 'Action ended [^\r\n]*InstallExecute\. Return value 1\.')
+    $failed = [regex]::Match($rollbackText, 'Action ended [^\r\n]*SmokeRollbackFailure\. Return value 3\.')
+    if (-not $removed.Success -or -not $executed.Success -or -not $failed.Success -or
+        $removed.Index -ge $executed.Index -or $executed.Index -ge $failed.Index -or
+        $rollbackText -notmatch 'Executing op: RollbackInfo') {
+        throw 'The expected rollback did not follow actual old-product removal and replacement execution.'
+    }
+    Assert-OneRemovableAppEntry $laterCode $later.Version
+    Assert-NativeInstalledLocator $app $later.Version
+    if ((Get-FileHash -LiteralPath $app).Hash -ine $later.AppHash -or
+        (Get-WerPolicySnapshot "$werKeyPath\resodrive.exe") -cne $priorWerPolicy) {
+        throw 'Rollback did not restore the exact previous binary and WER policy.'
+    }
+    Assert-MigrationReceipt
+    Assert-DisabledStartupFixtureMigrated
+    Assert-WerPolicy
+    Assert-DataPreserved
+    if ((Test-Path -LiteralPath $legacyApp) -or -not (Test-Path -LiteralPath $legacyUnowned)) { throw 'Rollback changed unrelated legacy-folder contents.' }
+    $running = Start-TestApplication
+    Invoke-Installer $msiexec "/x $laterCode /quiet /norestart /l*v `"$testRoot\future-uninstall.log`""
+    Assert-Stopped $running
     if ((Test-Path -LiteralPath $app) -or (Test-Path -LiteralPath $legacyApp)) { throw 'Migration uninstall left an executable.' }
     Assert-WerPolicyRemoved
     Assert-DataPreserved
@@ -833,10 +938,15 @@ try {
         LegacyCopiedUpdaterPreservedActivation = $true
         CompatibilityRepairPreservedRegisteredLocation = $true
         ModernCopiedUpdaterRelocationAcknowledged = $true
+        CanonicalFutureUpgradeRetainedLegacyReceipt = $true
+        DelayedOwnedDisabledStartupTaskMigrated = $true
+        NativeTransactionalRollbackRestoredPreviousInstallation = $true
         OwnedDisabledStartupTaskMigrated = $true
         SkippedVersionLegacyUpdaterPreservedActivation = $true
         FutureFixtureVersion = $future.Version
         FutureFixtureMsiSha256 = (Get-FileHash -LiteralPath $future.Msi).Hash
+        LaterFutureFixtureVersion = $later.Version
+        LaterFutureFixtureMsiSha256 = (Get-FileHash -LiteralPath $later.Msi).Hash
         InstalledWerPolicyVerified = $true
         ActualWerDumpVerified = $true
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $testRoot 'installer-ownership-result.json') -Encoding utf8
@@ -857,8 +967,10 @@ try {
     try {
         $updatesEvidenceDirectory = Join-Path $env:RDRIVE_DATA_DIR 'updates'
         Save-IsolatedUpdaterEvidence $updatesEvidenceDirectory $testRoot $expectedVersion
-        $futureEvidenceVersion = '{0}.{1}.{2}' -f $targetVersion.Major, $targetVersion.Minor, ($targetVersion.Build + 1)
-        Save-IsolatedUpdaterEvidence $updatesEvidenceDirectory $testRoot $futureEvidenceVersion
+        foreach ($offset in @(1, 2)) {
+            $futureEvidenceVersion = '{0}.{1}.{2}' -f $targetVersion.Major, $targetVersion.Minor, ($targetVersion.Build + $offset)
+            Save-IsolatedUpdaterEvidence $updatesEvidenceDirectory $testRoot $futureEvidenceVersion
+        }
         Remove-StartupFixture
         if ((Get-GlobalWerPolicySnapshot) -cne $initialGlobalWerPolicy) {
             throw 'Installer lifecycle changed the pre-existing global Windows Error Reporting policy.'

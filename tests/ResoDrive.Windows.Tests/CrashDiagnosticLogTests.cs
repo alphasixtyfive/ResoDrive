@@ -150,6 +150,50 @@ public sealed class CrashDiagnosticLogTests : IDisposable
     }
 
     [Fact]
+    public async Task MissingLogDirectoryStillRejectsRedirectedAccountLease()
+    {
+        var outside = _root + "-outside";
+        var paths = new ApplicationPaths(_root);
+        var redirectedLease = Path.Combine(paths.Root, ".account-data.lock");
+        Directory.CreateDirectory(paths.Root);
+        Directory.CreateDirectory(outside);
+        var sentinel = Path.Combine(outside, "sentinel.txt");
+        File.WriteAllText(sentinel, "untouched");
+        try
+        {
+            var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("COMSPEC") ?? "cmd.exe")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            foreach (var argument in new[] { "/d", "/c", "mklink", "/J", redirectedLease, outside })
+                start.ArgumentList.Add(argument);
+            using var process = Process.Start(start)!;
+            await process.WaitForExitAsync();
+            Assert.Equal(0, process.ExitCode);
+            Assert.False(Directory.Exists(paths.Logs));
+
+            var log = new CrashDiagnosticLog(paths, "host");
+            // Repair the bad lock after construction. A logger whose account guard
+            // could not safely initialize must remain disabled for that session.
+            Directory.Delete(redirectedLease);
+            Assert.False(log.Information("redirected.lease"));
+            Assert.False(File.Exists(log.LogFile));
+            Assert.False(File.Exists(redirectedLease));
+            Assert.Equal("untouched", File.ReadAllText(sentinel));
+            Assert.Single(Directory.GetFiles(outside));
+            Assert.True(new CrashDiagnosticLog(paths, "host").Information("safe.lease"));
+        }
+        finally
+        {
+            if (Directory.Exists(redirectedLease)) Directory.Delete(redirectedLease);
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    [Fact]
     public void RotationAndOversizedEventsRemainWithinTwoBoundedFiles()
     {
         var log = new CrashDiagnosticLog(new ApplicationPaths(_root), "host", maximumBytes: 512);

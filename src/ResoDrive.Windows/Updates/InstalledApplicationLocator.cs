@@ -62,14 +62,34 @@ public static partial class InstalledApplicationLocator
 
     private static bool MatchesExecutable(string path, Version expected)
     {
-        var attributes = File.GetAttributes(path);
-        if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0) return false;
-        for (var directory = Directory.GetParent(path); directory is not null; directory = directory.Parent)
-            if ((directory.Attributes & FileAttributes.ReparsePoint) != 0) return false;
+        if (!IsRegularLocalExecutable(path, static root => new DriveInfo(root).DriveType, File.GetAttributes))
+            return false;
         var info = FileVersionInfo.GetVersionInfo(path);
         return info.ProductName == ProductName && info.CompanyName == Publisher &&
             info.FileMajorPart == expected.Major && info.FileMinorPart == expected.Minor &&
             info.FileBuildPart == expected.Build && info.FilePrivatePart == Math.Max(expected.Revision, 0);
+    }
+
+    internal static bool IsRegularLocalExecutable(string path, Func<string, DriveType> driveType,
+        Func<string, FileAttributes> attributes)
+    {
+        // Classify before any filesystem access, then check parents from the root.
+        // Reading a leaf first can follow a parent link into an offline share.
+        if (path.Length < 3 || !char.IsAsciiLetter(path[0]) || path[1] != ':' ||
+            path[2] is not ('\\' or '/')) return false;
+        var root = Path.GetPathRoot(path)!;
+        if (driveType(root) is not (DriveType.Fixed or DriveType.Removable)) return false;
+        var parents = new Stack<string>();
+        for (var directory = Path.GetDirectoryName(path); directory is not null;
+            directory = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(directory)))
+            parents.Push(directory);
+        foreach (var directory in parents)
+        {
+            var value = attributes(directory);
+            if ((value & FileAttributes.Directory) == 0 || (value & FileAttributes.ReparsePoint) != 0)
+                return false;
+        }
+        return (attributes(path) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0;
     }
 
     private sealed partial class WindowsInstallerCatalog : IInstalledApplicationCatalog
@@ -124,7 +144,8 @@ public static partial class InstalledApplicationLocator
             uint count = MaximumCharacters;
             fixed (char* path = buffer)
             {
-                var state = MsiGetComponentPath(productCode, LegacyProfilesComponentCode, path, ref count);
+                var state = MsiGetComponentPathEx(productCode, LegacyProfilesComponentCode, null,
+                    MachineContext, path, ref count);
                 return state == 3 && count < MaximumCharacters ? new string(path, 0, (int)count) : null;
             }
         }
@@ -134,8 +155,8 @@ public static partial class InstalledApplicationLocator
         [LibraryImport("msi.dll", EntryPoint = "MsiGetProductInfoExW", StringMarshalling = StringMarshalling.Utf16)]
         private static unsafe partial uint MsiGetProductInfoEx(string productCode, string? userSid, uint context,
             string property, char* value, ref uint characters);
-        [LibraryImport("msi.dll", EntryPoint = "MsiGetComponentPathW", StringMarshalling = StringMarshalling.Utf16)]
-        private static unsafe partial int MsiGetComponentPath(string productCode, string componentCode,
-            char* path, ref uint characters);
+        [LibraryImport("msi.dll", EntryPoint = "MsiGetComponentPathExW", StringMarshalling = StringMarshalling.Utf16)]
+        private static unsafe partial int MsiGetComponentPathEx(string productCode, string componentCode,
+            string? userSid, uint context, char* path, ref uint characters);
     }
 }

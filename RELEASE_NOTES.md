@@ -7,4 +7,4 @@ ResoDrive 0.3.31 is an unpublished acceptance build for crash diagnostics and in
 
 Memory dumps may contain sensitive data. They stay local and are not sent automatically. Copy details provides a small diagnostic summary; dumps are separate, optional support attachments.
 
-These changes improve diagnosis. They do not yet establish or fix the cause of the reported vessel runtime crash. Publication requires the installer lifecycle, UAC and actual prior-version updater acceptance checks in docs/RELEASING.md.
+These changes improve diagnosis. A runtime can refuse startup before managed code when Windows lacks capabilities required for CET protection; see CRASH-DIAGNOSTICS.md for Microsoft's controlled compatibility workaround. The normal build retains CET. Publication requires the installer lifecycle, UAC and actual prior-version updater acceptance checks in docs/RELEASING.md.

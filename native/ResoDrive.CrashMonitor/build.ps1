@@ -28,5 +28,7 @@ if ($IncludeTestFixture) {
     if ($LASTEXITCODE -ne 0) { throw "Native crash fixture compilation failed ($LASTEXITCODE)." }
     & cl.exe /nologo /std:c17 /W4 /WX /MT "/Fo$objDirectory" "/Fe$(Join-Path $destination 'event-evidence-tests.exe')" (Join-Path $PSScriptRoot 'test-events.c') (Join-Path $PSScriptRoot 'event-evidence.c') /link /SUBSYSTEM:CONSOLE /DYNAMICBASE /NXCOMPAT /INCREMENTAL:NO wevtapi.lib
     if ($LASTEXITCODE -ne 0) { throw "Native event correlation test compilation failed ($LASTEXITCODE)." }
+    & cl.exe /nologo /std:c17 /W4 /WX /MT "/Fo$objDirectory" "/Fe$(Join-Path $destination 'path-evidence-tests.exe')" (Join-Path $PSScriptRoot 'test-paths.c') (Join-Path $PSScriptRoot 'event-evidence.c') /link /SUBSYSTEM:CONSOLE /DYNAMICBASE /NXCOMPAT /INCREMENTAL:NO /MANIFEST:EMBED "/MANIFESTINPUT:$(Join-Path $PSScriptRoot 'launcher.manifest')" user32.lib shell32.lib comctl32.lib bcrypt.lib version.lib advapi32.lib ole32.lib wevtapi.lib
+    if ($LASTEXITCODE -ne 0) { throw "Native path evidence test compilation failed ($LASTEXITCODE)." }
 }
 Write-Output $exe

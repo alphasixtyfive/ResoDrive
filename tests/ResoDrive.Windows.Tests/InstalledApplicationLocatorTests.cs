@@ -87,6 +87,77 @@ public sealed class InstalledApplicationLocatorTests
     }
 
     [Fact]
+    public void RemoteDriveIsRejectedBeforeAnyAttributesAreQueried()
+    {
+        var queries = new List<string>();
+        Assert.False(InstalledApplicationLocator.IsRegularLocalExecutable(@"Z:\ResoDrive\resodrive.exe",
+            root => { queries.Add(root); return DriveType.Network; },
+            _ => throw new InvalidOperationException("Remote filesystem must not be accessed.")));
+        Assert.Equal([@"Z:\"], queries);
+    }
+
+    [Theory]
+    [InlineData(@"\\server\share\resodrive.exe")]
+    [InlineData(@"\\?\C:\ResoDrive\resodrive.exe")]
+    [InlineData(@"resodrive.exe")]
+    public void NonLocalNamespacesAreRejectedBeforeDriveOrAttributesQueries(string path)
+    {
+        Assert.False(InstalledApplicationLocator.IsRegularLocalExecutable(path,
+            _ => throw new InvalidOperationException("Invalid namespace must not be queried."),
+            _ => throw new InvalidOperationException("Invalid namespace must not be queried.")));
+    }
+
+    [Fact]
+    public void ParentEvidenceIsQueriedFromRootToLeaf()
+    {
+        const string executable = @"C:\Company\ResoDrive\resodrive.exe";
+        var queries = new List<string>();
+        Assert.True(InstalledApplicationLocator.IsRegularLocalExecutable(executable,
+            root => { queries.Add("volume:" + root); return DriveType.Fixed; },
+            path => { queries.Add(path); return path == executable ? FileAttributes.Normal : FileAttributes.Directory; }));
+        Assert.Equal([@"volume:C:\", @"C:\", @"C:\Company", @"C:\Company\ResoDrive", executable], queries);
+    }
+
+    [Fact]
+    public void RealLocalJunctionIsRejectedBeforeAnyDescendantAccess()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "resodrive-locator-" + Guid.NewGuid().ToString("N"));
+        var target = Path.Combine(root, "target");
+        var junction = Path.Combine(root, "junction");
+        Directory.CreateDirectory(target);
+        var sentinel = Path.Combine(target, "sentinel.txt");
+        File.WriteAllText(sentinel, "Must remain unchanged.");
+        try
+        {
+            using var create = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                Arguments = $"/c mklink /J \"{junction}\" \"{target}\"",
+                UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardOutput = true, RedirectStandardError = true,
+            })!;
+            create.WaitForExit();
+            Assert.Equal(0, create.ExitCode);
+            Assert.False(InstalledApplicationLocator.IsRegularLocalExecutable(Path.Combine(junction, "resodrive.exe"),
+                static _ => DriveType.Fixed, path =>
+                {
+                    Assert.False(path.StartsWith(junction + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase),
+                        "No descendant of the junction may be queried.");
+                    return File.GetAttributes(path);
+                }));
+            Assert.Equal("Must remain unchanged.", File.ReadAllText(sentinel));
+        }
+        finally
+        {
+            // Remove only the exact inert fixture paths, never recurse through the link.
+            if (Directory.Exists(junction)) Directory.Delete(junction);
+            File.Delete(sentinel);
+            Directory.Delete(target);
+            Directory.Delete(root);
+        }
+    }
+
+    [Fact]
     public void WrongRequestedVersionAndExecutableIdentityCannotConfirmUpdate()
     {
         Assert.Throws<InvalidOperationException>(() => InstalledApplicationLocator.ResolveExecutablePath(

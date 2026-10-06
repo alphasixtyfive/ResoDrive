@@ -7,6 +7,8 @@
 - Distinguish activation timeouts, handled startup failures and normal shutdown; make fatal host background-service failures observable.
 - Install fresh copies in `%ProgramFiles%\ResoDrive`; retain legacy updater compatibility and use Windows Installer for staged migration from `rdrive`.
 - Preserve account settings, credentials, pending-upload cache and process ownership across installation-folder changes.
+- Keep error details compact on screen while copying the complete available report; reject redirected diagnostic and installed-executable paths before access.
+- Refresh the missing-prerequisite Setup payload to .NET Desktop Runtime 10.0.12; retain normal same-major runtime selection and CET protection.
 
 ## [0.3.30] - 2026-10-05
 

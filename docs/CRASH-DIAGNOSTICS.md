@@ -32,14 +32,19 @@ updater requests migration. Account data remains in `rdrive`. See
 
 ## Local evidence
 
-Diagnostic metadata is stored next to the active account-data directory, in
+Native incident summaries are stored next to the active account-data directory, in
 `<data-root>-diagnostics`; the default is `%LOCALAPPDATA%\rdrive-diagnostics`.
 With `RDRIVE_DATA_DIR=D:\test\data`, metadata belongs in
 `D:\test\data-diagnostics`. Keeping it outside account storage prevents a late
-crash observer from recreating data removed by a completed remote wipe. Metadata
-and memory dumps are local support evidence, retained separately from account
-cleanup. A remote wipe does not assert that Windows crash evidence has been
-erased.
+crash observer from recreating data removed by a completed remote wipe. Native
+summaries and memory dumps are local support evidence, retained separately from
+account cleanup. A remote wipe does not assert that Windows crash evidence has
+been erased.
+
+Managed startup and host logs remain in `<data-root>\logs`, normally
+`%LOCALAPPDATA%\rdrive\logs`. They use the account-write guard, participate in
+account cleanup, and stop writing when that account lifetime is blocked. They
+are not relocated to the native observer's separate directory.
 
 Native summaries and managed logs refuse network, device and reparse destinations
 before guarded filesystem access. An unavailable destination is reported honestly;
@@ -127,8 +132,10 @@ policy or installing ResoDrive.
 ## Reporting and analysis
 
 Use **Copy details** in the native error dialog, then paste the result into the
-support conversation. **Technical details** shows the same local summary.
-**Open diagnostics folder** locates the saved summary. A summary is small text;
+support conversation. **Technical details** shows the essential incident fields.
+**Open diagnostics folder** locates the saved summary. The on-screen technical
+details are bounded so that the buttons remain usable; copying retains the full
+available summary. A summary is small text;
 a memory dump is a separate sensitive file and is never put on the clipboard or
 sent automatically. If storage is unavailable, the dialog still offers copying
 the available evidence. Closing it does not terminate background transfers.
@@ -157,6 +164,46 @@ Specify the verified installed path, not a similarly named portable copy.
 `-t` also captures orderly termination: label that evidence as an exit dump until
 analysis establishes a crash. This is a troubleshooting step, not a permanent
 startup debugger or automatic fallback installed by the application.
+
+## Runtime compatibility
+
+ResoDrive targets .NET 10 and uses the x64 .NET Desktop Runtime with
+framework-dependent deployment. The default runtime selection accepts serviced
+patches within .NET 10. A .NET 10 executable cannot fall back to .NET 8: runtime
+roll-forward selects a compatible newer runtime, not an older major version.
+Maintaining a second application target or retrying a crashed process under a
+different major runtime would add a separate compatibility and installer burden.
+Use a controlled same-major runtime patch comparison when investigating a crash,
+and record the runtime actually loaded rather than assuming the installer pin.
+
+Setup's runtime payload pin serves computers missing the prerequisite. It does
+not force a patch update on computers that already satisfy the minimum runtime,
+and an MSI-only application update does not install a runtime. Changing the
+download pin alone does not establish that an existing runtime crash is fixed.
+
+Microsoft documents [runtime version selection](https://learn.microsoft.com/en-us/dotnet/core/versions/selection)
+and [supported Windows versions](https://learn.microsoft.com/en-us/dotnet/core/install/windows#supported-versions).
+Check the Windows build separately: both Windows 10 and Windows 11 report NT
+major version 10.0. A passing allocation/GC probe proves basic managed execution,
+not WPF, application startup or supported OS compatibility.
+
+From .NET 9, Microsoft marks application hosts as CET-compatible by default.
+CoreCLR can deliberately refuse startup when Windows enables shadow stacks but
+lacks the special user-mode APC capability it requires. This can happen before
+managed diagnostics initialize, while a console probe launched through another
+host succeeds. Diagnose the exact runtime and failure address before attributing
+an internal CLR error to this check.
+
+Prefer updating Windows to a supported, fully serviced version while retaining
+its protections. For a controlled comparison, Microsoft documents building the
+same application with `CETCompat=false`; this reduces a security mitigation and
+does not belong in an unexplained retry or machine-wide policy change. ResoDrive
+retains the default protection. Record the executable's CET flag, OS capability
+and per-process mitigation alongside the comparison result. Merely updating the
+runtime payload pin does not establish that this prerequisite is fixed.
+
+See Microsoft's [CET compatibility guidance](https://learn.microsoft.com/en-us/dotnet/core/compatibility/interop/9.0/cet-support)
+and the [runtime startup capability check](https://github.com/dotnet/dotnet/blob/e2f47b0110ed922f21a1522da67279133ce28f32/src/runtime/src/coreclr/vm/threads.cpp#L7639).
 
 ## Verification limits
 

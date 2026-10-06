@@ -118,6 +118,16 @@ function Wait-FixtureIdentity([string]$path) {
 $eventTests = Start-TestProcess (Join-Path $binaryRoot 'event-evidence-tests.exe') @() (Join-Path $runRoot 'event-test-data')
 Assert ((Wait-TestProcess $eventTests) -eq 0) 'Windows event metadata fixtures accept exact identity, reject wrong PID/time/provider, and exclude malformed/private fields.'
 
+$pathRoot = Join-Path $runRoot 'path-evidence'
+$pathTarget = Join-Path $pathRoot 'regular'
+$pathJunction = Join-Path $pathRoot 'junction'
+[IO.Directory]::CreateDirectory($pathTarget) | Out-Null
+Copy-Item -LiteralPath $fixture -Destination (Join-Path $pathTarget 'resodrive.exe')
+New-Item -ItemType Junction -Path $pathJunction -Target $pathTarget | Out-Null
+$pathTests = Start-TestProcess (Join-Path $binaryRoot 'path-evidence-tests.exe') @($pathTarget, $pathJunction, (Join-Path $pathRoot 'missing'), (Join-Path $pathTarget 'resodrive.exe')) (Join-Path $runRoot 'path-test-data')
+Assert ((Wait-TestProcess $pathTests) -eq 0) 'Optional filesystem evidence rejects ancestor junctions/missing paths without creating them; local executable evidence and bounded display/fallback summaries remain usable.'
+Assert (-not (Test-Path -LiteralPath (Join-Path $pathTarget 'must-not-be-created')) -and -not (Test-Path -LiteralPath (Join-Path $pathRoot 'missing'))) 'Read-only evidence validation neither writes through a junction nor creates an absent folder.'
+
 $normalRoot = Join-Path $runRoot 'normal-data'
 $normalIdentity = Join-Path $runRoot 'normal-identity.txt'
 $normalTrigger = Join-Path $runRoot 'normal-trigger.txt'
@@ -231,6 +241,40 @@ if ($VerifyDialog) {
 }
 
 if ($VerifyClipboard) {
+    # Use the installed matching desktop runtime's documented UIAutomation API.
+    # This runs only on the disposable hosted desktop, against our own fixture HWND.
+    $desktopRoot = Join-Path $env:DOTNET_ROOT 'shared/Microsoft.WindowsDesktop.App'
+    $desktopRuntime = Get-ChildItem -LiteralPath $desktopRoot -Directory |
+        Where-Object { ([version]$_.Name).Major -eq [Environment]::Version.Major } |
+        Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
+    if ($null -eq $desktopRuntime) { throw 'Hosted clipboard UI acceptance needs a desktop runtime matching PowerShell.' }
+    foreach ($assembly in @('WindowsBase.dll', 'UIAutomationTypes.dll', 'UIAutomationClient.dll')) {
+        Add-Type -Path (Join-Path $desktopRuntime.FullName $assembly)
+    }
+    function Read-FixtureDialogText([int]$processId) {
+        $handle = [NativeCrashWindowProbe]::VisibleHandle($processId)
+        if ($handle -eq [IntPtr]::Zero) { throw 'The controlled fixture dialog is unavailable.' }
+        $element = [Windows.Automation.AutomationElement]::FromHandle($handle)
+        $textCondition = [Windows.Automation.PropertyCondition]::new(
+            [Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Text)
+        $texts = $element.FindAll([Windows.Automation.TreeScope]::Descendants, $textCondition)
+        if ($texts.Count -gt 64) { throw 'The controlled TaskDialog unexpectedly exceeded the text-element bound.' }
+        $names = [Collections.Generic.List[string]]::new()
+        foreach ($item in $texts) {
+            $name = $item.Current.Name
+            if ($name.Length -gt 2048) { throw 'The controlled TaskDialog unexpectedly exceeded the visible-text bound.' }
+            $names.Add($name)
+        }
+        return [string]::Join("`n", $names)
+    }
+    function Wait-FixtureDialogFeedback([int]$processId, [string]$pattern) {
+        $deadline = [DateTime]::UtcNow.AddSeconds(5)
+        do {
+            if ((Read-FixtureDialogText $processId) -match $pattern) { return $true }
+            Start-Sleep -Milliseconds 50
+        } while ([DateTime]::UtcNow -lt $deadline)
+        return $false
+    }
     $copyRoot = Join-Path $runRoot 'clipboard-data'
     $process = Start-TestProcess $launcher @('--exit', '0x80131506') $copyRoot -ShowDialogs
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
@@ -239,8 +283,10 @@ if ($VerifyClipboard) {
         Assert ([NativeCrashWindowProbe]::HoldClipboard()) 'Disposable hosted clipboard is locked for the copy-failure test.'
         try {
             Assert ([NativeCrashWindowProbe]::ClickCopy($process.Id) -and [NativeCrashWindowProbe]::HasVisibleWindow($process.Id)) 'A busy clipboard keeps the original error dialog usable without another modal dialog.'
+            Assert (Wait-FixtureDialogFeedback $process.Id 'Windows could not copy the details\. Try again') 'The real dialog displays inline clipboard-busy feedback.'
         } finally { [NativeCrashWindowProbe]::ReleaseClipboard() }
         Assert ([NativeCrashWindowProbe]::ClickCopy($process.Id)) 'Copy details is invoked through the real native TaskDialog button.'
+        Assert (Wait-FixtureDialogFeedback $process.Id 'Details copied to the clipboard\.') 'The real dialog displays inline clipboard success feedback.'
         $copied = [NativeCrashWindowProbe]::ClipboardText()
         $reports = Reports $copyRoot
         $summary = [IO.File]::ReadAllText($reports[0].FullName)
