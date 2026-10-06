@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.31] - 2026-10-06 (unpublished acceptance build)
+## [0.3.31] - 2026-10-06
 
 - Show a standard Windows error dialog for unexpected startup and process failures, with Copy details and local diagnostic evidence. Normal startup has no extra window.
 - Configure bounded Windows Error Reporting full dumps for installed copies, retain matching build symbols separately, and record guarded UI and host diagnostics.
