@@ -63,6 +63,7 @@ jobs:
           name: installer-smoke-logs
           path: |
             ${{ runner.temp }}/resodrive-installer-smoke/*.log
+            ${{ runner.temp }}/resodrive-installer-smoke/*.json
             ${{ runner.temp }}/resodrive-cross-account-smoke/*
             ${{ runner.temp }}/resodrive-directory-migration-smoke/*.log
             ${{ runner.temp }}/resodrive-directory-migration-smoke/*.json

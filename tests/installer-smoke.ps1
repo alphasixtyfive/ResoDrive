@@ -4,7 +4,8 @@ param(
     [string]$LegacySetupVersion = '0.3.20',
     [string]$SameVersionBaselineMsiPath = '',
     [string]$SameVersionBaselineSetupPath = '',
-    [string]$CandidateMsiPath = ''
+    [string]$CandidateMsiPath = '',
+    [switch]$FullSetupUi
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,6 +14,7 @@ Set-StrictMode -Version Latest
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
     throw 'Installer smoke tests require a disposable GitHub-hosted Windows runner.'
 }
+if ($FullSetupUi) { . (Join-Path $PSScriptRoot 'installer-ui.ps1') }
 $project = [xml](Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Directory.Build.props') -Raw)
 $expectedVersion = $project.SelectSingleNode('/Project/PropertyGroup/VersionPrefix').InnerText
 $targetVersion = [version]$expectedVersion
@@ -53,7 +55,7 @@ New-Item -ItemType Directory -Path (Split-Path -Parent $managedCopy) -Force | Ou
 [IO.File]::WriteAllText($managedCopy, 'Managed copies survive upgrades and uninstall; only an accepted remote wipe removes them.')
 $managedCopyHash = (Get-FileHash -LiteralPath $managedCopy).Hash
 
-function Invoke-Installer([string]$Executable, [string]$Arguments, [switch]$ExpectFailure) {
+function Invoke-Installer([string]$Executable, [string]$Arguments, [switch]$ExpectFailure, [switch]$VisibleSetup) {
     # Windows Installer's service does not inherit process-local RDRIVE_DATA_DIR.
     # Pass the isolated root through the supported bundle/MSI property instead.
     if ([IO.Path]::GetFileName($Executable) -ieq 'msiexec.exe') {
@@ -63,7 +65,10 @@ function Invoke-Installer([string]$Executable, [string]$Arguments, [switch]$Expe
     }
     $process = Start-Process -FilePath $Executable -ArgumentList $Arguments -WindowStyle Hidden -PassThru
     try {
-        if (-not $process.WaitForExit(180000)) { throw "Installer timed out: $Arguments" }
+        if ($VisibleSetup) {
+            $action = if ($Arguments.Contains('/repair')) { 'Repair' } else { 'Install' }
+            Wait-VisibleSetup $process $action (Join-Path $testRoot ("setup-ui-" + [Guid]::NewGuid().ToString('N') + '.json'))
+        } elseif (-not $process.WaitForExit(180000)) { throw "Installer timed out: $Arguments" }
         if ($ExpectFailure) {
             if ($process.ExitCode -in @(0,3010)) { throw "Installer unexpectedly accepted an unsupported operation: $Arguments" }
         } elseif ($process.ExitCode -notin @(0,3010)) {
@@ -253,6 +258,12 @@ $candidateProductCode = Get-MsiProperty $candidateMsi 'ProductCode'
 $sameVersionUpgradeCode = Get-MsiProperty $candidateMsi 'UpgradeCode'
 $sameVersionReceipt = $null
 try {
+    $candidateSetupHash = Assert-VerifiedAsset $setup
+    $candidateMsiHash = Assert-VerifiedAsset $candidateMsi
+    [ordered]@{
+        Version = $expectedVersion; FullSetupUi = [bool]$FullSetupUi
+        SetupSha256 = $candidateSetupHash; MsiSha256 = $candidateMsiHash
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $testRoot 'candidate-assets.json') -Encoding utf8
     if ($sameVersionRecovery) {
         if (@($sameVersionPaths | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -ne 0) {
             throw 'Same-version smoke requires both baseline installers and the candidate MSI.'
@@ -285,7 +296,8 @@ try {
         $sameVersionReceipt['CandidateProductCode'] = $candidateProductCode
         $sameVersionReceipt | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $testRoot 'same-version-result.json') -Encoding utf8
     }
-    Invoke-Installer $setup "/install /quiet /norestart /log `"$testRoot\fresh.log`""
+    $setupDisplay = if ($FullSetupUi) { '' } else { '/quiet' }
+    Invoke-Installer $setup "/install $setupDisplay /norestart /log `"$testRoot\fresh.log`"" -VisibleSetup:$FullSetupUi
     $candidateAppHash = (Get-FileHash -LiteralPath $app -Algorithm SHA256).Hash
     $candidateProductVersion = (Get-Item -LiteralPath $app).VersionInfo.ProductVersion
     if (($candidateProductVersion -split '\+', 2)[0] -cne $expectedVersion) { throw 'Fresh installation has an unexpected product version.' }
@@ -357,7 +369,7 @@ try {
     }
     Assert-BundleCount 1
     Assert-DataPreserved
-    Invoke-Installer $setup "/install /quiet /norestart /log `"$testRoot\legacy-setup-migration.log`""
+    Invoke-Installer $setup "/install $setupDisplay /norestart /log `"$testRoot\legacy-setup-migration.log`"" -VisibleSetup:$FullSetupUi
     Assert-Stopped $running
     Assert-CandidateInstalled
     Assert-OneRemovableAppEntry
