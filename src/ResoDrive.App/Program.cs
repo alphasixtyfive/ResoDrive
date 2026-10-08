@@ -98,6 +98,7 @@ public static class Program
         {
             // No normal app/host startup, diagnostics or folder creation until the
             // migration succeeds. Preserve the original root on any preflight error.
+            DirectoryMigrationStartup.RecordHandoffFailure(exception);
             if (!args.Contains("--host", StringComparer.OrdinalIgnoreCase))
                 System.Windows.MessageBox.Show(exception.Message, "ResoDrive migration needs attention", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
             return 1;
@@ -105,6 +106,7 @@ public static class Program
 
         if (args.Any(argument => argument.Equals("--host", StringComparison.OrdinalIgnoreCase)))
         {
+            if (DirectoryMigrationStartup.PendingHandoff) return 1;
             HostApplication.RunAsync(args).GetAwaiter().GetResult();
             return 0;
         }
@@ -165,6 +167,7 @@ public static class Program
 
     internal static void TryStartHostEarly()
     {
+        if (DirectoryMigrationStartup.PendingHandoff) return;
         try
         {
             var paths = new ApplicationPaths();

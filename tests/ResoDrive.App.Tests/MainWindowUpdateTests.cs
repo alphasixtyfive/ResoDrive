@@ -81,17 +81,28 @@ internal static class MainWindowUpdateTests
         }
     }
 
-    private static void Capture(FrameworkElement root, double scale, Size size)
+    internal static void Capture(FrameworkElement root, double scale, Size size, string prefix = "update")
     {
         var directory = Environment.GetEnvironmentVariable("RESODRIVE_UI_CAPTURE_DIR");
         if (string.IsNullOrWhiteSpace(directory)) return;
         Directory.CreateDirectory(directory);
-        var bitmap = new RenderTargetBitmap((int)Math.Ceiling(root.ActualWidth * scale),
-            (int)Math.Ceiling(root.ActualHeight * scale), 96 * scale, 96 * scale, PixelFormats.Pbgra32);
-        bitmap.Render(root);
+        var margin = root.Margin;
+        var bitmap = new RenderTargetBitmap((int)Math.Ceiling((root.ActualWidth + margin.Left + margin.Right) * scale),
+            (int)Math.Ceiling((root.ActualHeight + margin.Top + margin.Bottom) * scale), 96 * scale, 96 * scale, PixelFormats.Pbgra32);
+        // Render in the control's local coordinates; a window-content margin
+        // must not offset/crop the screenshot's right and bottom edges.
+        var drawing = new DrawingVisual();
+        using (var context = drawing.RenderOpen())
+        {
+            context.DrawRectangle(Window.GetWindow(root)?.Background, null,
+                new Rect(0, 0, bitmap.Width, bitmap.Height));
+            var bounds = new Rect(margin.Left, margin.Top, root.ActualWidth, root.ActualHeight);
+            context.DrawRectangle(new VisualBrush(root), null, bounds);
+        }
+        bitmap.Render(drawing);
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(bitmap));
-        using var file = File.Create(Path.Combine(directory, $"update-{size.Width:0}-{scale * 100:0}.png"));
+        using var file = File.Create(Path.Combine(directory, $"{prefix}-{size.Width:0}-{scale * 100:0}.png"));
         encoder.Save(file);
     }
 

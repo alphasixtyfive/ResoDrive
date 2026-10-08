@@ -5,6 +5,7 @@ namespace ResoDrive.App;
 internal sealed class UiDiagnosticLog
 {
     private static readonly Lazy<UiDiagnosticLog> Instance = new(CreateCurrent);
+    private static readonly UiDiagnosticLog PendingMigrationLog = new();
     private readonly ProcessDiagnosticLog? _log;
 
     internal UiDiagnosticLog(string path, long maximumBytes = ProcessDiagnosticLog.DefaultMaximumBytes,
@@ -26,7 +27,8 @@ internal sealed class UiDiagnosticLog
         }
     }
 
-    internal static UiDiagnosticLog Current => Instance.Value;
+    // Do not bind the process logger to a root that is about to be renamed.
+    internal static UiDiagnosticLog Current => DirectoryMigrationStartup.PendingHandoff ? PendingMigrationLog : Instance.Value;
     internal void StartSession() => _log?.StartSession();
     internal void Information(string eventName, string? detail = null) => _log?.Information(eventName, detail);
     internal string Exception(string eventName, Exception exception) => _log?.Exception(eventName, exception) ??

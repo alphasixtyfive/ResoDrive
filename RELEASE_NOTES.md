@@ -1,6 +1,8 @@
-This update makes upgrades more reliable and keeps connection interruptions quieter.
+This update fixes an incomplete move of existing app data after an upgrade.
 
 - Existing installations move to the current ResoDrive folders automatically, preserving accounts, settings, cached files and local copies.
+- Drives and sync jobs wait until the move finishes. If a file cannot be moved, ResoDrive explains the problem and keeps your data for a retry.
+- Future in-app updates use the branded Setup window, with Windows Installer running quietly behind it.
 - Update downloads detect a stalled connection sooner and keep partial downloads so you can resume. Retrying an installation reuses the verified download, and failures give clearer steps to recover.
 - The refresh button stays available when an update is shown, so you can check for a newer release.
 - A drive that stays offline reports the problem once. Brief reconnects and repeated retries no longer fill the log or repeat the same warning.
@@ -8,4 +10,4 @@ This update makes upgrades more reliable and keeps connection interruptions quie
 - The Transfers window refreshes more efficiently and shows when sync status is unavailable.
 - Diagnostic reports include the app version and more useful details when background work stops unexpectedly.
 
-Download **ResoDrive-Setup.exe** below. If your older installation still has a separate Setup entry in Windows, use this download for the update. Your settings and files are preserved.
+Version 0.3.35 was withdrawn after an upgrade could leave existing app data in its previous location. Download **ResoDrive-Setup.exe** below and run it manually for this update. Let uploads finish and close documents opened from ResoDrive first. Your settings and files are preserved.

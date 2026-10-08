@@ -339,6 +339,11 @@ public sealed class ApplicationUpdateHandoffTests
 
         Assert.True(ApplicationUpdateHandoff.TryParseCompletionRequest(
             valid, helper, updates, out _));
+        var setup = Replace(valid, 2, Path.Combine(updates, "resodrive-win-x64-0.3.0-setup.exe"));
+        Assert.True(ApplicationUpdateHandoff.TryParseCompletionRequest(
+            setup, helper, updates, out _));
+        Assert.False(ApplicationUpdateHandoff.TryParseCompletionRequest(
+            Replace(setup, 2, Path.Combine(updates, "resodrive-win-x64-0.3.18-setup.exe")), helper, updates, out _));
         Assert.False(ApplicationUpdateHandoff.TryParseCompletionRequest(
             valid, Path.Combine(directory.Path, "installed", "resodrive.exe"), updates, out _));
         Assert.False(ApplicationUpdateHandoff.TryParseCompletionRequest(
@@ -364,6 +369,28 @@ public sealed class ApplicationUpdateHandoffTests
         Assert.Contains("/l*v", startInfo.Arguments, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("resodrive-win-x64-0.3.0.msi.log", startInfo.Arguments, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("RDRIVE_DATA_ROOT=", startInfo.Arguments, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SetupHandoffUsesTheBrandedBundleWithExplicitDataRoot()
+    {
+        var path = @"C:\updates\resodrive-win-x64-0.3.36-setup.exe";
+        var start = ApplicationUpdateHandoff.CreateInstallerStartInfo(path);
+        Assert.Equal(path, start.FileName);
+        Assert.Equal("runas", start.Verb);
+        Assert.Contains("/passive /norestart /log", start.Arguments, StringComparison.Ordinal);
+        Assert.Contains("ResoDriveDataRoot=", start.Arguments, StringComparison.Ordinal);
+        Assert.DoesNotContain("/i ", start.Arguments, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(1618)]
+    [InlineData(unchecked((int)0x80070652))]
+    public void BusyInstallerResultIsActionableForMsiAndSetup(int code)
+    {
+        var result = ApplicationUpdateHandoff.ClassifyInstallerExitCode(code);
+        Assert.Equal("failed", result.Status);
+        Assert.Contains("Let it finish", result.Message, StringComparison.Ordinal);
     }
 
     [Fact]

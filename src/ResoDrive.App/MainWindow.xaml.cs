@@ -133,7 +133,6 @@ public partial class MainWindow : WpfWindow
             _timer.Start();
             IsStartupReady = true;
             StartupReady?.Invoke(this, EventArgs.Empty);
-            DirectoryMigrationStartup.ScheduleCompletion();
             _ = ObservePreviousUpdateOutcomeAsync();
             await RefreshConnectionMetadataAsync();
             await Task.WhenAll(CheckApplicationUpdateAsync(), CheckRcloneUpdateAsync());

@@ -12,6 +12,7 @@ internal static partial class DirectoryMigrationStartup
     private const string RetryOnNextStartEnvironmentVariable = "RESODRIVE_MIGRATION_RETRY_ON_NEXT_START";
     private static string StateDirectory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ResoDriveMigration");
+    internal static bool PendingHandoff { get; private set; }
 
     internal static void EnsureReady()
     {
@@ -20,7 +21,6 @@ internal static partial class DirectoryMigrationStartup
         if (!string.IsNullOrWhiteSpace(configured) &&
             !InstallationDirectories.SamePath(configured, ApplicationPaths.LegacyDefaultRoot) &&
             !InstallationDirectories.SamePath(configured, ApplicationPaths.DefaultRoot)) return;
-        if (Environment.GetEnvironmentVariable(BridgeEnvironmentVariable) == "1") return;
         // New installations pay only these existence checks: no migration helper,
         // journal creation, MSI lookup, credential reads, locks or migration UI.
         if (!Directory.Exists(ApplicationPaths.LegacyDefaultRoot) &&
@@ -37,16 +37,41 @@ internal static partial class DirectoryMigrationStartup
                 return;
             }
             using var helpers = FindLegacyHelpers();
-            if (helpers.Processes.Count != 0)
+            if (helpers.Processes.Count != 0 || Environment.GetEnvironmentVariable(BridgeEnvironmentVariable) == "1")
             {
                 Environment.SetEnvironmentVariable("RDRIVE_DATA_DIR", ApplicationPaths.LegacyDefaultRoot);
-                Environment.SetEnvironmentVariable(BridgeEnvironmentVariable, "1");
+                PendingHandoff = true;
                 return;
             }
         }
         MigrateAsync(CancellationToken.None).GetAwaiter().GetResult();
         if (!string.IsNullOrWhiteSpace(configured))
             Environment.SetEnvironmentVariable("RDRIVE_DATA_DIR", ApplicationPaths.DefaultRoot);
+    }
+
+    internal static async Task FinishHandoffAsync(CancellationToken token)
+    {
+        // A visible startup window lets the old updater finish its readiness
+        // handshake, without starting a host or mounting any drives beforehand.
+        using var helpers = FindLegacyHelpers();
+        foreach (var helper in helpers.Processes)
+            await helper.WaitForExitAsync(token).ConfigureAwait(false);
+        await MigrateAsync(token).ConfigureAwait(false);
+        Environment.SetEnvironmentVariable(BridgeEnvironmentVariable, null);
+        Environment.SetEnvironmentVariable(RetryOnNextStartEnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("RDRIVE_DATA_DIR", ApplicationPaths.DefaultRoot);
+        PendingHandoff = false;
+        WriteResult(true, "Both application and user-data locations have migrated.");
+    }
+
+    internal static void RecordHandoffFailure(Exception exception)
+    {
+        try
+        {
+            _ = UserDataDirectoryMigration.PrepareHelperDirectory();
+            WriteResult(false, RecoveryToolsService.Sanitize(exception.Message));
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException) { }
     }
 
     private static async Task MigrateAsync(CancellationToken token)
@@ -89,74 +114,8 @@ internal static partial class DirectoryMigrationStartup
         }
     }
 
-    internal static void ScheduleCompletion()
-    {
-        if (Environment.GetEnvironmentVariable(RetryOnNextStartEnvironmentVariable) == "1" ||
-            Environment.GetEnvironmentVariable(BridgeEnvironmentVariable) != "1" ||
-            !InstallationDirectories.SamePath(new ApplicationPaths().Root, ApplicationPaths.LegacyDefaultRoot)) return;
-        _ = UserDataDirectoryMigration.PrepareHelperDirectory();
-        var helper = Path.Combine(StateDirectory, "resodrive-migration-helper.exe");
-        if (File.Exists(helper) && (File.GetAttributes(helper) & FileAttributes.ReparsePoint) != 0)
-            throw new IOException("The migration helper cannot be a symbolic link.");
-        // This helper outlives the UI and never runs from either migrated directory.
-        // A helper already in progress owns a separate lease and is left alone.
-        try { File.Copy(InstallationDirectories.Executable, helper, overwrite: true); }
-        catch (IOException) when (File.Exists(helper)) { return; }
-        using var process = Process.Start(new ProcessStartInfo(helper)
-        {
-            Arguments = CompletionArgument, UseShellExecute = false, CreateNoWindow = true,
-            WorkingDirectory = StateDirectory,
-        });
-    }
-
-    internal static async Task<int> CompleteAsync()
-    {
-        _ = UserDataDirectoryMigration.PrepareHelperDirectory();
-        FileStream lease;
-        try { lease = new(Path.Combine(StateDirectory, "completion.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
-        catch (IOException) { return 0; }
-        using (lease)
-        using (var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5)))
-        {
-            try
-            {
-                using var helpers = FindLegacyHelpers();
-                foreach (var helper in helpers.Processes)
-                    await helper.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
-                // Do not move data while the reopened app/host/rclone can write it.
-                // A refused shutdown leaves that app and all data in place for retry.
-                await MigrateAsync(timeout.Token).ConfigureAwait(false);
-                Environment.SetEnvironmentVariable(BridgeEnvironmentVariable, null);
-                Environment.SetEnvironmentVariable("RDRIVE_DATA_DIR", ApplicationPaths.DefaultRoot);
-                using var application = Process.Start(new ProcessStartInfo(InstallationDirectories.Executable)
-                {
-                    UseShellExecute = false, WorkingDirectory = InstallationDirectories.Current,
-                }) ?? throw new IOException("The migrated application could not be restarted.");
-                if (!SingleInstanceActivation.RequestShow(App.CreateInstanceScope(InstallationDirectories.Current), TimeSpan.FromMinutes(2)))
-                    throw new IOException("The migrated application did not acknowledge a ready window.");
-                WriteResult(true, "Both application and user-data locations have migrated.");
-                ScheduleHelperCleanup();
-                return 0;
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or
-                System.ComponentModel.Win32Exception or TimeoutException or OperationCanceledException or JsonException)
-            {
-                WriteResult(false, RecoveryToolsService.Sanitize(exception.Message));
-                // Restore a usable original app after a rejected migration, but
-                // do not create an automatic retry loop or open a partial target.
-                if (Directory.Exists(ApplicationPaths.LegacyDefaultRoot) && !Directory.Exists(ApplicationPaths.DefaultRoot))
-                {
-                    var fallback = new ProcessStartInfo(InstallationDirectories.Executable) {
-                        UseShellExecute = false, WorkingDirectory = InstallationDirectories.Current };
-                    fallback.Environment["RDRIVE_DATA_DIR"] = ApplicationPaths.LegacyDefaultRoot;
-                    fallback.Environment[BridgeEnvironmentVariable] = "1";
-                    fallback.Environment[RetryOnNextStartEnvironmentVariable] = "1";
-                    using var application = Process.Start(fallback);
-                }
-                return 1;
-            }
-        }
-    }
+    // Compatibility entry point for an already copied older migration helper.
+    internal static Task<int> CompleteAsync() => MigrateWithoutLaunchingAsync();
 
     private static void WriteResult(bool succeeded, string message) => File.WriteAllText(
         Path.Combine(StateDirectory, "completion.json"), JsonSerializer.Serialize(new { Succeeded = succeeded, Message = message, RecordedAtUtc = DateTimeOffset.UtcNow }));

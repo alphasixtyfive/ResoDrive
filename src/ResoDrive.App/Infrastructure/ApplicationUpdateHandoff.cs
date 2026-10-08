@@ -67,11 +67,10 @@ internal static class ApplicationUpdateHandoff
         var installedExecutable = Path.GetFullPath(installedExecutablePath);
         var installer = Path.GetFullPath(installerPath);
         var directory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(updatesDirectory));
-        var expectedInstaller = Path.Combine(directory, $"resodrive-win-x64-{version}.msi");
         var expectedExecutableName = typeof(Program).Assembly.GetName().Name + ".exe";
         if (!Version.TryParse(version, out var parsedVersion) || parsedVersion.Build < 0 ||
             parsedVersion.Revision >= 0 || parsedVersion.ToString(3) != version ||
-            !installer.Equals(expectedInstaller, StringComparison.OrdinalIgnoreCase) ||
+            !IsExpectedInstallerPath(installer, directory, version) ||
             !Path.GetFileName(sourceExecutable).Equals(
                 expectedExecutableName,
                 StringComparison.OrdinalIgnoreCase) ||
@@ -175,12 +174,9 @@ internal static class ApplicationUpdateHandoff
             var sourceExecutablePath = Path.GetFullPath(arguments[3]);
             var installedExecutablePath = Path.GetFullPath(arguments[4]);
             var outcomePath = Path.GetFullPath(arguments[5]);
-            var expectedInstallerPath = Path.Combine(
-                updatesDirectory,
-                $"resodrive-win-x64-{arguments[1]}.msi");
             var expectedOutcomePath = Path.Combine(updatesDirectory, OutcomeFileName);
             var expectedExecutableName = typeof(Program).Assembly.GetName().Name + ".exe";
-            if (!installerPath.Equals(expectedInstallerPath, StringComparison.OrdinalIgnoreCase) ||
+            if (!IsExpectedInstallerPath(installerPath, updatesDirectory, arguments[1]) ||
                 !outcomePath.Equals(expectedOutcomePath, StringComparison.OrdinalIgnoreCase) ||
                 !Path.GetFileName(sourceExecutablePath).Equals(
                     expectedExecutableName,
@@ -418,7 +414,7 @@ internal static class ApplicationUpdateHandoff
     }
 
     internal static (string Status, string Message) ClassifyInstallerExitCode(int exitCode) =>
-        exitCode switch
+        NormalizeInstallerExitCode(exitCode) switch
         {
             0 => ("succeeded", "The ResoDrive update was installed."),
             1641 => ("succeeded", "The ResoDrive update was installed and Windows initiated a restart."),
@@ -430,6 +426,10 @@ internal static class ApplicationUpdateHandoff
             1632 => ("failed", "Windows cannot write to its temporary folder. Check free disk space and folder permissions, then retry. ResoDrive was not updated."),
             _ => ("failed", $"Windows Installer stopped with code {exitCode}. ResoDrive was not updated."),
         };
+
+    // Burn can return HRESULT_FROM_WIN32; MSI returns the underlying Win32 code.
+    private static int NormalizeInstallerExitCode(int code) =>
+        ((uint)code & 0xFFFF0000u) == 0x80070000u ? code & 0xFFFF : code;
 
     private static void WriteOutcome(string path, ApplicationUpdateOutcome outcome)
     {
@@ -466,17 +466,25 @@ internal static class ApplicationUpdateHandoff
 
     internal static ProcessStartInfo CreateInstallerStartInfo(string installerPath)
     {
+        var setup = Path.GetExtension(installerPath).Equals(".exe", StringComparison.OrdinalIgnoreCase);
         var logPath = Path.ChangeExtension(installerPath, ".msi.log");
         var dataRoot = new ApplicationPaths().Root;
         return new ProcessStartInfo
         {
-            FileName = Path.Combine(Environment.SystemDirectory, "msiexec.exe"),
-            Arguments = $"/i \"{installerPath}\" /passive /norestart /l*v \"{logPath}\" RDRIVE_DATA_ROOT=\"{Path.TrimEndingDirectorySeparator(dataRoot)}\\.\"",
+            FileName = setup ? installerPath : Path.Combine(Environment.SystemDirectory, "msiexec.exe"),
+            Arguments = setup
+                ? $"/passive /norestart /log \"{Path.ChangeExtension(installerPath, ".setup.log")}\" ResoDriveDataRoot=\"{Path.TrimEndingDirectorySeparator(dataRoot)}\\.\""
+                : $"/i \"{installerPath}\" /passive /norestart /l*v \"{logPath}\" RDRIVE_DATA_ROOT=\"{Path.TrimEndingDirectorySeparator(dataRoot)}\\.\"",
             UseShellExecute = true,
             Verb = "runas",
             WorkingDirectory = Path.GetDirectoryName(installerPath),
         };
     }
+
+    private static bool IsExpectedInstallerPath(string path, string directory, string version) =>
+        path.Equals(Path.Combine(directory, $"resodrive-win-x64-{version}-setup.exe"), StringComparison.OrdinalIgnoreCase) ||
+        // Retain the completion protocol for an older updater's MSI handoff.
+        path.Equals(Path.Combine(directory, $"resodrive-win-x64-{version}.msi"), StringComparison.OrdinalIgnoreCase);
 
     internal static async Task<FileStream?> OpenVerifiedInstallerAsync(
         string installerPath,

@@ -4,7 +4,7 @@ using ResoDrive.Windows;
 
 namespace ResoDrive.App;
 
-/// <summary>Temporary old-path launcher. Relays readiness only from the actual migrated window.</summary>
+/// <summary>Temporary old-path launcher. Relays activation from the real application window, including migration startup.</summary>
 internal static class LegacyInstallationBridge
 {
     internal static int Run(string[] arguments)

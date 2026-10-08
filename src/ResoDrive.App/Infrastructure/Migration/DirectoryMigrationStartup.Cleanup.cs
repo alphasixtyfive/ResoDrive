@@ -11,23 +11,6 @@ internal static partial class DirectoryMigrationStartup
     internal const string CleanupArgument = "--cleanup-user-migration-helper";
     private static string HelperPath => Path.Combine(StateDirectory, "resodrive-migration-helper.exe");
 
-    private static void ScheduleHelperCleanup()
-    {
-        // Cleanup failure must never turn a completed data move into a retry of
-        // the old root. The receipt remains useful even after the copy is removed.
-        try
-        {
-            using var cleanup = Process.Start(new ProcessStartInfo(InstallationDirectories.Executable)
-            {
-                Arguments = $"{CleanupArgument} {Environment.ProcessId.ToString(CultureInfo.InvariantCulture)}",
-                UseShellExecute = false, CreateNoWindow = true,
-                WorkingDirectory = InstallationDirectories.Current,
-            });
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
-            InvalidOperationException or System.ComponentModel.Win32Exception) { }
-    }
-
     internal static async Task<int> CleanupHelperAsync(int parentProcessId)
     {
         try

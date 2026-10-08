@@ -38,6 +38,12 @@ public repository before publishing.
    Run `tests/installer-smoke.ps1 -FullSetupUi` on the disposable hosted runner:
    fresh Setup and the older Setup-owned transition must show their own progress
    without a separate Windows Installer window. Preserve the window receipts.
+   Also run the current helper's actual passive Setup handoff and the old public
+   helper's migration with a startup drive enabled. Verify that the new host
+   starts only after the old helper exits and the data move completes. Exercise
+   recovery from .35's new program path with its old default data root; an empty
+   settings fixture cannot establish this migration behavior. Preserve failure
+   receipts as well as successful data hashes.
 4. Commit the release and create an annotated tag matching the version exactly,
    for example `git tag -a v0.3.0 -m "ResoDrive 0.3.0"`.
 5. Push the commit and tag. The Release workflow rebuilds and tests from the tag,

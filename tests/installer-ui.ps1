@@ -65,7 +65,7 @@ public static class ResoDriveInstallerUi
 }
 '@
 
-function Wait-VisibleSetup($Process, [string]$Action, [string]$EvidencePath) {
+function Wait-VisibleSetup($Process, [string]$Action, [string]$EvidencePath, [switch]$Passive) {
     $deadline = [DateTime]::UtcNow.AddSeconds(180)
     $observed = [Collections.Generic.Dictionary[string, object]]::new()
     $setupSeen = $progressSeen = $actionClicked = $false
@@ -92,15 +92,15 @@ function Wait-VisibleSetup($Process, [string]$Action, [string]$EvidencePath) {
                 if (@($children | Where-Object { $_.ClassName -ieq 'msctls_progress32' }).Count -gt 0) {
                     $progressSeen = $true
                 }
-                if (-not $actionClicked) {
+                if (-not $Passive -and -not $actionClicked) {
                     $actionClicked = [ResoDriveInstallerUi]::ClickButton($window.Handle, $Action)
-                } elseif (@($children | Where-Object { $_.Caption -ceq 'Setup complete' -or $_.Caption -ceq 'Setup could not finish' -or $_.Caption -ceq 'ResoDrive is ready' }).Count -gt 0) {
+                } elseif (-not $Passive -and @($children | Where-Object { $_.Caption -ceq 'Setup complete' -or $_.Caption -ceq 'Setup could not finish' -or $_.Caption -ceq 'ResoDrive is ready' }).Count -gt 0) {
                     [ResoDriveInstallerUi]::ClickButton($window.Handle, 'Close') | Out-Null
                 }
             }
         }
-        if (-not $setupSeen -or -not $actionClicked -or -not $progressSeen) {
-            throw 'The full Setup window and its actual progress page were not observed.'
+        if (-not $setupSeen -or (-not $Passive -and -not $actionClicked) -or -not $progressSeen) {
+            throw 'The Setup window and its actual progress page were not observed.'
         }
         $msiWindows = @($observed.Values | Where-Object WindowsInstaller -EQ $true)
         if ($msiWindows.Count -ne 0) {
@@ -108,7 +108,7 @@ function Wait-VisibleSetup($Process, [string]$Action, [string]$EvidencePath) {
         }
     } finally {
         [ordered]@{
-            SetupSeen = $setupSeen; ActionClicked = $actionClicked; ProgressSeen = $progressSeen
+            SetupSeen = $setupSeen; Passive = [bool]$Passive; ActionClicked = $actionClicked; ProgressSeen = $progressSeen
             ExitCode = if ($Process.HasExited) { $Process.ExitCode } else { $null }
             Windows = @($observed.Values)
         } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $EvidencePath -Encoding utf8

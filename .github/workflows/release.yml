@@ -92,6 +92,16 @@ jobs:
       - name: Verify populated application window and process recovery
         shell: pwsh
         run: ./tests/process-smoke.ps1 -AppPath artifacts/win-x64/resodrive/resodrive.exe
+      - name: Verify branded in-app Setup updater
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./tests/setup-update-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName -AppPath artifacts/win-x64/resodrive/resodrive.exe
+      - name: Verify recovery from incomplete user-data migration
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./tests/migration-recovery-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName -AppPath artifacts/win-x64/resodrive/resodrive.exe
       - name: Preserve installer diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -103,6 +113,10 @@ jobs:
             ${{ runner.temp }}/resodrive-cross-account-smoke/*
             ${{ runner.temp }}/resodrive-directory-migration-smoke/*.log
             ${{ runner.temp }}/resodrive-directory-migration-smoke/*.json
+            ${{ runner.temp }}/resodrive-setup-update-smoke/*.log
+            ${{ runner.temp }}/resodrive-setup-update-smoke/*.json
+            ${{ runner.temp }}/resodrive-migration-recovery-smoke/*.log
+            ${{ runner.temp }}/resodrive-migration-recovery-smoke/*.json
           if-no-files-found: ignore
       - name: Preserve release artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

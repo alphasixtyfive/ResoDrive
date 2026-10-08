@@ -25,7 +25,7 @@ public partial class App : System.Windows.Application
     private readonly System.Collections.Concurrent.ConcurrentQueue<
         SingleInstanceActivation.ActivationRequest> _pendingShowRequests = new();
 
-    protected override void OnStartup(System.Windows.StartupEventArgs e)
+    protected override async void OnStartup(System.Windows.StartupEventArgs e)
     {
         RegisterGlobalExceptionLogging();
         var explicitShow = e.Args.Any(argument =>
@@ -50,6 +50,31 @@ public partial class App : System.Windows.Application
 
         _activation.Listen(ShowRequested);
         UiDiagnosticLog.Current.Information("activation.listener_ready");
+
+        if (DirectoryMigrationStartup.PendingHandoff)
+        {
+            ShutdownMode = System.Windows.ShutdownMode.OnExplicitShutdown;
+            var migration = new MigrationStartupWindow();
+            MainWindow = migration;
+            migration.Loaded += (_, _) => ProcessPendingShowRequest();
+            migration.Show();
+            try
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+                await DirectoryMigrationStartup.FinishHandoffAsync(timeout.Token);
+                migration.Finish();
+                UiDiagnosticLog.Current.StartSession();
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+                InvalidOperationException or System.ComponentModel.Win32Exception or TimeoutException or
+                OperationCanceledException or System.Text.Json.JsonException)
+            {
+                DirectoryMigrationStartup.RecordHandoffFailure(exception);
+                migration.ShowFailure(ResoDrive.Windows.RecoveryToolsService.Sanitize(exception.Message));
+                migration.Closed += (_, _) => Shutdown(1);
+                return;
+            }
+        }
 
         var wipeState = new ResoDrive.Windows.RemoteWipeStateStore(new ResoDrive.Windows.ApplicationPaths()).Read();
         if (wipeState is { Phase: not ResoDrive.Windows.RemoteWipePhase.Completed })
@@ -138,6 +163,17 @@ public partial class App : System.Windows.Application
     {
         if (_pendingShowRequests.IsEmpty)
             return;
+
+        if (MainWindow is MigrationStartupWindow migration && migration.IsLoaded && migration.IsVisible)
+        {
+            migration.Activate();
+            while (_pendingShowRequests.TryDequeue(out var pending))
+            {
+                pending.Acknowledge();
+                _activationState.CompleteRequest();
+            }
+            return;
+        }
 
         var mainWindow = MainWindow as MainWindow;
         var dispatcherLive = mainWindow is not null &&

@@ -41,6 +41,7 @@ public sealed class SyncEditorWindowTests
                 LogWindowTests.VerifyWithApplicationResources();
                 SetupWindowTests.VerifyWithApplicationResources();
                 MainWindowUpdateTests.VerifyWithApplicationResources();
+                MigrationStartupWindowTests.VerifyWithApplicationResources();
                 Assert.False(Directory.Exists(paths.Root));
             }
             catch (Exception exception)

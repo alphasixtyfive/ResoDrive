@@ -85,7 +85,7 @@ public sealed partial class ApplicationUpdateService
             var downloadRoot = ProductLinks.Repository.AbsoluteUri.TrimEnd('/') +
                 $"/releases/download/v{version}/";
             var installer = updateAvailable
-                ? new Uri(downloadRoot + $"resodrive-win-x64-{version}.msi")
+                ? new Uri(downloadRoot + $"resodrive-win-x64-{version}-setup.exe")
                 : null;
             var checksum = updateAvailable
                 ? new Uri(installer!.AbsoluteUri + ".sha256")
@@ -138,7 +138,7 @@ public sealed partial class ApplicationUpdateService
         var directory = Path.GetFullPath(destinationDirectory);
         var installerPath = Path.Combine(
             directory,
-            $"resodrive-win-x64-{update.AvailableVersion}.msi");
+            $"resodrive-win-x64-{update.AvailableVersion}-setup.exe");
         var temporaryPath = installerPath + ".download";
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromHours(2));
@@ -157,7 +157,7 @@ public sealed partial class ApplicationUpdateService
 
             // A cancelled/blocked installation does not invalidate its download.
             // Recheck against the current published checksum before using it again;
-            // the handoff still hashes and locks the MSI before elevating it.
+            // the handoff still hashes and locks the package before elevating it.
             if (File.Exists(installerPath))
             {
                 await using var cached = new FileStream(installerPath, FileMode.Open, FileAccess.Read,
@@ -292,7 +292,7 @@ public sealed partial class ApplicationUpdateService
         uri.Host.Equals(ProductLinks.Repository.Host, StringComparison.OrdinalIgnoreCase) &&
         uri.AbsolutePath.StartsWith(repositoryPath + "/", StringComparison.OrdinalIgnoreCase) &&
         uri.AbsolutePath[repositoryPath.Length..].Equals(
-            $"/releases/download/v{version}/resodrive-win-x64-{version}.msi" + (checksum ? ".sha256" : string.Empty),
+            $"/releases/download/v{version}/resodrive-win-x64-{version}-setup.exe" + (checksum ? ".sha256" : string.Empty),
             StringComparison.Ordinal);
     }
 
@@ -305,7 +305,8 @@ public sealed partial class ApplicationUpdateService
 
     private static void RemoveOlderInstallers(string directory, string current)
     {
-        foreach (var path in Directory.EnumerateFiles(directory, "resodrive-win-x64-*.msi"))
+        foreach (var path in Directory.EnumerateFiles(directory, "resodrive-win-x64-*.msi")
+            .Concat(Directory.EnumerateFiles(directory, "resodrive-win-x64-*-setup.exe")))
         {
             if (!path.Equals(current, StringComparison.OrdinalIgnoreCase))
                 DeleteIfPresent(path);

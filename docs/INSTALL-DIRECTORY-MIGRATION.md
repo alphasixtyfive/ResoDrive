@@ -1,6 +1,6 @@
 # Installation directory migration
 
-Version 0.3.34 installs to `%ProgramFiles%\ResoDrive` and uses
+Version 0.3.36 installs to `%ProgramFiles%\ResoDrive` and uses
 `%LOCALAPPDATA%\ResoDrive`. It is an increasing-version upgrade from the
 accepted 0.3.30 release; published tags and accepted assets remain unchanged.
 
@@ -16,8 +16,9 @@ scheduled migration task and show no migration prompt.
 Migration is isolated in `src/ResoDrive.Windows/Migration` and
 `src/ResoDrive.App/Infrastructure/Migration`. It uses the same executable already
 embedded for installer preparation; there is no additional installer binary or
-resident supervisor. Legacy upgrades temporarily copy that executable outside
-the data root and to the old program path to survive the old updater's handoff.
+resident supervisor. Legacy upgrades temporarily copy that executable to the old
+program path to survive the old updater's handoff. The corrected startup no
+longer copies a second user-data helper or restarts a mounted app to move data.
 
 ## One-update sequence
 
@@ -36,10 +37,11 @@ the data root and to the old program path to survive the old updater's handoff.
    user migration tasks for affected Windows accounts.
 4. For an ordinary launch, user migration completes before normal application or
    host startup. During an old in-app update, the launcher first forwards the old
-   activation request to the real new window. Once the old update helper exits,
-   a user helper safely closes the reopened app, migrates its data and restarts
-   it at the new root. Readiness requires a real window acknowledgement.
-   The installed app removes the temporary user helper after that helper exits.
+   activation request to a real visible migration startup window. That window
+   holds normal host, drive and sync startup until the old update helper exits
+   and data migration completes. Readiness requires a real window acknowledgement.
+   Failure leaves that window open with recovery guidance; it never starts a host
+   against the old root as a silent fallback.
 5. A temporary SYSTEM cleanup task waits for old updater/launcher processes to
    exit, verifies the registered new MSI and removes the hash-matched old launcher
    and deployment profile. It removes the old program directory only when empty.
@@ -197,6 +199,33 @@ the installed/portable executable hash is
 The downloaded executable passed isolated process/recovery smoke and the final
 desktop UAC preparation check against a copied, unelevated public 0.3.30 host.
 The helper was elevated, exited successfully and preserved test settings/cache.
-The real desktop installation remains 0.3.30 with its executable hash unchanged;
-the owner will update it manually. These checks retain the account/sign-in,
+At that check the desktop installation was still 0.3.30; the owner subsequently
+updated it manually. These checks retain the account/sign-in,
 old-UI-click and older-Windows coverage limits documented above.
+
+### Withdrawal and correction of 0.3.35
+
+The real desktop upgrade installed the exact .35 executable in the new program
+directory and removed the old program directory. Its user-data move failed:
+the reopened app had already started drives before the second shutdown, and
+the upload/cache guard rejected that shutdown. The failed completion receipt
+was preserved, but the old implementation silently resumed against the old root.
+The .35 release was withdrawn to draft; the immutable tag and assets are retained.
+The latest public release is .30 while the correction is being accepted.
+
+The previous hosted migration fixture had no startup drives and did not reproduce
+this ordering. The full Setup window test also did not exercise the in-app path:
+compiled older updaters download MSI and display its passive progress window.
+The corrected updater downloads versioned Setup, hashes and locks that package,
+and supplies its active data root explicitly. Older installed code cannot change
+its download choice; use manual Setup for the first corrective upgrade.
+
+New hosted gates observe the actual .30 helper with an enabled startup drive,
+check that no new host appears before relocation, exercise the current helper's
+passive branded Setup, and recover the partially migrated .35 layout using its
+actual retained MSI. That recovery starts the baseline with its existing handoff
+flag to leave the default data root in the observed old location. No production
+accounts or uploads are used. An enabled drive with no live backend establishes
+startup ordering; it does not establish behavior with real pending uploads.
+These gates, exact-asset UAC acceptance and manual desktop recovery must pass
+before publication. Build success alone is insufficient.

@@ -18,7 +18,7 @@ public sealed class ApplicationUpdateServiceTests
         var second = await service.CheckAsync("0.3.30");
         Assert.Equal("0.3.34", first.Value!.AvailableVersion);
         Assert.Equal("0.3.35", second.Value!.AvailableVersion);
-        Assert.EndsWith("/v0.3.35/resodrive-win-x64-0.3.35.msi", second.Value.InstallerDownload!.AbsolutePath, StringComparison.Ordinal);
+        Assert.EndsWith("/v0.3.35/resodrive-win-x64-0.3.35-setup.exe", second.Value.InstallerDownload!.AbsolutePath, StringComparison.Ordinal);
         Assert.Equal(second.Value.InstallerDownload.AbsoluteUri + ".sha256", second.Value.ChecksumDownload!.AbsoluteUri);
         Assert.Equal(2, handler.Requests);
     }
@@ -28,7 +28,7 @@ public sealed class ApplicationUpdateServiceTests
     [InlineData(false)]
     public async Task RetryReusesOnlyThePackageMatchingTheCurrentPublishedChecksum(bool validCache)
     {
-        const string name = "resodrive-win-x64-0.3.35.msi";
+        const string name = "resodrive-win-x64-0.3.35-setup.exe";
         var installer = new Uri(ProductLinks.Repository.AbsoluteUri + "/releases/download/v0.3.35/" + name);
         var checksum = new Uri(installer.AbsoluteUri + ".sha256");
         var payload = Encoding.UTF8.GetBytes("verified package for retry");
@@ -64,7 +64,7 @@ public sealed class ApplicationUpdateServiceTests
         using var handler = new StalledChecksumHandler();
         using var client = new HttpClient(handler);
         var service = new ApplicationUpdateService(client, ProductLinks.LatestRelease, clock);
-        var installer = new Uri(ProductLinks.Repository.AbsoluteUri + "/releases/download/v0.3.35/resodrive-win-x64-0.3.35.msi");
+        var installer = new Uri(ProductLinks.Repository.AbsoluteUri + "/releases/download/v0.3.35/resodrive-win-x64-0.3.35-setup.exe");
         var update = new ApplicationUpdateCheck("0.3.30", "0.3.35", true, ProductLinks.LatestRelease,
             installer, new Uri(installer.AbsoluteUri + ".sha256"));
         var directory = Path.Combine(Path.GetTempPath(), "resodrive-checksum-stall-" + Guid.NewGuid().ToString("N"));
@@ -102,7 +102,7 @@ public sealed class ApplicationUpdateServiceTests
         Assert.Equal(
             "https://github.com/alphasixtyfive/resodrive/releases/tag/v0.3.0",
             result.Value?.ReleasePage.AbsoluteUri);
-        Assert.EndsWith("resodrive-win-x64-0.3.0.msi", result.Value?.InstallerDownload?.AbsoluteUri);
+        Assert.EndsWith("resodrive-win-x64-0.3.0-setup.exe", result.Value?.InstallerDownload?.AbsoluteUri);
     }
 
     [Fact]
@@ -187,11 +187,11 @@ public sealed class ApplicationUpdateServiceTests
     public async Task DownloadInstallerAsync_VerifiesChecksumAndReplacesOldPackage(string repository)
     {
         var installerUri = new Uri(
-            $"https://github.com/alphasixtyfive/{repository}/releases/download/v0.3.0/resodrive-win-x64-0.3.0.msi");
+            $"https://github.com/alphasixtyfive/{repository}/releases/download/v0.3.0/resodrive-win-x64-0.3.0-setup.exe");
         var checksumUri = new Uri(installerUri.AbsoluteUri + ".sha256");
         var payload = Encoding.UTF8.GetBytes("verified installer payload");
         var checksum = Encoding.ASCII.GetBytes(
-            Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant() + "  resodrive-win-x64-0.3.0.msi");
+            Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant() + "  resodrive-win-x64-0.3.0-setup.exe");
         using var client = new HttpClient(new RoutingHandler(new Dictionary<string, byte[]>
         {
             [installerUri.AbsoluteUri] = payload,
@@ -202,7 +202,7 @@ public sealed class ApplicationUpdateServiceTests
             new Uri("https://api.github.test/releases/latest"));
         var directory = Path.Combine(Path.GetTempPath(), "resodrive-app-update-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
-        File.WriteAllText(Path.Combine(directory, "resodrive-win-x64-0.2.29.msi"), "old");
+        File.WriteAllText(Path.Combine(directory, "resodrive-win-x64-0.2.29-setup.exe"), "old");
         try
         {
             var result = await service.DownloadInstallerAsync(
@@ -217,7 +217,7 @@ public sealed class ApplicationUpdateServiceTests
 
             Assert.True(result.Succeeded, result.Error?.Message);
             Assert.Equal(payload, await File.ReadAllBytesAsync(result.Value!.InstallerPath));
-            Assert.False(File.Exists(Path.Combine(directory, "resodrive-win-x64-0.2.29.msi")));
+            Assert.False(File.Exists(Path.Combine(directory, "resodrive-win-x64-0.2.29-setup.exe")));
         }
         finally
         {
@@ -226,11 +226,11 @@ public sealed class ApplicationUpdateServiceTests
     }
 
     [Theory]
-    [InlineData("v0.2.9/resodrive-win-x64-0.3.0.msi")]
-    [InlineData("v0.3.0/other.msi")]
-    [InlineData("v0.3.0/ResoDrive-win-x64-0.3.0.msi")]
-    [InlineData("v0.3.0/resodrive-win-x64-0.3.0.msi?download=1")]
-    [InlineData("v0.3.0/resodrive-win-x64-0.3.0.msi#other")]
+    [InlineData("v0.2.9/resodrive-win-x64-0.3.0-setup.exe")]
+    [InlineData("v0.3.0/other-setup.exe")]
+    [InlineData("v0.3.0/ResoDrive-win-x64-0.3.0-setup.exe")]
+    [InlineData("v0.3.0/resodrive-win-x64-0.3.0-setup.exe?download=1")]
+    [InlineData("v0.3.0/resodrive-win-x64-0.3.0-setup.exe#other")]
     public async Task DownloadInstallerAsync_RejectsAssetOutsideExactVersionAndFilename(string suffix)
     {
         using var client = new HttpClient(new NoRequestHandler());
@@ -253,14 +253,14 @@ public sealed class ApplicationUpdateServiceTests
     [InlineData("mismatch")]
     public async Task DownloadInstallerAsync_RejectsInvalidChecksumWithoutPublishingPackage(string scenario)
     {
-        const string name = "resodrive-win-x64-0.3.0.msi";
+        const string name = "resodrive-win-x64-0.3.0-setup.exe";
         var installer = new Uri(ProductLinks.Repository.AbsoluteUri + "/releases/download/v0.3.0/" + name);
         var checksumUri = new Uri(installer.AbsoluteUri + ".sha256");
         var payload = Encoding.UTF8.GetBytes("test installer bytes");
         var hash = Convert.ToHexString(SHA256.HashData(payload));
         var checksum = scenario switch
         {
-            "wrong-name" => hash + "  different.msi",
+            "wrong-name" => hash + "  different-setup.exe",
             "bare-hash" => hash,
             "duplicate" => hash + "  " + name + "\n" + hash + "  " + name,
             "oversized" => new string('a', 4097),
