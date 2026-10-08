@@ -92,8 +92,8 @@ try {
 
     # A real deferred-action failure must restore the old MSI and owned startup task.
     New-Item -ItemType Directory -Path $newInstall -Force | Out-Null
-    [IO.File]::WriteAllText((Join-Path $oldInstall 'profiles.json'), '{"profiles":[]}')
-    [IO.File]::WriteAllText((Join-Path $newInstall 'profiles.json'), '{"profiles":[],"conflict":true}')
+    [IO.File]::WriteAllText((Join-Path $oldInstall 'profiles.json'), '{"schemaVersion":2,"profiles":[]}')
+    [IO.File]::WriteAllText((Join-Path $newInstall 'profiles.json'), '{"schemaVersion":2,"profiles":[],"conflict":true}')
     Invoke-Msi "/i `"$msi`" /qn /norestart /l*v `"$evidence\rollback.log`"" -Failure
     if ((Get-FileHash $oldApp).Hash -ine $oldHash -or (Test-Path $newApp)) { throw 'Native MSI rollback did not restore the old executable.' }
     $task = Get-ScheduledTask -TaskName $startupName
@@ -142,13 +142,19 @@ if ($Verify) {
     $parent.Refresh()
     if ($parent.HasExited) { throw 'The actual old application did not start.' }
     $outcome = Join-Path $updates 'application-update-result.json'
+    $handoffStarted = [DateTimeOffset]::UtcNow
     $helper = Start-Process $helperPath -ArgumentList @('--complete-update', $version, ('"' + $stagedMsi + '"'),
         ('"' + $oldApp + '"'), ('"' + $oldApp + '"'), ('"' + $outcome + '"'), (Get-FileHash $stagedMsi).Hash, $parent.Id) -PassThru -WindowStyle Hidden
     Stop-Application $oldInstall $oldData
     if (-not $parent.WaitForExit(15000)) { throw 'The old UI did not close.' }
     $parent.Dispose()
     if (-not $helper.WaitForExit(240000) -or $helper.ExitCode -ne 0) { throw 'The actual prior-version updater handoff failed.' }
-    Wait-Until { Test-Path (Join-Path $local 'ResoDriveMigration\completion.json') } 'No migration completion receipt.'
+    Wait-Until {
+        try {
+            $completed = Get-Content (Join-Path $local 'ResoDriveMigration\completion.json') -Raw | ConvertFrom-Json
+            $completed.Succeeded -and [DateTimeOffset]$completed.RecordedAtUtc -ge $handoffStarted -and -not (Test-Path $oldData)
+        } catch { $false } # Receipt publication can race the read.
+    } 'No successful migration completion receipt for this updater handoff.'
     $receipt = Get-Content (Join-Path $local 'ResoDriveMigration\completion.json') -Raw | ConvertFrom-Json
     if (-not $receipt.Succeeded -or (Test-Path $oldData)) { throw "User migration failed: $($receipt.Message)" }
     if ((Get-FileHash $newApp).Hash -ine (Get-FileHash $candidate).Hash) { throw 'Installed executable differs from the exact candidate.' }
@@ -160,7 +166,10 @@ if ($Verify) {
     if ($task.State -ne 'Disabled' -or $task.Actions[0].Execute -ine $newApp) { throw 'Startup migration changed the disabled preference.' }
     $dataTask = 'ResoDrive Data Migration - ' + (Task-Hash $testUser.SID.Value)
     $task = Get-ScheduledTask -TaskName $dataTask
-    if ($task.Principal.UserId -ine $testUser.SID.Value -or $task.Principal.RunLevel -ne 'Limited') { throw 'Second-account task has incorrect privilege or identity.' }
+    $taskSid = if ($task.Principal.UserId.StartsWith('S-1-')) { $task.Principal.UserId } else {
+        ([Security.Principal.NTAccount]::new($task.Principal.UserId)).Translate([Security.Principal.SecurityIdentifier]).Value
+    }
+    if ($taskSid -ine $testUser.SID.Value -or $task.Principal.RunLevel -ne 'Limited') { throw 'Second-account task has incorrect privilege or identity.' }
 
     # Stop the first user's own host before the signed-out-account fixture runs;
     # the separate cross-account gate checks that foreign hosts are never killed.

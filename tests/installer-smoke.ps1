@@ -31,6 +31,10 @@ $setup = (Resolve-Path -LiteralPath $SetupPath).Path
 $app = Join-Path $env:ProgramFiles 'ResoDrive\resodrive.exe'
 $legacyApp = Join-Path $env:ProgramFiles 'rdrive\resodrive.exe'
 if ((Test-Path -LiteralPath $app) -or (Test-Path -LiteralPath $legacyApp)) { throw 'Refusing to overwrite a pre-existing installation.' }
+$defaultDataRoots = @('rdrive', 'ResoDrive') | ForEach-Object { Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) $_ }
+foreach ($root in $defaultDataRoots) {
+    if (Test-Path -LiteralPath $root) { throw 'Refusing to overwrite existing default user data.' }
+}
 $testRoot = Join-Path $env:RUNNER_TEMP 'resodrive-installer-smoke'
 New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
 $oldDataRoot = $env:RDRIVE_DATA_DIR
@@ -80,13 +84,44 @@ function Assert-NoMigrationTasks {
     if ($tasks.Count -ne 0) { throw 'Unexpected migration tasks remain.' }
 }
 function Wait-LegacyInstallationCleanup {
+    # The old MSI also runs its own preparation while being removed. It creates
+    # diagnostics in the old default root even for this custom-root fixture.
+    # Complete that user's migration before expecting the temporary task to go.
+    if (Test-Path -LiteralPath $defaultDataRoots[0]) {
+        $migration = Start-Process -FilePath $app -ArgumentList '--migrate-user-data' -PassThru -WindowStyle Hidden
+        try {
+            if (-not $migration.WaitForExit(90000) -or $migration.ExitCode -ne 0) {
+                throw 'The installer-created default data did not migrate.'
+            }
+        } finally { $migration.Dispose() }
+    }
+    if (Get-ScheduledTask -TaskName 'ResoDrive Installation Migration Cleanup' -ErrorAction SilentlyContinue) {
+        Start-ScheduledTask -TaskName 'ResoDrive Installation Migration Cleanup'
+    }
     $deadline = [DateTime]::UtcNow.AddSeconds(60)
     $legacyDirectory = Split-Path -Parent $legacyApp
-    while ((Test-Path -LiteralPath $legacyDirectory) -and [DateTime]::UtcNow -lt $deadline) {
+    while (((Test-Path -LiteralPath $legacyDirectory) -or
+        (Get-ScheduledTask -TaskName 'ResoDrive Installation Migration Cleanup' -ErrorAction SilentlyContinue)) -and
+        [DateTime]::UtcNow -lt $deadline) {
         Start-Sleep -Milliseconds 250
     }
     if (Test-Path -LiteralPath $legacyDirectory) { throw 'The old installation directory was not cleaned up.' }
     Assert-NoMigrationTasks
+}
+function Remove-DefaultFixtureData {
+    # Both roots were absent at the start, and this script is hosted-runner only.
+    # Remove only these fixture roots between independent installer scenarios.
+    $parent = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath([Environment]::GetFolderPath('LocalApplicationData')))
+    foreach ($root in $defaultDataRoots) {
+        $full = [IO.Path]::GetFullPath($root)
+        if ([IO.Path]::GetDirectoryName($full) -ine $parent -or [IO.Path]::GetFileName($full) -notin @('rdrive', 'ResoDrive')) {
+            throw 'Refusing to remove an unexpected default fixture root.'
+        }
+        if (Test-Path -LiteralPath $full) {
+            if ([IO.File]::GetAttributes($full).HasFlag([IO.FileAttributes]::ReparsePoint)) { throw 'Fixture root is redirected.' }
+            Remove-Item -LiteralPath $full -Recurse -Force
+        }
+    }
 }
 function Start-TestApplication([string]$ExecutablePath = $app) {
     if (-not (Test-Path -LiteralPath $ExecutablePath)) { throw 'The installed app is missing.' }
@@ -296,6 +331,7 @@ try {
     Assert-Stopped $running
     if (Test-Path -LiteralPath $app) { throw 'Upgraded application was not removed.' }
     Assert-DataPreserved
+    Remove-DefaultFixtureData
 
     # A legacy Setup owns a hidden MSI. Reject MSI-only migration before any
     # preparation or replacement, then let native Burn remove its own old entry.
@@ -326,6 +362,7 @@ try {
     Assert-CandidateInstalled
     Assert-OneRemovableAppEntry
     Assert-DataPreserved
+    Wait-LegacyInstallationCleanup
     $running = Start-TestApplication
     # /f ignores command-line properties, including this fixture's custom root.
     # Reinstall maintenance accepts the root and exercises the same native repair.
@@ -337,6 +374,7 @@ try {
     if (Test-Path -LiteralPath $app) { throw 'The migrated MSI could not remove the application.' }
     Assert-BundleCount 0
     Assert-DataPreserved
+    Remove-DefaultFixtureData
     if ($sameVersionRecovery) {
         # Direct MSI recovery and Burn bundle recovery must each replace the old
         # registration, even though their displayed three-part version is unchanged.
