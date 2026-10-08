@@ -12,8 +12,11 @@ $oldData = Join-Path $local 'rdrive'
 $newData = Join-Path $local 'ResoDrive'
 $install = Join-Path $env:ProgramFiles 'ResoDrive'
 $installedApp = Join-Path $install 'resodrive.exe'
-if ((Test-Path $installedApp) -or (Test-Path $oldData) -or -not (Test-Path $newData)) {
-    throw 'Recovery requires the preserved, uninstalled default-root fixture from directory-migration-smoke.'
+$installedAppPresent = Test-Path -LiteralPath $installedApp
+$legacyDataPresent = Test-Path -LiteralPath $oldData
+$migratedDataPresent = Test-Path -LiteralPath $newData
+if ($installedAppPresent -or $legacyDataPresent -or -not $migratedDataPresent) {
+    throw "Recovery requires the preserved, uninstalled default-root fixture. InstalledAppPresent=$installedAppPresent; LegacyDataPresent=$legacyDataPresent; MigratedDataPresent=$migratedDataPresent."
 }
 $evidence = Join-Path $env:RUNNER_TEMP 'resodrive-migration-recovery-smoke'
 New-Item -ItemType Directory -Path $evidence -Force | Out-Null

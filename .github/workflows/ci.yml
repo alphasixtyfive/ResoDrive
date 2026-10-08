@@ -57,16 +57,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./tests/directory-migration-smoke.ps1 -MsiPath (Get-ChildItem artifacts/win-x64/*.msi).FullName -AppPath artifacts/win-x64/resodrive/resodrive.exe
-      - name: Verify branded in-app Setup updater
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: ./tests/setup-update-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName -AppPath artifacts/win-x64/resodrive/resodrive.exe
+      # Recovery consumes the default-root fixture before the custom-root test
+      # runs the frozen .30 uninstaller, which can recreate its old default root.
       - name: Verify recovery from incomplete user-data migration
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./tests/migration-recovery-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName -AppPath artifacts/win-x64/resodrive/resodrive.exe
+      - name: Verify branded in-app Setup updater
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./tests/setup-update-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName -AppPath artifacts/win-x64/resodrive/resodrive.exe
       - name: Preserve installer diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
