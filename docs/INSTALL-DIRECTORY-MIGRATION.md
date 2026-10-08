@@ -238,3 +238,39 @@ accounts or uploads are used. An enabled drive with no live backend establishes
 startup ordering; it does not establish behavior with real pending uploads.
 These gates, exact-asset UAC acceptance and manual desktop recovery must pass
 before publication. Build success alone is insufficient.
+
+### Exact 0.3.36 package acceptance
+
+[CI 37811911274](https://github.com/alphasixtyfive/ResoDrive/actions/runs/37811911274)
+and [tagged acceptance 37811912063](https://github.com/alphasixtyfive/ResoDrive/actions/runs/37811912063)
+passed against source `6bbe580ee6f3a811d455a95fe8b96bfcb33d4b1b`.
+The build passed 1,114 tests with three optional integrations skipped and no
+warnings or errors. All 311 application tests passed with one available CPU.
+Native lifecycle, different-account preparation, actual .30 updater migration,
+rollback/retry, startup ordering, owner credential preservation and cleanup passed.
+
+The exact .35 recovery fixture first verified its running host through the
+authenticated status pipe and checked the kernel process identity, installation
+path and Windows account. Manual Setup then safely stopped that host. The new
+app moved the pending default data, replaced the earlier failure receipt,
+preserved settings/cache/credential bytes and acknowledged its actual reopened
+window. The current in-app updater also passed with a custom data root. Its
+50 ms window monitor observed one branded Setup window and no separate Windows
+Installer window; this cannot exclude a shorter transient window.
+
+The eight Actions artifact files were downloaded and their SHA-256 sidecars
+verified. Stable and versioned Setup are byte-identical. Installed executable
+hashes from directory migration, .35 recovery and branded update all match the
+downloaded portable executable. Setup hash:
+`3546D01E5087E53ED6AB1EB96E9275FDFB957E4047507ADF77E70E603799F66B`.
+MSI hash: `A94B95D71BFB6760ED8357E0BA4DF2FBCFB5DABA7E00710ED9F442BF2BEBCAD4`.
+Executable hash: `0DB62167A9A1A6332115741EE3CED6132EFA3A73029523247632F9A8EE532EBD`.
+
+The desktop UAC preparation test used a copied .35 host and disposable data,
+but elevation was cancelled before its helper started. It is not a passing UAC
+check. The copied host was cleaned up, and the production .35 executable still
+matches its recorded hash. No production installation or data move was performed.
+Exact-asset UAC acceptance and the owner's manual recovery remain pending, so
+the candidate is not published. All eight GitHub draft releases were deleted;
+the 19 published releases and immutable tags were retained. Only final releases
+will appear on GitHub; candidates remain Actions artifacts.
