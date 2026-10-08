@@ -264,7 +264,35 @@ Thirty compiled WPF captures inspected during the code review covered the main
 window, Settings and recovery messages at 100%, 150% and 200% rendering with
 fictional data; these are not separate physical-monitor checks.
 
-No desktop elevation attempt was repeated after the cancelled 0.3.36 check.
+At this initial verification stage, no desktop elevation attempt was repeated
+after the cancelled 0.3.36 check.
 Exact-package desktop UAC acceptance and the owner's manual production recovery
 remain pending. The production 0.3.35 app and data were not changed. No 0.3.39
 release or draft was created; all 19 published releases remain, with 0.3.30 latest.
+
+### Desktop UAC and 0.3.39 publication
+
+After the owner requested testing on this PC, the exact accepted 0.3.39 executable
+passed `tests/elevation-smoke.ps1` against a copy of the installed 0.3.35 binary.
+The old host ran unelevated; the new helper ran with UAC elevation under the same
+Windows account, whose elevated token owner was Administrators. Helper exit code
+was zero, the old host exited, and disposable settings/cache hashes were
+unchanged. The receipt's helper hash and ProductVersion match the exact downloaded
+portable executable recorded above. This is a helper test, not a production MSI
+upgrade or a separate-administrator credential-prompt test.
+
+The owner retained manual control of their production upgrade and explicitly
+requested publication so they could run the update from GitHub. That request
+overrode the procedure's requirement to finish their manual recovery before
+publication. No production installation or data move was performed by the agent;
+the installed 0.3.35 binary still matched its recorded hash, with the old default
+data root present and the new default root absent before the manual upgrade.
+Production recovery remains pending and must not be reported as verified.
+
+[ResoDrive 0.3.39](https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.39)
+was published as one final stable release using the accepted tag's plain-language
+notes and all eight exact package/checksum files. A fresh download of all published
+files matched the accepted files byte for byte. The anonymous public latest
+redirect resolves to 0.3.39; the actual application update service also discovers
+0.3.39 from 0.3.35 with the correct Setup and checksum URLs. No draft releases
+remain. Immutable tags and previously published releases were retained.

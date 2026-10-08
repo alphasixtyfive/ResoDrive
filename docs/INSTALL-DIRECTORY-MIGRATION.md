@@ -1,6 +1,6 @@
 # Installation directory migration
 
-The 0.3.39 candidate installs to `%ProgramFiles%\ResoDrive` and uses
+Release 0.3.39 installs to `%ProgramFiles%\ResoDrive` and uses
 `%LOCALAPPDATA%\ResoDrive`. It is an increasing-version upgrade from the
 accepted 0.3.30 release; published tags and accepted assets remain unchanged.
 
@@ -96,9 +96,9 @@ Also cover the older Setup-owned installation's required Setup transition.
 Keep those exact asset hashes and MSI/helper logs. Do not publish same-version
 development artifacts or bypass upload protection to obtain a passing result.
 
-## Current candidate
+## Current release
 
-The directory migration mechanism was corrected in 0.3.36. Candidate 0.3.39
+The directory migration mechanism was corrected in 0.3.36. Release 0.3.39
 adds settings, rollback and reconnect reliability fixes without changing the
 migration sequence. The complete package and native gates must run against its
 exact source; results for another version do not establish acceptance.
@@ -121,9 +121,15 @@ separate Windows Installer window, subject to its 50 ms sampling interval.
 All eight tagged downloads and checksum sidecars were verified; installed
 executables in the migration, recovery and updater receipts match the downloaded
 portable executable. That exact executable also passed isolated desktop process
-smoke. These checks used disposable data and do not establish desktop UAC or the
-owner's production recovery.
+smoke. These checks used disposable data and do not establish the owner's
+production recovery.
 
-The owner still performs the production recovery manually. Publish only after
-exact-package UAC acceptance and that recovery are confirmed, following
-[the release procedure](RELEASING.md).
+The exact downloaded executable subsequently passed this PC's desktop UAC test:
+its elevated helper safely stopped an unelevated copied 0.3.35 host while
+preserving disposable settings and cache. The owner requested publication before
+their manual production upgrade so they could install from GitHub. Release
+0.3.39 is now public; all eight published files match the accepted downloads,
+and the live application update service discovers it for 0.3.35. Production data
+migration remains unverified until the owner runs Setup and reopens their app.
+This publication order was an explicit owner-requested exception to
+[the release procedure](RELEASING.md), not a passing production-upgrade result.
