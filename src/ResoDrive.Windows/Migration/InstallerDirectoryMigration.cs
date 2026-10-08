@@ -14,7 +14,8 @@ public static class InstallerDirectoryMigration
 {
     private sealed record TaskSnapshot(string Name, string Xml, bool Enabled);
     private sealed record ProfileSnapshot(string UserId, string LegacyRoot, string TaskName, StartupTaskRecord? PreviousTask);
-    private sealed record Plan(Guid Id, string Phase, string? BridgeHash, string? ProfileHash, TaskSnapshot[] Tasks, ProfileSnapshot[] Profiles);
+    private sealed record Plan(Guid Id, string Phase, string? BridgeHash, string? ProfileHash, TaskSnapshot[] Tasks, ProfileSnapshot[] Profiles,
+        bool ProfileCreated = false);
     private const string CleanupTask = "ResoDrive Installation Migration Cleanup";
     private const string DataTaskDescription = "Migrates this user's ResoDrive data folder once, without enabling application startup.";
     private static string StateDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ResoDriveMigration");
@@ -88,10 +89,16 @@ public static class InstallerDirectoryMigration
         {
             var destination = Path.Combine(InstallationDirectories.Current, "profiles.json");
             RejectLinks(destination);
-            if (File.Exists(destination) && Hash(destination) != plan.ProfileHash)
+            var existed = File.Exists(destination);
+            if (existed && Hash(destination) != plan.ProfileHash)
                 throw new IOException("The new installation already has a different deployment profile. Both profiles were preserved.");
             if (Hash(ProfilePath) != plan.ProfileHash) throw new IOException("The staged deployment profile changed.");
-            File.Copy(ProfilePath, destination, overwrite: true);
+            if (!existed)
+            {
+                plan = plan with { ProfileCreated = true };
+                WritePlan(plan);
+                File.Copy(ProfilePath, destination);
+            }
         }
         var store = new ComStartupTaskStore();
         foreach (var task in plan.Tasks)
@@ -156,7 +163,7 @@ public static class InstallerDirectoryMigration
         // existed. It belongs to neither this transaction nor its rollback. Keep
         // that file and still finish the journal so a corrected retry is possible.
         var destinationProfile = Path.Combine(InstallationDirectories.Current, "profiles.json");
-        if (plan.ProfileHash is not null && File.Exists(destinationProfile) && Hash(destinationProfile) == plan.ProfileHash)
+        if (plan.ProfileCreated && plan.ProfileHash is not null && File.Exists(destinationProfile) && Hash(destinationProfile) == plan.ProfileHash)
             File.Delete(destinationProfile);
         RemoveIfEmpty(InstallationDirectories.Legacy);
         WritePlan(plan with { Phase = "Complete" });
