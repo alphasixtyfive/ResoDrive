@@ -108,9 +108,14 @@ try {
     @'
 param([switch]$Verify)
 $ErrorActionPreference = 'Stop'
-$root = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) $(if ($Verify) {'ResoDrive'} else {'rdrive'})
+Add-Type -AssemblyName System.Security
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$profile = (Get-ItemProperty -LiteralPath "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid").ProfileImagePath
+$profile = [Environment]::ExpandEnvironmentVariables($profile)
+$local = Join-Path $profile 'AppData\Local'
+$root = Join-Path $local $(if ($Verify) {'ResoDrive'} else {'rdrive'})
 if ($Verify) {
-    if (Test-Path (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'rdrive')) { throw 'Old user root remains.' }
+    if (Test-Path (Join-Path $local 'rdrive')) { throw 'Old user root remains.' }
     if ([IO.File]::ReadAllText((Join-Path $root 'cache\preserve.txt')) -cne 'second account') { throw 'Second-user cache changed.' }
     $bytes = [Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String([IO.File]::ReadAllText((Join-Path $root 'config-pass.dpapi'))), [Text.Encoding]::UTF8.GetBytes('rdrive/rclone/config-password/v1'), [Security.Cryptography.DataProtectionScope]::CurrentUser)
     if ([Text.Encoding]::UTF8.GetString($bytes) -cne 'second account') { throw 'Second-user credential changed.' }
@@ -122,12 +127,16 @@ if ($Verify) {
     [IO.File]::WriteAllText((Join-Path $root 'config-pass.dpapi'), [Convert]::ToBase64String($bytes))
 }
 '@ | Set-Content -LiteralPath $fixtureScript
-    & icacls.exe $evidence /grant "${userName}:(OI)(CI)RX" /T /Q | Out-Null
+    & icacls.exe $evidence /grant "${userName}:(OI)(CI)M" /T /Q | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not grant fixture-script access.' }
     $powershell = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
     $initialize = Start-Process $powershell -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $fixtureScript + '"')) `
-        -Credential $credential -LoadUserProfile -WorkingDirectory $evidence -WindowStyle Hidden -PassThru
-    try { if (-not $initialize.WaitForExit(30000) -or $initialize.ExitCode -ne 0) { throw 'Second-account initialization failed.' } } finally { $initialize.Dispose() }
+        -Credential $credential -LoadUserProfile -WorkingDirectory $evidence -WindowStyle Hidden -PassThru `
+        -RedirectStandardError (Join-Path $evidence 'user-initialize-error.log') -RedirectStandardOutput (Join-Path $evidence 'user-initialize-output.log')
+    try { if (-not $initialize.WaitForExit(30000) -or $initialize.ExitCode -ne 0) { throw "Second-account initialization failed: $(Get-Content (Join-Path $evidence 'user-initialize-error.log') -Raw)" } } finally { $initialize.Dispose() }
+    $secondProfile = [Environment]::ExpandEnvironmentVariables((Get-ItemProperty -LiteralPath "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$($testUser.SID.Value)").ProfileImagePath)
+    $secondEnvironment = @{ USERPROFILE = $secondProfile; LOCALAPPDATA = (Join-Path $secondProfile 'AppData\Local');
+        APPDATA = (Join-Path $secondProfile 'AppData\Roaming'); RDRIVE_DATA_DIR = ''; RDRIVE_UPDATE_HANDOFF_DIR = '' }
 
     # Run the actual public updater helper, including its compiled old relaunch path.
     $updates = Join-Path $oldData 'updates'
@@ -175,11 +184,12 @@ if ($Verify) {
     # the separate cross-account gate checks that foreign hosts are never killed.
     Stop-Application $newInstall $newData
     $migrate = Start-Process $newApp -ArgumentList '--migrate-user-data' -Credential $credential -LoadUserProfile `
-        -Environment @{ RDRIVE_DATA_DIR = ''; RDRIVE_UPDATE_HANDOFF_DIR = '' } -WorkingDirectory $newInstall -PassThru -WindowStyle Hidden
+        -Environment $secondEnvironment -WorkingDirectory $newInstall -PassThru -WindowStyle Hidden
     try { if (-not $migrate.WaitForExit(90000) -or $migrate.ExitCode -ne 0) { throw 'Second-account migration failed.' } } finally { $migrate.Dispose() }
     $verify = Start-Process $powershell -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $fixtureScript + '"'), '-Verify') `
-        -Credential $credential -LoadUserProfile -WorkingDirectory $evidence -WindowStyle Hidden -PassThru
-    try { if (-not $verify.WaitForExit(30000) -or $verify.ExitCode -ne 0) { throw 'Second-account preservation failed.' } } finally { $verify.Dispose() }
+        -Credential $credential -LoadUserProfile -Environment $secondEnvironment -WorkingDirectory $evidence -WindowStyle Hidden -PassThru `
+        -RedirectStandardError (Join-Path $evidence 'user-verify-error.log') -RedirectStandardOutput (Join-Path $evidence 'user-verify-output.log')
+    try { if (-not $verify.WaitForExit(30000) -or $verify.ExitCode -ne 0) { throw "Second-account preservation failed: $(Get-Content (Join-Path $evidence 'user-verify-error.log') -Raw)" } } finally { $verify.Dispose() }
     Start-ScheduledTask -TaskName 'ResoDrive Installation Migration Cleanup'
     Wait-Until { -not (Test-Path $oldInstall) -and -not (Get-ScheduledTask -TaskName 'ResoDrive Installation Migration Cleanup' -ErrorAction SilentlyContinue) } 'Old installation cleanup did not finish.'
     if (Get-ScheduledTask -TaskName $dataTask -ErrorAction SilentlyContinue) { throw 'Completed user migration task remains.' }
