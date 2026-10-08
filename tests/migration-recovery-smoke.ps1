@@ -47,6 +47,52 @@ try {
     try { if ($baselineInstall.ExitCode -ne 0) { throw 'Recovery baseline installation failed.' } } finally { $baselineInstall.Dispose() }
     $pinnedExeHash = '4A03ECAE7DC1DFAA8BD30939BD8CB61E52EC4FC26BD521A1D8DC9A65CC3D5C4B'
     if ((Get-FileHash $installedApp).Hash -ine $pinnedExeHash) { throw 'The installed recovery baseline differs from the withdrawn .35 executable.' }
+    # Reuse the application's authenticated status client in a disposable probe.
+    # No additional entry point or executable is included in the product.
+    $probeDirectory = Join-Path $evidence 'host-readiness-probe'
+    New-Item -ItemType Directory -Path $probeDirectory -Force | Out-Null
+    $windowsProject = [Security.SecurityElement]::Escape((Join-Path (Split-Path $PSScriptRoot) 'src\ResoDrive.Windows\ResoDrive.Windows.csproj'))
+    @"
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0-windows10.0.17763.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>
+  <ItemGroup><ProjectReference Include="$windowsProject" /></ItemGroup>
+</Project>
+"@ | Set-Content -LiteralPath (Join-Path $probeDirectory 'HostReadiness.csproj')
+    @'
+using System.Diagnostics;
+using System.Text.Json;
+using ResoDrive.Windows;
+
+Environment.SetEnvironmentVariable("RDRIVE_DATA_DIR", args[1]);
+using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+try
+{
+    while (!deadline.IsCancellationRequested)
+    {
+        var response = await HostClient.SendToInstallationAsync(new HostRequest("status"), args[0],
+            TimeSpan.FromSeconds(2), deadline.Token);
+        if (response.Succeeded && response.HostProcessId is int id)
+        {
+            using var host = Process.GetProcessById(id);
+            var expected = Path.Combine(args[0], "resodrive.exe");
+            if (!host.HasExited && string.Equals(host.MainModule?.FileName, expected, StringComparison.OrdinalIgnoreCase))
+            {
+                File.WriteAllText(args[2], JsonSerializer.Serialize(new {
+                    HostProcessId = id, response.HostBaseDirectory, DataRoot = new ApplicationPaths().Root,
+                    AuthenticatedStatus = true
+                }));
+                return 0;
+            }
+        }
+        await Task.Delay(200, deadline.Token);
+    }
+}
+catch (OperationCanceledException) when (deadline.IsCancellationRequested) { }
+Console.Error.WriteLine("The exact .35 host did not acknowledge authenticated status against the old data root.");
+return 1;
+'@ | Set-Content -LiteralPath (Join-Path $probeDirectory 'Program.cs')
+    dotnet build (Join-Path $probeDirectory 'HostReadiness.csproj') -c Release --verbosity quiet *> (Join-Path $evidence 'host-probe-build.log')
+    if ($LASTEXITCODE -ne 0) { throw 'The authenticated host readiness probe could not compile. See host-probe-build.log.' }
     # Reproduce .35's post-handoff state: current program path, old data root,
     # and a running app/host. These are the baseline's actual failure-fallback
     # flags: defer the move and suppress its automatic second helper attempt.
@@ -57,6 +103,20 @@ try {
     $parent = Start-Process $installedApp -WindowStyle Hidden -PassThru
     Start-Sleep -Seconds 5
     if ($parent.HasExited -or -not (Test-Path $oldData) -or (Test-Path $newData)) { throw 'The partial-migration baseline was not reproduced.' }
+    $hostEvidencePath = Join-Path $evidence 'baseline-host-readiness.json'
+    $probe = Start-Process (Join-Path $probeDirectory 'bin\Release\net10.0-windows10.0.17763.0\HostReadiness.exe') -ArgumentList @(
+        ('"' + $install + '"'), ('"' + $oldData + '"'), ('"' + $hostEvidencePath + '"')) -WindowStyle Hidden -PassThru
+    try {
+        if (-not $probe.WaitForExit(45000) -or $probe.ExitCode -ne 0) { throw 'The .35 host was not ready against its old data root.' }
+    } finally { $probe.Dispose() }
+    $hostReadiness = Get-Content -LiteralPath $hostEvidencePath -Raw | ConvertFrom-Json
+    $baselineHost = Get-CimInstance Win32_Process -Filter "ProcessId=$($hostReadiness.HostProcessId)"
+    $hostOwner = Invoke-CimMethod -InputObject $baselineHost -MethodName GetOwnerSid
+    $runnerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    if ($baselineHost.ExecutablePath -ine $installedApp -or $baselineHost.CommandLine -notmatch ' --host(?:\s|$)' -or
+        $hostOwner.ReturnValue -ne 0 -or $hostOwner.Sid -ine $runnerSid -or $hostReadiness.DataRoot -ine $oldData) {
+        throw 'The authenticated recovery host does not match the expected .35 process, Windows account and old data root.'
+    }
     $env:RESODRIVE_LEGACY_HANDOFF = $null
     $env:RESODRIVE_MIGRATION_RETRY_ON_NEXT_START = $null
     $update = Start-Process $setup -ArgumentList @('/passive', '/norestart', '/log', ('"' + $evidence + '\setup.log"'),
@@ -88,6 +148,7 @@ try {
     }
     [ordered]@{ PriorVersion = '0.3.35'; InstalledVersion = (Get-Item $installedApp).VersionInfo.ProductVersion;
         BaselineRun = 37784471088; BaselineMsiSha256 = $pinnedMsiHash; BaselineExeSha256 = $pinnedExeHash;
+        BaselineHostAuthenticated = $true; BaselineHostProcessId = $hostReadiness.HostProcessId;
         PendingDefaultDataMoved = $true; ReadyWindowAcknowledged = $true; PreviousFailureReplaced = $true;
         SettingsCacheAndCredentialBytesPreserved = $true;
         SetupSha256 = (Get-FileHash $setup).Hash; InstalledExeSha256 = (Get-FileHash $installedApp).Hash } |
