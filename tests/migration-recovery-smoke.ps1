@@ -19,6 +19,7 @@ $evidence = Join-Path $env:RUNNER_TEMP 'resodrive-migration-recovery-smoke'
 New-Item -ItemType Directory -Path $evidence -Force | Out-Null
 $previousRoot = $env:RDRIVE_DATA_DIR
 $previousBridge = $env:RESODRIVE_LEGACY_HANDOFF
+$previousRetry = $env:RESODRIVE_MIGRATION_RETRY_ON_NEXT_START
 $parent = $updated = $null
 try {
     $hashes = @{}
@@ -39,14 +40,17 @@ try {
         ('RDRIVE_DATA_ROOT="' + $oldData + '\."'), '/l*v', ('"' + $evidence + '\baseline.log"')) -Wait -PassThru
     try { if ($baselineInstall.ExitCode -ne 0) { throw 'Recovery baseline installation failed.' } } finally { $baselineInstall.Dispose() }
     # Reproduce .35's post-handoff state: current program path, old data root,
-    # and a running app/host. The baseline's existing bridge flag defers its move.
+    # and a running app/host. These are the baseline's actual failure-fallback
+    # flags: defer the move and suppress its automatic second helper attempt.
     $env:RESODRIVE_LEGACY_HANDOFF = '1'
+    $env:RESODRIVE_MIGRATION_RETRY_ON_NEXT_START = '1'
     $completionPath = Join-Path $local 'ResoDriveMigration\completion.json'
     [IO.File]::WriteAllText($completionPath, '{"Succeeded":false,"Message":"Prior migration did not finish."}')
     $parent = Start-Process $installedApp -WindowStyle Hidden -PassThru
     Start-Sleep -Seconds 5
     if ($parent.HasExited -or -not (Test-Path $oldData) -or (Test-Path $newData)) { throw 'The partial-migration baseline was not reproduced.' }
     $env:RESODRIVE_LEGACY_HANDOFF = $null
+    $env:RESODRIVE_MIGRATION_RETRY_ON_NEXT_START = $null
     $update = Start-Process $setup -ArgumentList @('/passive', '/norestart', '/log', ('"' + $evidence + '\setup.log"'),
         ('ResoDriveDataRoot="' + $oldData + '\."')) -PassThru
     try {
@@ -86,6 +90,7 @@ try {
 } finally {
     $env:RDRIVE_DATA_DIR = $previousRoot
     $env:RESODRIVE_LEGACY_HANDOFF = $previousBridge
+    $env:RESODRIVE_MIGRATION_RETRY_ON_NEXT_START = $previousRetry
     if ($parent) { $parent.Dispose() }
     if ($updated) { $updated.Dispose() }
 }
