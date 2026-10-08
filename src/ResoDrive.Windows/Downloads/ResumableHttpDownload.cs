@@ -22,7 +22,8 @@ internal static class ResumableHttpDownload
         string destination,
         long maximumBytes,
         IProgress<DownloadProgress>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(source);
@@ -30,6 +31,28 @@ internal static class ResumableHttpDownload
         ArgumentOutOfRangeException.ThrowIfLessThan(maximumBytes, 1);
 
         var path = Path.GetFullPath(destination);
+        using var idle = new CancellationTokenSource();
+        using var network = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, idle.Token);
+        await using var timer = (timeProvider ?? TimeProvider.System).CreateTimer(
+            static state => ((CancellationTokenSource)state!).Cancel(), idle,
+            Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        try
+        {
+            return await DownloadCoreAsync(client, source, path, maximumBytes, progress,
+                timer, cancellationToken, network.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested && idle.IsCancellationRequested)
+        {
+            throw new HttpRequestException(
+                "The download connection stopped responding. Retry to resume the download.", exception);
+        }
+    }
+
+    private static async Task<DownloadProgress> DownloadCoreAsync(HttpClient client, Uri source,
+        string path, long maximumBytes, IProgress<DownloadProgress>? progress,
+        ITimer timer, CancellationToken cancellationToken, CancellationToken networkToken)
+    {
+        var inactivityTimeout = TimeSpan.FromMinutes(2);
         for (var requestAttempt = 0; requestAttempt < 2; requestAttempt++)
         {
             var existingLength = ExistingLength(path, maximumBytes);
@@ -37,10 +60,12 @@ internal static class ResumableHttpDownload
             if (existingLength > 0)
                 request.Headers.Range = new RangeHeaderValue(existingLength, null);
 
+            timer.Change(inactivityTimeout, Timeout.InfiniteTimeSpan);
             using var response = await client.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken).ConfigureAwait(false);
+                networkToken).ConfigureAwait(false);
+            timer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
 
             if (response.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable &&
                 response.Content.Headers.ContentRange?.Length == existingLength)
@@ -70,8 +95,10 @@ internal static class ResumableHttpDownload
                 throw new InvalidDataException("The download is larger than expected.");
 
             progress?.Report(new DownloadProgress(existingLength, totalLength));
-            await using var sourceStream = await response.Content.ReadAsStreamAsync(cancellationToken)
+            timer.Change(inactivityTimeout, Timeout.InfiniteTimeSpan);
+            await using var sourceStream = await response.Content.ReadAsStreamAsync(networkToken)
                 .ConfigureAwait(false);
+            timer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
             await using var destinationStream = new FileStream(
                 path,
                 append ? FileMode.Append : FileMode.Create,
@@ -83,7 +110,9 @@ internal static class ResumableHttpDownload
             var received = existingLength;
             while (true)
             {
-                var count = await sourceStream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+                timer.Change(inactivityTimeout, Timeout.InfiniteTimeSpan);
+                var count = await sourceStream.ReadAsync(buffer, networkToken).ConfigureAwait(false);
+                timer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
                 if (count == 0)
                     break;
                 received = checked(received + count);

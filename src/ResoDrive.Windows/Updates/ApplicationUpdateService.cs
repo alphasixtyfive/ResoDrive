@@ -26,16 +26,18 @@ public sealed partial class ApplicationUpdateService
     private static readonly HttpClient SharedClient = CreateClient();
     private readonly HttpClient _client;
     private readonly Uri _endpoint;
+    private readonly TimeProvider _timeProvider;
 
     public ApplicationUpdateService()
         : this(SharedClient, ProductLinks.LatestRelease)
     {
     }
 
-    internal ApplicationUpdateService(HttpClient client, Uri endpoint)
+    internal ApplicationUpdateService(HttpClient client, Uri endpoint, TimeProvider? timeProvider = null)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<OperationResult<ApplicationUpdateCheck>> CheckAsync(
@@ -153,6 +155,23 @@ public sealed partial class ApplicationUpdateService
                     "The published installer checksum is invalid.");
             }
 
+            // A cancelled/blocked installation does not invalidate its download.
+            // Recheck against the current published checksum before using it again;
+            // the handoff still hashes and locks the MSI before elevating it.
+            if (File.Exists(installerPath))
+            {
+                await using var cached = new FileStream(installerPath, FileMode.Open, FileAccess.Read,
+                    FileShare.Read, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                if (cached.Length is > 0 and <= MaximumInstallerBytes &&
+                    Convert.ToHexString(await SHA256.HashDataAsync(cached, timeout.Token).ConfigureAwait(false))
+                        .Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    progress?.Report(new ApplicationUpdateDownloadProgress(cached.Length, cached.Length));
+                    RemoveOlderInstallers(directory, installerPath);
+                    return Result.Success(new ApplicationUpdatePackage(update.AvailableVersion, installerPath, expectedHash));
+                }
+            }
+
             var downloadProgress = progress is null
                 ? null
                 : new CallbackProgress<DownloadProgress>(value => progress.Report(
@@ -210,6 +229,20 @@ public sealed partial class ApplicationUpdateService
     }
 
     private async Task<string?> DownloadChecksumAsync(Uri uri, string installerName, CancellationToken cancellationToken)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45), _timeProvider);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+        try
+        {
+            return await ReadChecksumAsync(uri, installerName, linked.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            throw new HttpRequestException("The installer checksum request timed out. Check the connection and retry.", exception);
+        }
+    }
+
+    private async Task<string?> ReadChecksumAsync(Uri uri, string installerName, CancellationToken cancellationToken)
     {
         using var response = await _client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead,
             cancellationToken).ConfigureAwait(false);

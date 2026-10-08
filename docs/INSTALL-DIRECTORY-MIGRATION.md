@@ -155,3 +155,31 @@ identity and least privilege. The old updater acceptance invokes its real
 completion entry point; it does not automate the old UI's download/update click.
 Cancellation and upload rejection have regression coverage; no live account or
 pending production upload was used to provoke a shutdown block.
+
+### Additional update reliability checks for 0.3.35
+
+The next candidate adds a two-minute network inactivity limit to resumable
+downloads, a 45-second checksum-request limit, reuse of an installer only after
+matching a freshly fetched published checksum, and specific recovery guidance for
+Windows Installer codes 1601, 1618, 1625 and 1632. Slow transfers that continue
+receiving bytes remain supported. Disk writes and progress callbacks do not count
+as network inactivity. User cancellation remains distinct from a stalled network.
+
+The existing Update action already refreshes the latest-release redirect before
+installing. The same refresh icon now remains accessible alongside an available
+update. Regression coverage checks successive releases, partial-download
+preservation, checksum timeout, verified cache reuse/replacement, installer
+failure outcomes, and the compiled controls' busy/retry states.
+
+Local Windows build and MSI/Setup validation passed with zero warnings/errors;
+1,103 tests passed and three optional integration cases were skipped. All 307
+application tests also passed with one available CPU. The portable executable
+passed isolated process/recovery smoke. The compiled Settings window was rendered
+and inspected with WPF DPI set to 100%, 150% and 200%, at normal and minimum
+window sizes; these are WPF render checks, not separate physical-monitor tests.
+
+This candidate supersedes the unpublished 0.3.34 draft for release preparation.
+The exact 0.3.34 asset acceptance above remains historical evidence and does not
+certify 0.3.35. Publication still requires the new tagged assets' native acceptance
+and final desktop UAC check. The previous cancelled prompt does not count as a
+pass, and production installation/data remain untouched.

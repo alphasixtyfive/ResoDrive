@@ -7,6 +7,26 @@ namespace ResoDrive.App.Tests;
 
 public sealed class ApplicationUpdateHandoffTests
 {
+    [Theory]
+    [InlineData(1601, "IT administrator")]
+    [InlineData(1618, "Let it finish")]
+    [InlineData(1625, "policy")]
+    [InlineData(1632, "disk space")]
+    public async Task InstallerEnvironmentFailureExplainsRecoveryAndReopensTheOldApplication(int code, string recovery)
+    {
+        using var directory = new TemporaryDirectory();
+        var request = Request(directory.Path);
+        var runtime = new FakeRuntime { InstallerExitCode = code, ReadyAcknowledged = true };
+        Assert.Equal(1, await ApplicationUpdateHandoff.CompleteAsync(request, runtime));
+        var outcome = ReadOutcome(request.OutcomePath);
+        Assert.Equal("failed", outcome.Status);
+        Assert.Equal(code, outcome.InstallerExitCode);
+        Assert.Contains(recovery, outcome.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(outcome.Finalized);
+        Assert.True(outcome.RelaunchAcknowledged);
+        Assert.Equal(request.SourceExecutablePath, runtime.StartedPath);
+    }
+
     [Fact]
     public void FinalReceiptLeftByLegacyHelperIsRecoveredAndRemovedWithTheFirstReceipt()
     {

@@ -9,6 +9,82 @@ namespace ResoDrive.Windows.Tests;
 public sealed class ApplicationUpdateServiceTests
 {
     [Fact]
+    public async Task CheckingAgainReplacesTheAvailableReleaseAndDownloadAddress()
+    {
+        using var handler = new ChangingReleaseHandler();
+        using var client = new HttpClient(handler);
+        var service = new ApplicationUpdateService(client, ProductLinks.LatestRelease);
+        var first = await service.CheckAsync("0.3.30");
+        var second = await service.CheckAsync("0.3.30");
+        Assert.Equal("0.3.34", first.Value!.AvailableVersion);
+        Assert.Equal("0.3.35", second.Value!.AvailableVersion);
+        Assert.EndsWith("/v0.3.35/resodrive-win-x64-0.3.35.msi", second.Value.InstallerDownload!.AbsolutePath, StringComparison.Ordinal);
+        Assert.Equal(second.Value.InstallerDownload.AbsoluteUri + ".sha256", second.Value.ChecksumDownload!.AbsoluteUri);
+        Assert.Equal(2, handler.Requests);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RetryReusesOnlyThePackageMatchingTheCurrentPublishedChecksum(bool validCache)
+    {
+        const string name = "resodrive-win-x64-0.3.35.msi";
+        var installer = new Uri(ProductLinks.Repository.AbsoluteUri + "/releases/download/v0.3.35/" + name);
+        var checksum = new Uri(installer.AbsoluteUri + ".sha256");
+        var payload = Encoding.UTF8.GetBytes("verified package for retry");
+        var hash = Convert.ToHexString(SHA256.HashData(payload));
+        var responses = new Dictionary<string, byte[]> { [checksum.AbsoluteUri] = Encoding.ASCII.GetBytes(hash + "  " + name) };
+        // A valid cache must succeed even when no installer download is available.
+        if (!validCache) responses.Add(installer.AbsoluteUri, payload);
+        using var client = new HttpClient(new RoutingHandler(responses));
+        var directory = Path.Combine(Path.GetTempPath(), "resodrive-cached-update-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, name);
+        await File.WriteAllBytesAsync(path, validCache ? payload : "untrusted old bytes"u8.ToArray());
+        ApplicationUpdateDownloadProgress? finalProgress = null;
+        try
+        {
+            var result = await new ApplicationUpdateService(client, ProductLinks.LatestRelease).DownloadInstallerAsync(
+                new ApplicationUpdateCheck("0.3.30", "0.3.35", true, ProductLinks.LatestRelease, installer, checksum),
+                directory, new CallbackProgress<ApplicationUpdateDownloadProgress>(value => finalProgress = value));
+            Assert.True(result.Succeeded, result.Error?.Message);
+            Assert.Equal(hash, result.Value!.Sha256);
+            Assert.Equal(payload, await File.ReadAllBytesAsync(result.Value.InstallerPath));
+            Assert.Equal(payload.Length, finalProgress!.BytesReceived);
+            Assert.Equal(payload.Length, finalProgress.TotalBytes);
+            Assert.False(File.Exists(path + ".download"));
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
+    public async Task StalledChecksumRequestIsRetryableAndNeverStartsTheInstallerDownload()
+    {
+        var clock = new DownloadTestClock();
+        using var handler = new StalledChecksumHandler();
+        using var client = new HttpClient(handler);
+        var service = new ApplicationUpdateService(client, ProductLinks.LatestRelease, clock);
+        var installer = new Uri(ProductLinks.Repository.AbsoluteUri + "/releases/download/v0.3.35/resodrive-win-x64-0.3.35.msi");
+        var update = new ApplicationUpdateCheck("0.3.30", "0.3.35", true, ProductLinks.LatestRelease,
+            installer, new Uri(installer.AbsoluteUri + ".sha256"));
+        var directory = Path.Combine(Path.GetTempPath(), "resodrive-checksum-stall-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var operation = service.DownloadInstallerAsync(update, directory);
+            await handler.Waiting.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            clock.Advance(TimeSpan.FromSeconds(45));
+            var result = await operation;
+            Assert.False(result.Succeeded);
+            Assert.Equal("app.update_download_failed", result.Error?.Code);
+            Assert.True(result.Error?.IsTransient);
+            Assert.Contains("checksum request timed out", result.Error!.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Empty(Directory.EnumerateFiles(directory));
+            Assert.Equal(1, handler.Requests);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
     public async Task CheckAsync_ReportsNewerStableRelease()
     {
         using var client = Client(
@@ -216,6 +292,35 @@ public sealed class ApplicationUpdateServiceTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             => throw new InvalidOperationException("Invalid metadata must be rejected before making an HTTP request.");
+    }
+
+    private sealed class ChangingReleaseHandler : HttpMessageHandler
+    {
+        public int Requests { get; private set; }
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Assert.True(request.Headers.CacheControl?.NoCache);
+            var version = ++Requests == 1 ? "0.3.34" : "0.3.35";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = new HttpRequestMessage(HttpMethod.Get,
+                    ProductLinks.Repository.AbsoluteUri + "/releases/tag/v" + version),
+            });
+        }
+    }
+
+    private sealed class StalledChecksumHandler : HttpMessageHandler
+    {
+        public int Requests { get; private set; }
+        public TaskCompletionSource Waiting { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests++;
+            Assert.EndsWith(".sha256", request.RequestUri!.AbsolutePath, StringComparison.Ordinal);
+            Waiting.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new InvalidOperationException("The stalled checksum request must be cancelled.");
+        }
     }
 
     private static HttpClient Client(HttpStatusCode statusCode, string finalUri) =>

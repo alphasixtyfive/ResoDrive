@@ -424,6 +424,10 @@ internal static class ApplicationUpdateHandoff
             1641 => ("succeeded", "The ResoDrive update was installed and Windows initiated a restart."),
             3010 => ("succeeded", "The ResoDrive update was installed. Windows should be restarted."),
             1602 => ("canceled", "Windows Installer was canceled. ResoDrive was not updated."),
+            1601 => ("failed", "Windows Installer is unavailable. Contact your IT administrator, then retry the update. ResoDrive was not updated."),
+            1618 => ("failed", "Another Windows installation is in progress. Let it finish, then retry the ResoDrive update. ResoDrive was not updated."),
+            1625 => ("failed", "Windows policy blocked this installation. Contact your IT administrator. ResoDrive was not updated."),
+            1632 => ("failed", "Windows cannot write to its temporary folder. Check free disk space and folder permissions, then retry. ResoDrive was not updated."),
             _ => ("failed", $"Windows Installer stopped with code {exitCode}. ResoDrive was not updated."),
         };
 

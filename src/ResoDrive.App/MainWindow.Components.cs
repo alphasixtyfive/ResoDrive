@@ -234,6 +234,9 @@ public partial class MainWindow
             ApplicationUpdateActionAsync);
     }
 
+    private async void ApplicationUpdateCheck_Click(object sender, RoutedEventArgs e) =>
+        await ExecuteUiActionAsync("ResoDrive update check failed", CheckApplicationUpdateAsync);
+
     private async Task ApplicationUpdateActionAsync()
     {
         if (_applicationUpdateBusy)
@@ -424,6 +427,8 @@ public partial class MainWindow
     {
         var retry = _applicationUpdateCheckFailed && _applicationUpdate is null;
         var update = _applicationUpdate?.UpdateAvailable == true;
+        ApplicationUpdateCheckButton.Visibility = update ? Visibility.Visible : Visibility.Collapsed;
+        ApplicationUpdateCheckButton.IsEnabled = !_applicationUpdateBusy;
         ConfigureComponentAction(
             ApplicationUpdateActionButton,
             ApplicationUpdateActionGlyph,

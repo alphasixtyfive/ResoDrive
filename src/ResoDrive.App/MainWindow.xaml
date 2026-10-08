@@ -682,6 +682,13 @@
                                Style="{StaticResource SlimProgressBar}" Margin="0,8,0,0" Visibility="Collapsed"
                                AutomationProperties.Name="ResoDrive download progress" Value="0" />
                   <StackPanel Grid.RowSpan="2" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="ApplicationUpdateCheckButton" Style="{StaticResource IconOnlyButton}"
+                            Width="34" MinWidth="34" Margin="0,0,8,0" Visibility="Collapsed"
+                            ToolTip="Check for updates"
+                            AutomationProperties.Name="Check for updates"
+                            Click="ApplicationUpdateCheck_Click">
+                      <TextBlock Style="{StaticResource InlineButtonGlyph}" Text="&#xE72C;" Margin="0" />
+                    </Button>
                     <Button
                       x:Name="ApplicationUpdateActionButton"
                       Style="{StaticResource IconOnlyButton}"
