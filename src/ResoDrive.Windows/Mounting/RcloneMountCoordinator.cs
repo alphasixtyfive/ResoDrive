@@ -35,8 +35,9 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
     private readonly SemaphoreSlim _launchGate = new(1, 1);
     private readonly CancellationTokenSource _lifetime = new();
     private enum RecoveryPause { Disconnected, ReconnectPolicy }
+    private enum StartIntent { Manual, Reconnect, CacheRecovery }
     private readonly ConcurrentDictionary<MountId, RecoveryPause> _pausedRecovery = new();
-    private bool _recovered;
+    private bool _initialOwnershipScanCompleted;
 
     public RcloneMountCoordinator(string rclonePath, string configPath, ApplicationPaths paths, IMountTargetInventory targetInventory)
         : this(rclonePath, configPath, paths, targetInventory, ClientUserAgent.Value)
@@ -123,19 +124,19 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
                 else if (next is not null && old.Value.Restart != next.Restart && next.Enabled && next.Restart.Enabled &&
                     _pausedRecovery.TryGetValue(old.Key, out var pause) && pause == RecoveryPause.ReconnectPolicy &&
                     (!_restartAttempts.TryGetValue(old.Key, out var attempt) || ShouldRestart(next.Restart, attempt)))
-                    _pausedRecovery.TryRemove(old.Key, out _);
+                    _pausedRecovery.TryRemove(new KeyValuePair<MountId, RecoveryPause>(old.Key, RecoveryPause.ReconnectPolicy));
             }
             foreach (var definition in definitions)
             {
                 _definitions[definition.Id] = definition;
                 _snapshots.TryAdd(definition.Id, Snapshot(definition, MountLifecycle.Stopped, "Not mounted"));
             }
-            if (!_recovered || !_unverifiedOwnedWork.IsEmpty)
+            if (!_initialOwnershipScanCompleted || !_unverifiedOwnedWork.IsEmpty)
             {
-                await RecoverAsync(incoming, cancellationToken).ConfigureAwait(false);
-                _recovered = true;
+                await RecoverOwnedProcessesAsync(incoming, cancellationToken).ConfigureAwait(false);
+                _initialOwnershipScanCompleted = true;
             }
-            await RecoverPendingCachesAsync(incoming, cancellationToken).ConfigureAwait(false);
+            await ResumePendingCacheRecoveryAsync(incoming, cancellationToken).ConfigureAwait(false);
             return Result.Success();
         }
         catch (Exception exception) when (Expected(exception))
@@ -148,11 +149,8 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
         }
     }
 
-    public Task<OperationResult> StartAsync(MountId mountId, CancellationToken cancellationToken = default)
-    {
-        _pausedRecovery.TryRemove(mountId, out _);
-        return StartInternalAsync(mountId, false, cancellationToken);
-    }
+    public Task<OperationResult> StartAsync(MountId mountId, CancellationToken cancellationToken = default) =>
+        StartInternalAsync(mountId, StartIntent.Manual, cancellationToken);
 
     private async Task<bool> ProbeReadyAsync(Session session, CancellationToken cancellationToken)
     {
@@ -260,7 +258,7 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
         }
     }
 
-    private async Task<OperationResult> StartInternalAsync(MountId mountId, bool restarting, CancellationToken cancellationToken)
+    private async Task<OperationResult> StartInternalAsync(MountId mountId, StartIntent intent, CancellationToken cancellationToken)
     {
         var operationGate = OperationGate(mountId);
         await operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -271,6 +269,8 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
             {
                 return Result.Failure("mount.not_found", "The mount definition no longer exists.");
             }
+            if (intent == StartIntent.CacheRecovery && _pausedRecovery.ContainsKey(mountId))
+                return Result.Success();
             if (!definition.Enabled)
             {
                 return Fail(definition, "mount.disabled", "This mount is disabled.");
@@ -282,15 +282,16 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
             if (_sessions.TryGetValue(mountId, out var active) &&
                 !ProcessTermination.HasExitedOrUnavailable(active.Process))
             {
+                if (intent == StartIntent.Manual) CommitManualStart(mountId);
                 return Result.Success();
             }
             if (active is not null)
             {
                 await CompleteStoppedSessionAsync(active).ConfigureAwait(false);
             }
-            if (restarting && !CanRestart(mountId, definition))
+            if (intent == StartIntent.Reconnect && !CanRestart(mountId, definition))
                 return CancelPendingRestart(definition);
-            if (!restarting)
+            if (intent == StartIntent.CacheRecovery)
             {
                 _restartAttempts.TryRemove(mountId, out _);
             }
@@ -335,8 +336,9 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
             await _recovery.RecordAsync(definition, _recovery.Find(mountId)?.MetadataPath, cancellationToken, configFingerprint).ConfigureAwait(false);
             // Reconnect settings can change while inventory and journal I/O await.
             // Check the current policy again immediately before launching rclone.
-            if (restarting && (!_definitions.TryGetValue(mountId, out var latest) || !CanRestart(mountId, latest)))
+            if (intent == StartIntent.Reconnect && (!_definitions.TryGetValue(mountId, out var latest) || !CanRestart(mountId, latest)))
                 return CancelPendingRestart(definition);
+            cancellationToken.ThrowIfCancellationRequested();
             Publish(Snapshot(definition, MountLifecycle.Starting, "Starting…") with { UploadStatusStale = true, UploadStatusChecking = true });
             var session = StartSession(definition);
             var process = session.Process;
@@ -346,6 +348,9 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
             await _ownership.UpsertAsync(Owned(session), CancellationToken.None).ConfigureAwait(false);
             if (session.Control is { } control)
                 await _controls.SaveAsync(Owned(session), control.Address, control.User, control.Password, CancellationToken.None).ConfigureAwait(false);
+            // A canceled or failed preflight must not resume a deliberately paused cache.
+            // Commit the user's start only once its running process is durably owned.
+            if (intent == StartIntent.Manual) CommitManualStart(mountId);
             TrackExitObserver(ObserveExitAsync(session));
             _launchGate.Release();
             launchReserved = false;
@@ -525,7 +530,7 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
         {
             await Task.Delay(TimeSpan.FromSeconds(seconds), _lifetime.Token).ConfigureAwait(false);
             if (_restartAttempts.TryGetValue(session.Definition.Id, out var current) && current == attempt)
-                await StartInternalAsync(session.Definition.Id, true, _lifetime.Token).ConfigureAwait(false);
+                await StartInternalAsync(session.Definition.Id, StartIntent.Reconnect, _lifetime.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -535,6 +540,12 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
     private bool CanRestart(MountId id, MountDefinition definition) =>
         !_lifetime.IsCancellationRequested && definition.Enabled &&
         _restartAttempts.TryGetValue(id, out var attempt) && ShouldRestart(definition.Restart, attempt);
+
+    private void CommitManualStart(MountId id)
+    {
+        _pausedRecovery.TryRemove(id, out _);
+        _restartAttempts.TryRemove(id, out _);
+    }
 
     private OperationResult CancelPendingRestart(MountDefinition definition)
     {

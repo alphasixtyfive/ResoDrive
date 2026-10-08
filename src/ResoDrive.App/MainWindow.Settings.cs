@@ -280,14 +280,6 @@ public partial class MainWindow
         return warning;
     }
 
-    private void ReportRollbackActivation(HostResponse response)
-    {
-        var warning = SettingsRollback.ActivationMessage(response);
-        if (warning.Length == 0) return;
-        _model.AddLogEntry("Previous settings need an app restart", warning, LogSeverity.Error);
-        ShowError("Previous settings need an app restart", warning);
-    }
-
     private async void SettingsToggle_Click(object sender, RoutedEventArgs e)
     {
         if (_settingsSaveBusy)

@@ -156,8 +156,11 @@ public sealed class DriveDragPreviewTests
             (int)Math.Ceiling((viewport.Bottom + 3) * scale))[3]);
     });
 
-    [Fact]
-    public Task RecyclingARealListRowKeepsTheOriginalGhostAndUsesTheCurrentDropRow() => RunOnStaAsync(() =>
+    [Theory]
+    [InlineData(1d)]
+    [InlineData(1.5d)]
+    [InlineData(2d)]
+    public Task RecyclingARealListRowKeepsTheOriginalGhostAndUsesTheCurrentDropRow(double scale) => RunOnStaAsync(() =>
     {
         var (decorator, list) = ListScene(80);
         // InputHitTest requires a presentation source; a detached render scene is invisible.
@@ -168,9 +171,14 @@ public sealed class DriveDragPreviewTests
             // Match the other native fixture's room for 150% and 200% desktop scaling.
             Width = 600, Height = 400, PositionX = -10_000, PositionY = -10_000, WindowStyle = 0,
         }) { RootVisual = decorator };
+        // Attaching a pre-laid-out tree queues source/visibility and Loaded work.
+        // Finish that dispatcher turn before taking a snapshot or testing input.
+        Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.Background);
+        VisualTreeHelper.SetRootDpi(decorator, new DpiScale(scale, scale));
         decorator.UpdateLayout();
-        Assert.True(list.IsVisible);
+        Assert.True(list.IsVisible, $"The hosted list must be visible before snapshot and input hit testing at {scale:P0} DPI.");
         var source = Assert.IsType<ListBoxItem>(list.ItemContainerGenerator.ContainerFromIndex(0));
+        Assert.Equal(scale, VisualTreeHelper.GetDpi(source).DpiScaleX);
         using var preview = DriveDragPreviewAdorner.TryCreate(list, source,
             source.TranslatePoint(new WpfPoint(20, 30), list), false);
         Assert.NotNull(preview);
@@ -193,8 +201,9 @@ public sealed class DriveDragPreviewTests
         var point = new WpfPoint(viewport.Left + 20, viewport.Top + 30);
         preview.SetPosition(point);
         decorator.UpdateLayout();
-        var pixel = Pixel(Render(preview), (int)point.X, (int)point.Y);
-        Assert.True(pixel[2] > 0);
+        var pixel = Pixel(Render(preview, scale), (int)(point.X * scale), (int)(point.Y * scale));
+        Assert.True(pixel[2] > 0,
+            $"The recycled row's ghost must retain red pixels at {scale:P0} DPI; BGRA={string.Join(',', pixel)}, point={point}, viewport={viewport}.");
         Assert.Equal(0, pixel[0]);
         var target = DriveOrderViewport.FindDropTarget(list, point);
         Assert.NotNull(target);

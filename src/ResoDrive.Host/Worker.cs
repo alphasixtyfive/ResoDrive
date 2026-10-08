@@ -22,7 +22,7 @@ public sealed partial class Worker : BackgroundService
     private readonly SemaphoreSlim _slots = new(2, 2);
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _operations = new();
     private readonly ConcurrentDictionary<int, Task> _tasks = new();
-    private readonly ConcurrentDictionary<SyncJobId, DateTimeOffset> _lastRuns = new();
+    private readonly ConcurrentDictionary<SyncJobId, DateTimeOffset> _scheduleAnchors = new();
     private readonly RemoteWipeStore _remoteWipe;
     private readonly RemoteWipeClient _remoteWipeClient;
     private readonly RemoteWipeCoordinator _wipeCoordinator;
@@ -596,16 +596,16 @@ public sealed partial class Worker : BackgroundService
                         continue;
                     }
                     var runOnStart = _firstSchedulePass && item.Job.Schedule.RunOnApplicationStart;
-                    if (!_lastRuns.TryGetValue(item.Job.Id, out var previous))
+                    if (!_scheduleAnchors.TryGetValue(item.Job.Id, out var intervalAnchor))
                     {
-                        _lastRuns[item.Job.Id] = now;
+                        _scheduleAnchors[item.Job.Id] = now;
                         changed = true;
                         if (!runOnStart)
                         {
                             continue;
                         }
                     }
-                    else if (!runOnStart && (!item.Job.Schedule.Enabled || now - previous < item.Job.Schedule.Interval))
+                    else if (!runOnStart && (!item.Job.Schedule.Enabled || now - intervalAnchor < item.Job.Schedule.Interval))
                     {
                         continue;
                     }
@@ -633,7 +633,7 @@ public sealed partial class Worker : BackgroundService
             // Every dequeued scheduled attempt consumes its interval. Retrying launch,
             // configuration, or access failures on every 30-second scheduler tick can
             // otherwise create an unbounded error loop on unattended machines.
-            _lastRuns[syncId] = DateTimeOffset.UtcNow;
+            _scheduleAnchors[syncId] = DateTimeOffset.UtcNow;
             await SaveScheduleStateAsync(CancellationToken.None).ConfigureAwait(false);
             return result;
         }, token, () => coordinator.MarkQueued(mountId, syncId));
@@ -791,9 +791,9 @@ public sealed partial class Worker : BackgroundService
             .SelectMany(definition => definition.SyncJobs)
             .Select(job => job.Id)
             .ToHashSet();
-        foreach (var obsoleteId in _lastRuns.Keys.Where(id => !currentJobIds.Contains(id)))
+        foreach (var obsoleteId in _scheduleAnchors.Keys.Where(id => !currentJobIds.Contains(id)))
         {
-            _lastRuns.TryRemove(obsoleteId, out _);
+            _scheduleAnchors.TryRemove(obsoleteId, out _);
         }
         _syncs ??= new(rclone, config, _paths, () => _definitions, _clientUserAgent);
         var isFirstLoad = _settings is null;
@@ -906,7 +906,7 @@ public sealed partial class Worker : BackgroundService
             {
                 foreach (var pair in state)
                 {
-                    _lastRuns[new SyncJobId(pair.Key)] = pair.Value;
+                    _scheduleAnchors[new SyncJobId(pair.Key)] = pair.Value;
                 }
             }
         }
@@ -931,8 +931,8 @@ public sealed partial class Worker : BackgroundService
                 4096,
                 FileOptions.Asynchronous))
             {
-                var persistedRuns = _lastRuns.ToDictionary(pair => pair.Key.Value, pair => pair.Value);
-                await JsonSerializer.SerializeAsync(stream, persistedRuns, cancellationToken: token).ConfigureAwait(false);
+                var persistedAnchors = _scheduleAnchors.ToDictionary(pair => pair.Key.Value, pair => pair.Value);
+                await JsonSerializer.SerializeAsync(stream, persistedAnchors, cancellationToken: token).ConfigureAwait(false);
             }
             File.Move(temporary, StatePath, true);
         }

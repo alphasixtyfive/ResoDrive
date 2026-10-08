@@ -187,3 +187,17 @@ Exact-asset UAC acceptance and the owner's manual recovery remain pending, so
 the candidate is not published. All eight GitHub draft releases were deleted;
 the 19 published releases and immutable tags were retained. Only final releases
 will appear on GitHub; candidates remain Actions artifacts.
+
+### Unpublished 0.3.37 review candidate
+
+Source `431482c8570bacfa85c9df0a492de50f87f9bd4d` passed the local package
+build, 1,140 tests and the one-CPU application suite. Its
+[tagged build](https://github.com/alphasixtyfive/ResoDrive/actions/runs/37838837419)
+stopped on the native-window drag-preview regression before installer acceptance.
+The fixture now explicitly completes queued WPF attachment and checks three DPI
+scales with diagnostic assertions. The old log did not identify which assertion
+failed, so the new source still requires hosted verification.
+
+The tag remains immutable. Candidate 0.3.38 also adds explicit start intent,
+cancellation-safe recovery pauses and setup outcomes that finish restoration
+before presentation. No 0.3.37 release or draft was created.

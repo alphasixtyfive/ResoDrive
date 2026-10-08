@@ -1,3 +1,4 @@
+using ResoDrive.Core.Results;
 using ResoDrive.Core.Settings;
 using ResoDrive.Windows;
 
@@ -29,6 +30,7 @@ public partial class MainWindow
         bool reloadHost,
         bool applyStartupPreference)
     {
+        SetupCommitOutcome? outcome;
         using (provisioning)
         {
             var drive = provisioning.NewMount.Target.DriveLetter;
@@ -48,21 +50,42 @@ public partial class MainWindow
                 return false;
             }
 
-            return await CommitProvisioningAsync(
+            outcome = await CommitProvisioningAsync(
                 provisioning,
                 reloadHost,
                 applyStartupPreference);
         }
+        // Disposal also completes the file transaction's final recovery attempt.
+        // Present the result only after every recovery operation has finished.
+        if (outcome is null) return false;
+        LoadSettingsControls();
+        if (!outcome.Committed)
+        {
+            _model.AddLogEntry("Setup was not completed", outcome.Failure!, LogSeverity.Error);
+            ShowError("Setup was not completed", outcome.Failure!);
+            return false;
+        }
+
+        _model.AddLogEntry("Drive added",
+            $"{provisioning.NewMount.DisplayName} · {provisioning.ConnectionSummary}", LogSeverity.Success);
+        if (reloadHost) await RefreshStatusAsync();
+        if (outcome.MountWarning is not null)
+        {
+            _model.AddLogEntry("Drive mount needs attention", outcome.MountWarning, LogSeverity.Warning);
+            ModernMessageBox.Show(this, outcome.MountWarning, "Drive mount needs attention",
+                System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+        }
+        return true;
     }
 
-    private async Task<bool> CommitProvisioningAsync(
+    private async Task<SetupCommitOutcome?> CommitProvisioningAsync(
         ProfileProvisioningResult provisioning,
         bool reloadHost,
         bool applyStartupPreference)
     {
         if (!await EnterSettingsMutationAsync())
         {
-            return false;
+            return null;
         }
 
         try
@@ -78,142 +101,64 @@ public partial class MainWindow
         }
     }
 
-    private async Task<bool> CommitProvisioningCoreAsync(
+    private async Task<SetupCommitOutcome> CommitProvisioningCoreAsync(
         ProfileProvisioningResult provisioning,
         bool reloadHost,
         bool applyStartupPreference)
     {
-        var executablePath = CurrentExecutablePath;
-
-        var autostart = new ScheduledTaskAutostartService(executablePath);
-        var previous = await autostart.IsEnabledAsync();
-        if (!previous.Succeeded)
+        var autostart = new ScheduledTaskAutostartService(CurrentExecutablePath);
+        var previousStartup = await autostart.IsEnabledAsync();
+        if (!previousStartup.Succeeded)
         {
-            ShowError("Startup setting unavailable", previous.Error?.Message ?? "The Windows startup task could not be read.");
-            return false;
+            return new(false, previousStartup.Error?.Message ?? "The Windows startup task could not be read.", null);
         }
 
         var previousSettings = _settings;
-        var desired = applyStartupPreference
-            ? provisioning.StartWithWindows
-            : previous.Value == true;
-        var filesApplied = false;
-        var autostartApplied = false;
-        var settingsApplied = false;
-        try
+        var updated = previousSettings with
         {
-            provisioning.Files.Apply();
-            filesApplied = true;
-
-            if (applyStartupPreference)
+            Application = previousSettings.Application with
             {
-                var changed = await autostart.SetEnabledAsync(desired);
-                if (!changed.Succeeded)
-                {
-                    ShowError("Setup was not completed", changed.Error?.Message ?? "The Windows startup task could not be changed.");
-                    return false;
-                }
-                autostartApplied = true;
-            }
-
-            var updated = previousSettings with
-            {
-                Application = previousSettings.Application with
-                {
-                    StartWithWindows = applyStartupPreference
-                        ? provisioning.StartWithWindows
-                        : previousSettings.Application.StartWithWindows,
-                },
-                Mounts = previousSettings.Mounts.Append(provisioning.NewMount).ToArray(),
-            };
-            var save = await (_store ?? throw new InvalidOperationException("Settings are not ready."))
-                .SaveAsync(updated, previousSettings.Revision);
-            if (!save.Succeeded || save.Value is null)
-            {
-                ShowError("Setup was not saved", save.Error?.Message ?? "The settings could not be saved.");
-                return false;
-            }
-
-            _settings = save.Value;
-            settingsApplied = true;
-            if (reloadHost)
-            {
-                var reload = await HostClient.SendAsync(new HostRequest("reload"));
-                if (!reload.Succeeded)
-                {
-                    ShowError(
-                        "Setup could not be activated",
-                        reload.ErrorMessage ?? "The background host rejected the new connection.");
-                    return false;
-                }
-                LoadHostStatus(reload);
-            }
-
-            provisioning.Files.Complete();
-            filesApplied = false;
-            if (reloadHost && provisioning.NewMount.AutoMount.Equals(
-                    "OnApplicationStart",
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                await HostClient.SendAsync(new HostRequest(
-                    "start",
-                    provisioning.NewMount.Id));
-            }
-            LoadSettingsControls();
-            if (reloadHost)
-            {
-                await RefreshStatusAsync();
-            }
-
-            _model.AddLogEntry(
-                "Drive added",
-                $"{provisioning.NewMount.DisplayName} · {provisioning.ConnectionSummary}", LogSeverity.Success);
-            return true;
-        }
-        finally
+                StartWithWindows = applyStartupPreference
+                    ? provisioning.StartWithWindows
+                    : previousSettings.Application.StartWithWindows,
+            },
+            Mounts = previousSettings.Mounts.Append(provisioning.NewMount).ToArray(),
+        };
+        var store = _store ?? throw new InvalidOperationException("Settings are not ready.");
+        async Task<OperationResult> SaveAsync(ManagerSettings settings)
         {
-            if (filesApplied)
-            {
-                var settingsRestored = !settingsApplied || await TryRestoreSettingsAsync(previousSettings);
-                if (settingsRestored)
-                {
-                    if (autostartApplied)
-                    {
-                        var warning = await RestoreStartupPreferenceAsync(autostart, previous.Value == true);
-                        if (warning is not null) ShowError("Startup setting needs attention", warning);
-                    }
-                    provisioning.Files.Rollback();
-                    if (reloadHost && settingsApplied)
-                    {
-                        var restored = await HostClient.SendAsync(new HostRequest("reload"));
-                        ReportRollbackActivation(restored);
-                    }
-                }
-                else
-                {
-                    // Keep the new config when settings cannot be restored; the files on disk
-                    // remain a consistent pair and the next app start can activate them.
-                    provisioning.Files.Complete();
-                }
-            }
+            var saved = await store.SaveAsync(settings, _settings.Revision);
+            if (!saved.Succeeded) return saved;
+            if (saved.Value is null)
+                return Result.Failure("settings.missing_saved_value", "Windows did not confirm the saved settings.");
+            _settings = saved.Value;
+            return saved;
         }
+        async Task<OperationResult> ReloadAsync()
+        {
+            var response = await HostClient.SendAsync(new HostRequest("reload"));
+            if (response.Succeeded) LoadHostStatus(response);
+            return SetupHostResult(response);
+        }
+        var startRequested = reloadHost && provisioning.NewMount.AutoMount.Equals(
+            "OnApplicationStart", StringComparison.OrdinalIgnoreCase);
+        return await SetupCommitTransaction.ApplyAsync(new(
+            provisioning.Files.Apply,
+            applyStartupPreference ? () => autostart.SetEnabledAsync(provisioning.StartWithWindows) : null,
+            () => SaveAsync(updated),
+            reloadHost ? ReloadAsync : null,
+            provisioning.Files.Complete,
+            () => SaveAsync(previousSettings),
+            applyStartupPreference ? () => autostart.SetEnabledAsync(previousStartup.Value == true) : null,
+            provisioning.Files.Rollback,
+            reloadHost ? ReloadAsync : null,
+            startRequested ? async () => SetupHostResult(await HostClient.SendAsync(new HostRequest(
+                "start", provisioning.NewMount.Id))) : null));
+
     }
 
-    private async Task<bool> TryRestoreSettingsAsync(ManagerSettings previousSettings)
-    {
-        var result = await (_store ?? throw new InvalidOperationException("Settings are not ready."))
-            .SaveAsync(previousSettings, _settings.Revision);
-        if (!result.Succeeded || result.Value is null)
-        {
-            ShowError(
-                "Setup requires an app restart",
-                $"The new connection was saved, but the previous settings could not be restored after activation failed. Restart {ProductInfo.Name} to activate the consistent saved configuration.");
-            return false;
-        }
-
-        _settings = result.Value;
-        LoadSettingsControls();
-        return true;
-    }
-
+    private static OperationResult SetupHostResult(HostResponse response) => response.Succeeded
+        ? Result.Success()
+        : Result.Failure(response.ErrorCode ?? "host.request_failed",
+            response.ErrorMessage ?? "The background host did not confirm the request.");
 }

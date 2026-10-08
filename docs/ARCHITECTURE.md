@@ -49,6 +49,11 @@ Exit observers belong to the coordinator that starts them. Its lifetime token
 cancels delayed work, and disposal drains observers before disposing shared
 gates. Reconnect decisions use the current definition both after a process exit
 and immediately before a delayed launch, so editing the policy takes effect.
+Manual starts, delayed reconnects and automatic cache recovery have explicit
+intents. Only an accepted manual start clears an explicit recovery pause; a
+cancelled or rejected preflight preserves it. Scheduler interval anchors track
+the initial baseline and later attempts, including failures, rather than claiming
+a completed sync.
 
 ## Configuration model
 
@@ -87,6 +92,10 @@ missing. The first repair write keeps that verified backup instead of replacing
 it with a corrupt primary. Provisioning rollback checks the complete set of
 required backups before restoring files; an incomplete rollback keeps the
 remaining data and reports that recovery is needed.
+Setup completes that recovery before presenting one combined outcome. Saving a
+connection and accepting its mount request are distinct results; a missing mount
+acknowledgement keeps the connection saved and directs the user to check status
+before retrying.
 
 The WPF process writes a separate rolling diagnostic log for startup, activation
 and unhandled failures. Diagnostic log redaction removes common secrets, hosts

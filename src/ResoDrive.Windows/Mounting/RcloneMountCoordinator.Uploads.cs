@@ -35,7 +35,7 @@ public sealed partial class RcloneMountCoordinator
 
     public async Task<OperationResult> CheckPendingUploadsAsync(CancellationToken cancellationToken = default)
     {
-        var pendingRecovery = await RefreshRecoveryStatusesAsync(cancellationToken).ConfigureAwait(false);
+        var pendingRecovery = await InspectAndRetireCleanRecoveryAsync(cancellationToken).ConfigureAwait(false);
         var sessions = _sessions.Values.ToArray();
         var statuses = await Task.WhenAll(sessions.Select(session =>
             ReadTransfersAsync(session, cancellationToken))).ConfigureAwait(false);
@@ -49,7 +49,7 @@ public sealed partial class RcloneMountCoordinator
     public async Task RefreshHealthAsync(CancellationToken cancellationToken = default)
     {
         await Task.WhenAll(_sessions.Values.Select(session => RefreshHealthAsync(session, cancellationToken))).ConfigureAwait(false);
-        await RefreshRecoveryStatusesAsync(cancellationToken).ConfigureAwait(false);
+        await InspectAndRetireCleanRecoveryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task RefreshHealthAsync(Session session, CancellationToken cancellationToken)

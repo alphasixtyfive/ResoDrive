@@ -1,12 +1,14 @@
 # Changelog
 
-## [0.3.37] - 2026-10-08 (release candidate)
+## [0.3.38] - 2026-10-08 (release candidate)
 
 - Complete interrupted upgrades while preserving accounts, settings, cached files and local copies. Wait for migration before opening drives or starting sync jobs.
 - Use one branded Setup window for future in-app updates. Keep update refresh available and resume interrupted downloads.
 - Keep repeated offline warnings and failed scheduled retries quiet until recovery is confirmed.
 - Apply reconnect policy changes to waiting retries and preserve pending cached uploads.
+- Preserve an explicit disconnect when a manual start is cancelled before launch.
 - Preserve newer settings when saving an open drive or sync editor. Explain failed startup or background settings recovery.
+- Finish setup recovery before showing its result, and report an automatic mount that could not be confirmed without removing the saved connection.
 - Retain the working settings backup during repair and preserve remaining setup files if rollback cannot finish.
 - Bound command output draining by the execution timeout and finish owned exit observers before releasing background resources.
 - Organize window behavior and presentation into smaller files, reuse immutable status brushes and document ownership and recovery rules.

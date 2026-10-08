@@ -71,15 +71,136 @@ public sealed class RcloneMountCoordinatorLifetimeTests
         Assert.True(File.Exists(Path.Combine(fixture.Paths.Root, "mount-upload-recovery.json")));
         Assert.Equal(0, fixture.Inventory.StartChecks);
 
-        // A manual reconnect still reaches normal launch preflight and clears the
-        // policy pause. The disposable fixture intentionally has no rclone binary.
+        // A failed manual preflight preserves the pause and exhausted retry budget.
+        // The disposable fixture intentionally has no rclone binary.
         var manual = await fixture.Coordinator.StartAsync(original.Id);
         Assert.Equal("rclone.not_found", manual.Error?.Code);
         var attempts = Field<ConcurrentDictionary<MountId, int>>(fixture.Coordinator, "_restartAttempts");
-        Assert.False(attempts.ContainsKey(original.Id));
+        Assert.True(attempts.ContainsKey(original.Id));
+        Assert.True(RecoveryIsPaused(fixture.Coordinator, original.Id));
         await fixture.Coordinator.ReconcileAsync([replacement]);
         Assert.Equal(MountLifecycle.Failed, Assert.Single(fixture.Coordinator.GetSnapshots()).Lifecycle);
         Assert.True(File.Exists(Path.Combine(fixture.Paths.Root, "mount-upload-recovery.json")));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CanceledManualStartPreservesExplicitRecoveryPause(bool cancelWhileWaiting)
+    {
+        await using var fixture = new Fixture();
+        var definition = fixture.Definition;
+        await fixture.Coordinator.ReconcileAsync([definition]);
+        await Field<MountRecoveryStore>(fixture.Coordinator, "_recovery").RecordAsync(definition, null, CancellationToken.None);
+        Assert.True((await fixture.Coordinator.StopAsync(definition.Id, allowPendingUploads: true)).Succeeded);
+        var before = Assert.Single(fixture.Coordinator.GetSnapshots());
+        var gate = OperationGate(fixture);
+        using var cancellation = new CancellationTokenSource();
+        if (cancelWhileWaiting) await gate.WaitAsync();
+        else cancellation.Cancel();
+        try
+        {
+            var start = fixture.Coordinator.StartAsync(definition.Id, cancellation.Token);
+            if (cancelWhileWaiting)
+            {
+                Assert.False(start.IsCompleted);
+                cancellation.Cancel();
+            }
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => start.WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+        finally { if (cancelWhileWaiting) gate.Release(); }
+
+        await fixture.Coordinator.ReconcileAsync([definition]);
+
+        Assert.Equal(before, Assert.Single(fixture.Coordinator.GetSnapshots()));
+        Assert.True(RecoveryIsPaused(fixture.Coordinator, definition.Id));
+        Assert.Equal(0, fixture.Inventory.StartChecks);
+        Assert.True(File.Exists(Path.Combine(fixture.Paths.Root, "mount-upload-recovery.json")));
+        Assert.NotNull(Field<MountRecoveryStore>(fixture.Coordinator, "_recovery").Find(definition.Id));
+    }
+
+    [Fact]
+    public async Task FailedManualPreflightAndAutomaticRecoveryPreserveExplicitPause()
+    {
+        await using var fixture = new Fixture();
+        var definition = fixture.Definition;
+        await fixture.Coordinator.ReconcileAsync([definition]);
+        await Field<MountRecoveryStore>(fixture.Coordinator, "_recovery").RecordAsync(definition, null, CancellationToken.None);
+        Assert.True((await fixture.Coordinator.StopAsync(definition.Id, allowPendingUploads: true)).Succeeded);
+
+        var start = await fixture.Coordinator.StartAsync(definition.Id);
+
+        Assert.Equal("rclone.not_found", start.Error?.Code);
+        Assert.True(RecoveryIsPaused(fixture.Coordinator, definition.Id));
+        var before = Assert.Single(fixture.Coordinator.GetSnapshots());
+        var intentType = typeof(RcloneMountCoordinator).GetNestedType("StartIntent", BindingFlags.NonPublic)!;
+        var automatic = (Task<OperationResult>)typeof(RcloneMountCoordinator)
+            .GetMethod("StartInternalAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(fixture.Coordinator, [definition.Id, Enum.Parse(intentType, "CacheRecovery"), CancellationToken.None])!;
+        Assert.True((await automatic).Succeeded);
+        await fixture.Coordinator.ReconcileAsync([definition]);
+        Assert.Equal(before, Assert.Single(fixture.Coordinator.GetSnapshots()));
+        Assert.True(File.Exists(Path.Combine(fixture.Paths.Root, "mount-upload-recovery.json")));
+        Assert.Equal(0, fixture.Inventory.StartChecks);
+    }
+
+    [Fact]
+    public async Task CancellationDuringManualPreflightPreservesRecoveryPause()
+    {
+        await using var fixture = new Fixture();
+        var definition = fixture.Definition;
+        await fixture.Coordinator.ReconcileAsync([definition]);
+        await Field<MountRecoveryStore>(fixture.Coordinator, "_recovery").RecordAsync(definition, null, CancellationToken.None);
+        Assert.True((await fixture.Coordinator.StopAsync(definition.Id, allowPendingUploads: true)).Succeeded);
+        var before = Assert.Single(fixture.Coordinator.GetSnapshots());
+        Directory.CreateDirectory(Path.GetDirectoryName(fixture.Paths.RcloneExecutable)!);
+        await File.WriteAllTextAsync(fixture.Paths.RcloneExecutable, "Disposable preflight fixture; never executed");
+        await File.WriteAllTextAsync(fixture.Paths.ConfigFile, "[fixture]\ntype = local\n");
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Inventory.BeforeStartCheck = token =>
+        {
+            entered.SetResult();
+            return Task.Delay(Timeout.InfiniteTimeSpan, token);
+        };
+        using var cancellation = new CancellationTokenSource();
+        var start = fixture.Coordinator.StartAsync(definition.Id, cancellation.Token);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => start.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        await fixture.Coordinator.ReconcileAsync([definition]);
+
+        Assert.Equal(before, Assert.Single(fixture.Coordinator.GetSnapshots()));
+        Assert.True(RecoveryIsPaused(fixture.Coordinator, definition.Id));
+        Assert.Equal(1, fixture.Inventory.StartChecks);
+        Assert.NotNull(Field<MountRecoveryStore>(fixture.Coordinator, "_recovery").Find(definition.Id));
+        Assert.True(File.Exists(Path.Combine(fixture.Paths.Root, "mount-upload-recovery.json")));
+    }
+
+    [Fact]
+    public async Task AcceptedManualStartOfLiveSessionClearsPauseAndRetryBudget()
+    {
+        await using var fixture = new Fixture();
+        var definition = fixture.Definition;
+        await fixture.Coordinator.ReconcileAsync([definition]);
+        await Field<MountRecoveryStore>(fixture.Coordinator, "_recovery").RecordAsync(definition, null, CancellationToken.None);
+        Assert.True((await fixture.Coordinator.StopAsync(definition.Id, allowPendingUploads: true)).Succeeded);
+        var attempts = Field<ConcurrentDictionary<MountId, int>>(fixture.Coordinator, "_restartAttempts");
+        attempts[definition.Id] = 3;
+        using var process = Process.Start(new ProcessStartInfo("cmd.exe", "/c ping -n 30 127.0.0.1 > nul")
+            { UseShellExecute = false, CreateNoWindow = true })!;
+        fixture.AddSession(process, definition);
+        try
+        {
+            Assert.True((await fixture.Coordinator.StartAsync(definition.Id)).Succeeded);
+            Assert.False(RecoveryIsPaused(fixture.Coordinator, definition.Id));
+            Assert.False(attempts.ContainsKey(definition.Id));
+            Assert.True(File.Exists(Path.Combine(fixture.Paths.Root, "mount-upload-recovery.json")));
+        }
+        finally
+        {
+            Assert.True((await fixture.Coordinator.StopAsync(definition.Id, allowPendingUploads: true)).Succeeded);
+        }
     }
 
     [Theory]
@@ -162,8 +283,7 @@ public sealed class RcloneMountCoordinatorLifetimeTests
     public async Task DisposalWaitsForEveryObserverToReleaseTheActualOperationGate(bool failedObserver)
     {
         await using var fixture = new Fixture();
-        var gate = (SemaphoreSlim)typeof(RcloneMountCoordinator).GetMethod("OperationGate", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(fixture.Coordinator, [fixture.Definition.Id])!;
+        var gate = OperationGate(fixture);
         var lifetime = Field<CancellationTokenSource>(fixture.Coordinator, "_lifetime");
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancellationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -200,6 +320,16 @@ public sealed class RcloneMountCoordinatorLifetimeTests
 
     private static T Field<T>(RcloneMountCoordinator coordinator, string name) =>
         (T)typeof(RcloneMountCoordinator).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(coordinator)!;
+
+    private static SemaphoreSlim OperationGate(Fixture fixture) =>
+        (SemaphoreSlim)typeof(RcloneMountCoordinator).GetMethod("OperationGate", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(fixture.Coordinator, [fixture.Definition.Id])!;
+
+    private static bool RecoveryIsPaused(RcloneMountCoordinator coordinator, MountId id)
+    {
+        var pauses = Field<object>(coordinator, "_pausedRecovery");
+        return (bool)pauses.GetType().GetMethod("ContainsKey")!.Invoke(pauses, [id])!;
+    }
 
     private static async Task<Process> ExitedProcessAsync()
     {
@@ -263,10 +393,12 @@ public sealed class RcloneMountCoordinatorLifetimeTests
     private sealed class CountingInventory : IMountTargetInventory
     {
         public int StartChecks { get; private set; }
-        public Task<OperationResult<IReadOnlySet<char>>> GetOccupiedDriveLettersAsync(CancellationToken cancellationToken = default)
+        public Func<CancellationToken, Task>? BeforeStartCheck { get; set; }
+        public async Task<OperationResult<IReadOnlySet<char>>> GetOccupiedDriveLettersAsync(CancellationToken cancellationToken = default)
         {
             StartChecks++;
-            return Task.FromResult(Result.Success<IReadOnlySet<char>>(new HashSet<char>()));
+            if (BeforeStartCheck is not null) await BeforeStartCheck(cancellationToken);
+            return Result.Success<IReadOnlySet<char>>(new HashSet<char>());
         }
         public Task<OperationResult<bool>> IsMountedAsync(MountTarget target, CancellationToken cancellationToken = default) =>
             Task.FromResult(Result.Success(false));

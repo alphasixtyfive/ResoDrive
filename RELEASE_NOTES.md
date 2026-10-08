@@ -10,6 +10,7 @@ This update fixes an incomplete move of existing app data after an upgrade.
 - Changes to reconnect settings take effect even while a drive is waiting to retry.
 - Saving drive or sync settings preserves other changes made while the editor was open. Failed saves explain when startup or background settings need attention.
 - Settings recovery keeps the last working backup. Interrupted setup preserves the remaining files when automatic recovery cannot finish.
+- Setup finishes recovery before showing an error and explains when a saved connection could not be mounted.
 - The Transfers window refreshes more efficiently and shows when sync status is unavailable.
 - Diagnostic reports include the app version and more useful details when background work stops unexpectedly.
 
