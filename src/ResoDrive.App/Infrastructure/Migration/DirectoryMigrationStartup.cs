@@ -87,7 +87,7 @@ internal static partial class DirectoryMigrationStartup
                     // New app code is always used, including after a legacy MSI.
                     // Both the old and new locations are checked; portable hosts fail closed.
                     var installed = InstalledApplicationLocator.GetInstallationDirectories();
-                    var directories = installed.Append(AppContext.BaseDirectory).Distinct(StringComparer.OrdinalIgnoreCase);
+                    var directories = InstallationDirectories.DistinctPaths(installed.Append(AppContext.BaseDirectory));
                     foreach (var directory in directories)
                         await InstallationPreparationService.ForUserDataMigration().PrepareAsync(directory, cancellationToken: cancellation).ConfigureAwait(false);
                 }, token).ConfigureAwait(false);

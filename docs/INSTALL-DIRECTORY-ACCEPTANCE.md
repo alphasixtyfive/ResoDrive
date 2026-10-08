@@ -296,3 +296,31 @@ files matched the accepted files byte for byte. The anonymous public latest
 redirect resolves to 0.3.39; the actual application update service also discovers
 0.3.39 from 0.3.35 with the correct Setup and checksum URLs. No draft releases
 remain. Immutable tags and previously published releases were retained.
+
+### Production 0.3.35 in-app update to 0.3.39
+
+The owner clicked Update in the installed 0.3.35 app. Its immutable updater
+downloads MSI and launches `msiexec /passive`; the resulting Windows Installer
+window belongs to that old updater's first hop. The installed executable now
+matches the accepted 0.3.39 ProductVersion and SHA-256 above. Its finalized update
+receipt reports installer exit zero and acknowledged relaunch.
+
+Data relocation completed at `2026-10-08T22:44:01.1598868Z`. The old default root
+was absent afterward, the new root present, and the migration completion receipt
+reported success. The new host was requested after that receipt; the application
+reached `startup.ready` at `22:44:01.7693619Z`. Read-only checks found unchanged
+hashes for settings, their backup, encrypted rclone configuration, protected
+credentials and profiles. Of 122 recorded non-log files, 100 hashes still matched,
+15 live/recovery files changed, six hashes were unavailable, and one older MSI
+download was removed. This does not establish byte-identical live cache; no
+production data or process was modified by the verification.
+
+The installer log also exposed unnecessary waiting. Preparation treated the
+registered directory and MSI's equivalent directory ending in `\.` as separate
+entries. Each absent-host pipe attempt waited 15 seconds. New-package preparation
+and the old product's removal each took about 30 seconds. The initial updater
+preparation and post-install migration also probed the absent host. Candidate
+0.3.40 canonicalizes directory spelling before deduplication and skips only the
+absent-mutex pipe wait; all existing account, process, upload and mutex-protected
+fallback checks remain. Frozen older packages retain their own preparation code
+and cannot receive this optimization retroactively.

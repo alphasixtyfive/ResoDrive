@@ -65,10 +65,15 @@ public sealed class InstallationPreparationService
         }
     }
 
-    private sealed class Runtime(bool currentUserOnly = false) : IInstallationPreparationRuntime
+    internal sealed class Runtime(bool currentUserOnly = false) : IInstallationPreparationRuntime
     {
         public async Task<HostResponse> ShutdownAsync(string directory, CancellationToken token)
         {
+            token.ThrowIfCancellationRequested();
+            // This only skips an empty pipe wait. PrepareAsync still verifies account
+            // ownership and active work under WithNoHostMutex before closing any UI.
+            if (!InstallerProcessInspection.IsHostMutexPresent())
+                return new(false, "host.unavailable", "The ResoDrive background host is not available.");
             HostResponse response;
             for (var attempt = 0; ; attempt++)
             {

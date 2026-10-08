@@ -15,6 +15,17 @@ public static class InstallationDirectories
         Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
         Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)), StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>Checks each installation once, including MSI paths ending in a dot.</summary>
+    public static IReadOnlyList<string> DistinctPaths(IEnumerable<string> directories) => directories
+        .Select(directory =>
+        {
+            if (!Path.IsPathFullyQualified(directory))
+                throw new ArgumentException("An absolute installation directory is required.", nameof(directories));
+            return Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
+        })
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
     public static string PreparationDataRoot(string requestedRoot)
     {
         // Preparation must contact the old host before migration. Never migrate here:

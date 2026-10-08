@@ -129,7 +129,11 @@ its elevated helper safely stopped an unelevated copied 0.3.35 host while
 preserving disposable settings and cache. The owner requested publication before
 their manual production upgrade so they could install from GitHub. Release
 0.3.39 is now public; all eight published files match the accepted downloads,
-and the live application update service discovers it for 0.3.35. Production data
-migration remains unverified until the owner runs Setup and reopens their app.
+and the live application update service discovers it for 0.3.35. The owner then
+used 0.3.35's existing in-app Update. Its frozen updater selected MSI, so that
+first hop displayed Windows Installer progress. The installed 0.3.39 app
+subsequently completed the data move and reached ready state. Settings, their
+backup, encrypted connection configuration, protected credentials and profiles
+matched their pre-upgrade hashes; the host started after migration completed.
 This publication order was an explicit owner-requested exception to
 [the release procedure](RELEASING.md), not a passing production-upgrade result.

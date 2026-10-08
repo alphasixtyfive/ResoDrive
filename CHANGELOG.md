@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.40] - 2026-10-08 (release candidate)
+
+- Check each installation directory once, including paths supplied by Windows Installer with a trailing dot.
+- Skip waiting for an absent background host while retaining process, account and cached-upload safety checks.
+
 ## [0.3.39] - 2026-10-08
 
 - Complete interrupted upgrades while preserving accounts, settings, cached files and local copies. Wait for migration before opening drives or starting sync jobs.

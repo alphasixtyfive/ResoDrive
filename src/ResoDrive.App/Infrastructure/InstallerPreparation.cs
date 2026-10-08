@@ -49,8 +49,9 @@ internal static class InstallerPreparation
         try
         {
             UiDiagnosticLog.Current.Information("installer.prepare_started");
-            var directories = (includeRegisteredInstallation ? InstalledApplicationLocator.GetInstallationDirectories() : [])
-                .Append(directory).Distinct(StringComparer.OrdinalIgnoreCase);
+            var directories = InstallationDirectories.DistinctPaths(
+                (includeRegisteredInstallation ? InstalledApplicationLocator.GetInstallationDirectories() : [])
+                    .Append(directory));
             foreach (var installed in directories)
                 await new InstallationPreparationService().PrepareAsync(installed).ConfigureAwait(false);
             result = new(true, "ResoDrive stopped safely. Installation can continue.", DateTimeOffset.UtcNow);

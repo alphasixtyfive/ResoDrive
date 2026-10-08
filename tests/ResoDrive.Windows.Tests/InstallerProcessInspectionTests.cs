@@ -12,6 +12,89 @@ public sealed class InstallerProcessIsolationGroup
 public sealed class InstallerProcessInspectionTests
 {
     [Fact]
+    public async Task AbsentHostSkipsThePipeConnectionTimeout()
+    {
+        using var fixture = new Fixture();
+        Assert.False(InstallerProcessInspection.IsHostMutexPresent());
+        var response = await new InstallationPreparationService.Runtime()
+            .ShutdownAsync(fixture.Binaries, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(response.Succeeded);
+        Assert.Equal("host.unavailable", response.ErrorCode);
+    }
+
+    [Fact]
+    public async Task AbsentHostStillHonorsCallerCancellation()
+    {
+        using var fixture = new Fixture();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            new InstallationPreparationService.Runtime().ShutdownAsync(fixture.Binaries, cancellation.Token));
+    }
+
+    [Fact]
+    public async Task PresentHostMutexStillRequiresTheShutdownHandshake()
+    {
+        using var fixture = new Fixture();
+        using var mutex = new Mutex(false, $"Local\\{HostProtocol.GetPipeName(new ApplicationPaths())}", out var created);
+        Assert.True(created);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            new InstallationPreparationService.Runtime().ShutdownAsync(fixture.Binaries, cancellation.Token)
+                .WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    [Fact]
+    public async Task RealShutdownUploadRejectionLeavesTheVerifiedUiAndCacheAlone()
+    {
+        using var fixture = new Fixture();
+        using var ui = fixture.StartProcess("resodrive.exe");
+        var paths = new ApplicationPaths();
+        var cacheMarker = Path.Combine(paths.Root, "cache-marker");
+        await File.WriteAllTextAsync(cacheMarker, "unsent changes");
+        var pipeName = HostProtocol.GetPipeName(paths);
+        using var mutex = new Mutex(false, $"Local\\{pipeName}", out var created);
+        Assert.True(created);
+        using var server = CurrentUserPipe.CreateServer(pipeName);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var preparation = new InstallationPreparationService().PrepareAsync(fixture.Binaries,
+            cancellationToken: cancellation.Token);
+        await server.WaitForConnectionAsync(cancellation.Token);
+        var request = await HostProtocol.ReadAsync<HostRequest>(server, cancellation.Token);
+        Assert.NotNull(request);
+        Assert.Equal("shutdown", request.Command);
+        Assert.True(request.Confirmed);
+        Assert.Equal(fixture.Binaries, request.ExpectedHostBaseDirectory);
+        await HostProtocol.WriteAsync(server,
+            new HostResponse(false, "mount.pending_uploads", "Uploads are still pending."), cancellation.Token);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => preparation);
+        Assert.Contains("Uploads are still pending", error.Message, StringComparison.Ordinal);
+        Assert.False(ui.HasExited);
+        Assert.Equal("unsent changes", await File.ReadAllTextAsync(cacheMarker));
+    }
+
+    [Fact]
+    public async Task HostStartingAfterTheFastProbeBlocksOrphanClosure()
+    {
+        using var fixture = new Fixture();
+        using var ui = fixture.StartProcess("resodrive.exe");
+        var paths = new ApplicationPaths();
+        var cacheMarker = Path.Combine(paths.Root, "cache-marker");
+        await File.WriteAllTextAsync(cacheMarker, "unsent changes");
+        var runtime = new InstallationPreparationService.Runtime();
+        var response = await runtime.ShutdownAsync(fixture.Binaries, CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal("host.unavailable", response.ErrorCode);
+
+        using var mutex = new Mutex(false, $"Local\\{HostProtocol.GetPipeName(paths)}", out var created);
+        Assert.True(created);
+        await Assert.ThrowsAsync<IOException>(() => runtime.StopOrphanedUiAsync(fixture.Binaries, CancellationToken.None));
+        Assert.False(ui.HasExited);
+        Assert.Equal("unsent changes", await File.ReadAllTextAsync(cacheMarker));
+    }
+
+    [Fact]
     public async Task VerifiedIsolatedUiCanBeClosed()
     {
         using var fixture = new Fixture();
