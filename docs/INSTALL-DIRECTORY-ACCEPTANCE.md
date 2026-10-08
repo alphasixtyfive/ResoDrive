@@ -201,3 +201,15 @@ failed, so the new source still requires hosted verification.
 The tag remains immutable. Candidate 0.3.38 also adds explicit start intent,
 cancellation-safe recovery pauses and setup outcomes that finish restoration
 before presentation. No 0.3.37 release or draft was created.
+
+### Unpublished 0.3.38 review candidate
+
+[Tagged build 37840496110](https://github.com/alphasixtyfive/ResoDrive/actions/runs/37840496110)
+stopped before native acceptance. Core and Windows tests passed; the three
+recycling-preview DPI cases found transparent pixels at the sampled coordinates.
+The snapshot itself was subsequently verified opaque red. Reproducing the larger
+native host's logical allocation shifted the list to `(150,140)` and reproduced
+the failure locally. Fixing the test scene's size and origin retains the pixel,
+container recycling and input assertions without changing product rendering.
+
+The 0.3.38 tag remains immutable and unaccepted. No release or draft was created.

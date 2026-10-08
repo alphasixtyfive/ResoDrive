@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.38] - 2026-10-08 (release candidate)
+## [0.3.39] - 2026-10-08 (release candidate)
 
 - Complete interrupted upgrades while preserving accounts, settings, cached files and local copies. Wait for migration before opening drives or starting sync jobs.
 - Use one branded Setup window for future in-app updates. Keep update refresh available and resume interrupted downloads.

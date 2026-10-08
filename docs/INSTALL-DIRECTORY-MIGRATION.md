@@ -1,6 +1,6 @@
 # Installation directory migration
 
-The 0.3.38 candidate installs to `%ProgramFiles%\ResoDrive` and uses
+The 0.3.39 candidate installs to `%ProgramFiles%\ResoDrive` and uses
 `%LOCALAPPDATA%\ResoDrive`. It is an increasing-version upgrade from the
 accepted 0.3.30 release; published tags and accepted assets remain unchanged.
 
@@ -98,7 +98,7 @@ development artifacts or bypass upload protection to obtain a passing result.
 
 ## Current candidate
 
-The directory migration mechanism was corrected in 0.3.36. Candidate 0.3.38
+The directory migration mechanism was corrected in 0.3.36. Candidate 0.3.39
 adds settings, rollback and reconnect reliability fixes without changing the
 migration sequence. The complete package and native gates must run against its
 exact source; results for another version do not establish acceptance.
