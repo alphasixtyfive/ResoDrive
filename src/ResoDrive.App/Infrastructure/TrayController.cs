@@ -33,7 +33,7 @@ internal sealed partial class TrayController : IDisposable
     private readonly System.Drawing.Icon[] _uploadIcons;
     private readonly System.Drawing.Icon _warningIcon;
     private int _animationFrame;
-    private bool _uploadWarning;
+    private readonly AttentionEpisode _uploadAttention = new(TimeProvider.System);
     private readonly Func<IReadOnlyList<SyncRow>> _syncProvider;
     private readonly Func<SyncRow, Task<TrayActionResult>> _syncAction;
     private bool _disposed;
@@ -76,12 +76,13 @@ internal sealed partial class TrayController : IDisposable
         _notifyIcon.BalloonTipClicked += NotifyIcon_BalloonTipClicked;
     }
 
-    internal void UpdateStatus(int mountedCount, int runningSyncCount, long pendingUploads = 0, bool uploadWarning = false)
+    internal void UpdateStatus(int mountedCount, int runningSyncCount, long pendingUploads = 0, bool uploadWarning = false,
+        bool attentionStatusConfirmed = true)
     {
         if (_disposed) return;
         if (!_dispatcher.CheckAccess())
         {
-            Dispatch(() => UpdateStatus(mountedCount, runningSyncCount, pendingUploads, uploadWarning));
+            Dispatch(() => UpdateStatus(mountedCount, runningSyncCount, pendingUploads, uploadWarning, attentionStatusConfirmed));
             return;
         }
         var uploading = pendingUploads > 0;
@@ -100,9 +101,8 @@ internal sealed partial class TrayController : IDisposable
             _animation.Stop();
             _notifyIcon.Icon = _icon;
         }
-        if (uploadWarning && !_uploadWarning)
+        if (_uploadAttention.Observe(uploadWarning, attentionStatusConfirmed) == AttentionTransition.Began)
             ShowResult(TrayActionResult.Failure("Uploads need attention", "Keep ResoDrive running. Open Transfers to check pending files and connection status."), _showTransfers);
-        _uploadWarning = uploadWarning;
     }
 
     internal void ShowMountResult(MountRow mount, TrayActionResult result) =>

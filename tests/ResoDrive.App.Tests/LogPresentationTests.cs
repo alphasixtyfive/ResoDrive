@@ -53,7 +53,7 @@ public sealed class LogPresentationTests
         model.ApplyStatus([Status(mount, "Mounted")]);
         model.ApplyStatus([Status(mount, "Stopping")]);
         model.ApplyStatus([Status(mount, "Stopped")]);
-        Assert.Equal(4, model.Log.Count);
+        Assert.Equal(3, model.Log.Count); // A brief reconnect does not announce recovery.
         Assert.StartsWith("Stopped", model.Log[0].Title, StringComparison.Ordinal);
     }
 
@@ -72,10 +72,10 @@ public sealed class LogPresentationTests
         Assert.Equal(LogSeverity.Error, Assert.Single(model.Log).Severity);
         model.ApplyStatus([mounted]);
         model.ApplyStatus([mounted with { UploadErrors = 1 }]);
-        Assert.Equal(2, model.Log.Count);
+        Assert.Single(model.Log); // One clean poll cannot rearm the outage warning.
         model.ApplyStatus([mounted with { UploadErrors = 1, UploadRecoveryRequired = true }]);
         model.ApplyStatus([mounted with { UploadErrors = 1, UploadRecoveryRequired = true }]);
-        Assert.Equal(3, model.Log.Count);
+        Assert.Equal(2, model.Log.Count); // Cache recovery is a distinct escalation.
         Assert.Equal(LogSeverity.Warning, model.Log[0].Severity);
     }
 
@@ -92,8 +92,7 @@ public sealed class LogPresentationTests
         Assert.StartsWith("Drive failed", Assert.Single(model.Log).Title, StringComparison.Ordinal);
         model.ApplyStatus([Status(mount, "WaitingToRestart")]);
         model.ApplyStatus([Status(mount, "Stopped")]);
-        Assert.Equal(3, model.Log.Count);
-        Assert.StartsWith("Stopped", model.Log[0].Title, StringComparison.Ordinal);
+        Assert.StartsWith("Drive failed", Assert.Single(model.Log).Title, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -109,7 +108,7 @@ public sealed class LogPresentationTests
         Assert.Single(model.Log);
         model.ApplyStatus([Status(mount, "Mounted")]);
         model.ApplyStatus([Status(mount, "Degraded") with { UploadErrors = 1 }]);
-        Assert.Equal(3, model.Log.Count); // Recovery, confirmed mounted, specific error.
+        Assert.Equal(2, model.Log.Count); // Recovery and a specific error; no false recovery event.
         Assert.StartsWith("Upload error", model.Log[0].Title, StringComparison.Ordinal);
     }
 
@@ -133,6 +132,83 @@ public sealed class LogPresentationTests
         model.ApplySyncStatus([next]);
         Assert.Equal(next.CompletedAt, model.Log[0].OccurredAt);
         Assert.Equal(LogSeverity.Success, model.Log[0].Severity);
+    }
+
+    [Fact]
+    public void HourLongOfflineRetryCycleReportsOneEpisodeAndRearmsAfterSustainedRecovery()
+    {
+        var clock = new ObservationClock();
+        var mount = Mount();
+        var model = new ShellViewModel(clock);
+        var mounted = Status(mount, "Mounted");
+        model.Load(new ManagerSettings { Mounts = [mount] }, [mounted]);
+        for (var retry = 0; retry < 20; retry++)
+        {
+            model.ApplyStatus([Status(mount, "WaitingToRestart", $"Retry {retry}")]);
+            model.ApplyStatus([Status(mount, "Stopped")]);
+            model.ApplyStatus([Status(mount, "Starting")]);
+            model.ApplyStatus([mounted]);
+            clock.Advance(TimeSpan.FromMinutes(3));
+            model.ApplyStatus([Status(mount, "Degraded")]);
+        }
+        Assert.StartsWith("Reconnecting", Assert.Single(model.Log).Title, StringComparison.Ordinal);
+        model.ApplyStatus([mounted]);
+        for (var poll = 0; poll < 30; poll++)
+        {
+            clock.Advance(TimeSpan.FromSeconds(10));
+            model.ApplyStatus([mounted]);
+        }
+        Assert.Equal(2, model.Log.Count);
+        Assert.StartsWith("Mounted", model.Log[0].Title, StringComparison.Ordinal);
+        model.ApplyStatus([Status(mount, "Degraded")]);
+        Assert.Equal(3, model.Log.Count);
+    }
+
+    [Fact]
+    public void MissingHostStatusAndPendingUploadsCannotConfirmRecovery()
+    {
+        var clock = new ObservationClock();
+        var mount = Mount();
+        var model = new ShellViewModel(clock);
+        var mounted = Status(mount, "Mounted");
+        model.Load(new ManagerSettings { Mounts = [mount] }, [Status(mount, "Degraded")]);
+        model.ApplyStatus([mounted]);
+        clock.Advance(TimeSpan.FromMinutes(4));
+        model.ApplyHostUnavailable();
+        clock.Advance(TimeSpan.FromHours(1));
+        model.ApplyStatus([mounted]);
+        Assert.Single(model.Log);
+        model.ApplyStatus([mounted with { UploadsQueued = 1 }]);
+        clock.Advance(AttentionEpisode.RecoveryConfirmation);
+        model.ApplyStatus([mounted with { UploadsQueued = 1 }]);
+        model.ApplyStatus([mounted]);
+        Assert.Single(model.Log);
+        model.ApplyStatus(null, statusTruncated: true);
+        clock.Advance(AttentionEpisode.RecoveryConfirmation);
+        model.ApplyStatus([mounted]);
+        Assert.Single(model.Log);
+    }
+
+    [Fact]
+    public void RepeatedScheduledFailuresStayQuietUntilThatJobSucceeds()
+    {
+        var job = new SyncJobSettings { Id = Guid.NewGuid(), DisplayName = "Downloads", LocalPath = @"C:\Data" };
+        var mount = Mount() with { SyncJobs = [job] };
+        var model = new ShellViewModel();
+        model.Load(new ManagerSettings { Mounts = [mount] }, []);
+        var failed = new HostSyncStatus(mount.Id, job.Id, "Failed", "Server unavailable", DateTimeOffset.Now);
+        for (var retry = 0; retry < 30; retry++)
+            model.ApplySyncStatus([failed with { CompletedAt = failed.CompletedAt!.Value.AddMinutes(retry * 2) }]);
+        Assert.StartsWith("Sync failed", Assert.Single(model.Log).Title, StringComparison.Ordinal);
+        Assert.Equal("Server unavailable", Assert.Single(model.Jobs).TransferStatus!.Status);
+        model.Load(new ManagerSettings { Mounts = [mount] }, [], [failed with { CompletedAt = failed.CompletedAt!.Value.AddHours(1) }]);
+        Assert.Single(model.Log); // Settings reload does not reset the episode.
+        model.ApplySyncStatus([failed with { Lifecycle = "Cancelled", CompletedAt = failed.CompletedAt!.Value.AddHours(2) }]);
+        model.ApplySyncStatus([failed with { CompletedAt = failed.CompletedAt!.Value.AddHours(3) }]);
+        Assert.Equal(2, model.Log.Count); // Cancellation is visible; it does not rearm failure.
+        model.ApplySyncStatus([failed with { Lifecycle = "Succeeded", CompletedAt = failed.CompletedAt!.Value.AddHours(4) }]);
+        model.ApplySyncStatus([failed with { CompletedAt = failed.CompletedAt!.Value.AddHours(5) }]);
+        Assert.Equal(4, model.Log.Count);
     }
 
     private static MountSettings Mount() => new()

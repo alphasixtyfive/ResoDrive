@@ -8,6 +8,28 @@ namespace ResoDrive.App.Tests;
 public sealed class SyncTransferPresentationTests
 {
     [Fact]
+    public void RefreshPreservesRowsAndSelectionWhileReorderingOrRemovingJobs()
+    {
+        var first = Job();
+        var second = Job();
+        var model = new TransfersViewModel();
+        model.Update([], false, [first, second], 2);
+        var firstRow = model.Transfers[0];
+        var secondRow = model.Transfers[1];
+        var notifications = 0;
+        firstRow.PropertyChanged += (_, _) => notifications++;
+        model.Transfers.CollectionChanged += (_, _) => notifications++;
+        for (var refresh = 0; refresh < 50; refresh++)
+            model.Update([], false, [first, second], 2);
+        Assert.Equal(0, notifications);
+        model.Update([], false, [second, first], 2);
+        Assert.Same(secondRow, model.Transfers[0]);
+        Assert.Same(firstRow, model.Transfers[1]);
+        model.Update([], false, [first], 1);
+        Assert.Same(firstRow, Assert.Single(model.Transfers));
+    }
+
+    [Fact]
     public void UploadsAndDownloadsShowSeparateLiveProgressWithoutRepeatingMetrics()
     {
         var sync = Job(nameof(SyncMode.CopyFromRemote));

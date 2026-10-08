@@ -18,6 +18,7 @@ internal sealed class TransferRow(string key) : NotifyBase
     private double _percent;
     private bool _showProgress;
     private bool _hasPercent;
+    private TransferRowContent? _lastContent;
     public string Name => _name;
     public string Detail => _detail;
     public string ProgressText => _progress;
@@ -27,6 +28,8 @@ internal sealed class TransferRow(string key) : NotifyBase
 
     internal void Update(TransferRowContent row)
     {
+        if (row == _lastContent) return;
+        _lastContent = row;
         var progress = row.ProgressText ?? UploadPresentation.Progress(row.Bytes, row.Total, row.Speed);
         var observedPercent = row.ProgressPercent is >= 0 && double.IsFinite(row.ProgressPercent.Value)
             ? row.ProgressPercent : null;
@@ -153,13 +156,19 @@ internal sealed class TransfersViewModel : NotifyBase
         if (powerProtectionUnavailable)
             rows.Add(new("power:unavailable", "Windows power protection", "Windows could not apply all power protection. Check transfers before shutting down."));
         var keys = rows.Select(row => row.Key).ToHashSet(StringComparer.Ordinal);
-        foreach (var obsolete in Transfers.Where(row => !keys.Contains(row.Key)).ToArray()) Transfers.Remove(obsolete);
+        for (var index = Transfers.Count - 1; index >= 0; index--)
+            if (!keys.Contains(Transfers[index].Key)) Transfers.RemoveAt(index);
+        var existing = Transfers.ToDictionary(row => row.Key, StringComparer.Ordinal);
         for (var index = 0; index < rows.Count; index++)
         {
             var row = rows[index];
-            var target = Transfers.FirstOrDefault(item => item.Key.Equals(row.Key, StringComparison.Ordinal));
-            if (target is null) { target = new TransferRow(row.Key); Transfers.Insert(index, target); }
-            else if (Transfers.IndexOf(target) != index) Transfers.Move(Transfers.IndexOf(target), index);
+            if (!existing.TryGetValue(row.Key, out var target))
+            {
+                target = new TransferRow(row.Key);
+                Transfers.Insert(index, target);
+            }
+            else if (!ReferenceEquals(Transfers[index], target))
+                Transfers.Move(Transfers.IndexOf(target), index);
             target.Update(row);
         }
         Summary = powerProtectionUnavailable ? "Windows power protection needs attention."

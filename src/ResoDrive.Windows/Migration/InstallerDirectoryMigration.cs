@@ -211,20 +211,22 @@ public static class InstallerDirectoryMigration
 
     private static bool LegacyHandoffRunning()
     {
-        foreach (var process in Process.GetProcessesByName("resodrive-update-helper"))
+        var processes = Process.GetProcessesByName("resodrive-update-helper");
+        try
         {
             // Waiting for unrelated helpers is harmless; unverifiable processes
             // defer cleanup rather than risking the active legacy update.
-            using (process) if (!process.HasExited) return true;
+            return processes.Any(process => !process.HasExited);
         }
-        return false;
+        finally { foreach (var process in processes) process.Dispose(); }
     }
 
     private static bool LegacyLauncherRunning()
     {
-        foreach (var process in Process.GetProcessesByName("resodrive"))
+        var processes = Process.GetProcessesByName("resodrive");
+        try
         {
-            using (process)
+            foreach (var process in processes)
             {
                 if (process.Id == Environment.ProcessId || process.HasExited) continue;
                 try
@@ -234,8 +236,9 @@ public static class InstallerDirectoryMigration
                 catch (System.ComponentModel.Win32Exception) { return true; }
                 catch (InvalidOperationException) when (process.HasExited) { }
             }
+            return false;
         }
-        return false;
+        finally { foreach (var process in processes) process.Dispose(); }
     }
 
     private static string Hash(string path)

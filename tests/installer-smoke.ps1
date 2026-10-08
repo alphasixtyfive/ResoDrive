@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory)][string]$SetupPath,
     [string]$PreviousVersion = '',
+    [string]$LegacySetupVersion = '0.3.20',
     [string]$SameVersionBaselineMsiPath = '',
     [string]$SameVersionBaselineSetupPath = '',
     [string]$CandidateMsiPath = ''
@@ -298,9 +299,9 @@ try {
 
     # A legacy Setup owns a hidden MSI. Reject MSI-only migration before any
     # preparation or replacement, then let native Burn remove its own old entry.
-    $previousSetupName = "resodrive-win-x64-$PreviousVersion-setup.exe"
+    $previousSetupName = "resodrive-win-x64-$LegacySetupVersion-setup.exe"
     $previousSetup = Join-Path $testRoot $previousSetupName
-    $previousSetupUrl = "https://github.com/alphasixtyfive/ResoDrive/releases/download/v$PreviousVersion/$previousSetupName"
+    $previousSetupUrl = "https://github.com/alphasixtyfive/ResoDrive/releases/download/v$LegacySetupVersion/$previousSetupName"
     Invoke-WebRequest -Uri $previousSetupUrl -OutFile $previousSetup
     Invoke-WebRequest -Uri "$previousSetupUrl.sha256" -OutFile ($previousSetup + '.sha256')
     Assert-VerifiedAsset $previousSetup | Out-Null

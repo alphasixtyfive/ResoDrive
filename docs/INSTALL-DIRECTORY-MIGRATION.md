@@ -1,8 +1,8 @@
 # Installation directory migration
 
-The next increasing-version release installs to `%ProgramFiles%\ResoDrive` and
-uses `%LOCALAPPDATA%\ResoDrive`. Development builds retain version 0.3.30 and
-must not be published as replacements for the accepted 0.3.30 release.
+Version 0.3.34 installs to `%ProgramFiles%\ResoDrive` and uses
+`%LOCALAPPDATA%\ResoDrive`. It is an increasing-version upgrade from the
+accepted 0.3.30 release; published tags and accepted assets remain unchanged.
 
 ## Fresh installations
 

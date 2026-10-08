@@ -84,6 +84,19 @@ public sealed class UserDataDirectoryMigrationTests : IDisposable
     }
 
     [Fact]
+    public async Task Migration_LeavesUnchangedSettingsAndBackupByteIdentical()
+    {
+        Directory.CreateDirectory(Source);
+        var settings = "{ \"schemaVersion\": 1, \"revision\": 7, \"mounts\": [] }\r\n";
+        await File.WriteAllTextAsync(Path.Combine(Source, "settings.json"), settings);
+        await File.WriteAllTextAsync(Path.Combine(Source, "settings.json.bak"), settings);
+        var bytes = await File.ReadAllBytesAsync(Path.Combine(Source, "settings.json"));
+        await new UserDataDirectoryMigration(Source, Destination).MigrateAsync(_ => Task.CompletedTask);
+        Assert.Equal(bytes, await File.ReadAllBytesAsync(Path.Combine(Destination, "settings.json")));
+        Assert.Equal(bytes, await File.ReadAllBytesAsync(Path.Combine(Destination, "settings.json.bak")));
+    }
+
+    [Fact]
     public async Task Migration_RejectedShutdownLeavesOriginalDataUntouched()
     {
         Directory.CreateDirectory(Source);

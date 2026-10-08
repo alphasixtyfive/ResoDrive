@@ -63,7 +63,7 @@ internal static class DirectoryMigrationStartup
                     var installed = InstalledApplicationLocator.GetInstallationDirectories();
                     var directories = installed.Append(AppContext.BaseDirectory).Distinct(StringComparer.OrdinalIgnoreCase);
                     foreach (var directory in directories)
-                        await new InstallationPreparationService().PrepareAsync(directory, cancellationToken: cancellation).ConfigureAwait(false);
+                        await InstallationPreparationService.ForUserDataMigration().PrepareAsync(directory, cancellationToken: cancellation).ConfigureAwait(false);
                 }, token).ConfigureAwait(false);
         }
         finally { Environment.SetEnvironmentVariable("RDRIVE_DATA_DIR", previous); }

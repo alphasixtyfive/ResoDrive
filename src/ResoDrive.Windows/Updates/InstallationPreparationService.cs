@@ -15,6 +15,9 @@ public sealed class InstallationPreparationService
     private readonly IInstallationPreparationRuntime _runtime;
 
     public InstallationPreparationService() : this(new Runtime()) { }
+    // Moving one account's private data does not replace the shared installation.
+    // Other accounts may keep using it; processes with an unreadable identity still block.
+    public static InstallationPreparationService ForUserDataMigration() => new(new Runtime(currentUserOnly: true));
     internal InstallationPreparationService(IInstallationPreparationRuntime runtime) => _runtime = runtime;
 
     public async Task PrepareAsync(string installationDirectory, IProgress<string>? progress = null,
@@ -62,7 +65,7 @@ public sealed class InstallationPreparationService
         }
     }
 
-    private sealed class Runtime : IInstallationPreparationRuntime
+    private sealed class Runtime(bool currentUserOnly = false) : IInstallationPreparationRuntime
     {
         public async Task<HostResponse> ShutdownAsync(string directory, CancellationToken token)
         {
@@ -79,16 +82,16 @@ public sealed class InstallationPreparationService
         }
 
         public Task StopWindowsAsync(string directory, int? hostProcessId, CancellationToken token) =>
-            InstallerProcessInspection.StopVerifiedUiAsync(directory, hostProcessId, token);
+            InstallerProcessInspection.StopVerifiedUiAsync(directory, hostProcessId, token, currentUserOnly);
 
         public Task StopOrphanedUiAsync(string directory, CancellationToken token) =>
-            InstallerProcessInspection.StopOrphanedUiAsync(directory, token);
+            InstallerProcessInspection.StopOrphanedUiAsync(directory, token, currentUserOnly);
 
         public Task WaitForOtherAccountProcessesExitAsync(string directory, CancellationToken token) =>
-            InstallerProcessInspection.WaitForOtherAccountProcessesExitAsync(directory, token);
+            InstallerProcessInspection.WaitForOtherAccountProcessesExitAsync(directory, token, currentUserOnly);
 
         public Task VerifyStoppedAsync(string directory, CancellationToken token) =>
-            InstallerProcessInspection.VerifyStoppedAsync(directory, token);
+            InstallerProcessInspection.VerifyStoppedAsync(directory, token, currentUserOnly);
 
         public async Task WaitForHostExitAsync(int? processId, CancellationToken token)
         {

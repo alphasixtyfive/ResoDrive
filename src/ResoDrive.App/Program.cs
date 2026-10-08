@@ -136,6 +136,7 @@ public static class Program
 
         try
         {
+            UiDiagnosticLog.Current.StartSession();
             var application = new App();
             application.InitializeComponent();
             return application.Run();

@@ -145,6 +145,7 @@ public sealed class UserDataDirectoryMigration
             var path = Path.Combine(_destination, name);
             if (!File.Exists(path)) continue;
             var node = ParseJson(path);
+            var original = node.ToJsonString();
             if (name.StartsWith("settings", StringComparison.Ordinal))
             {
                 foreach (var mount in node["mounts"]?.AsArray() ?? [])
@@ -166,7 +167,8 @@ public sealed class UserDataDirectoryMigration
                     RemapArguments(entry);
                 }
             }
-            WriteAtomic(path, node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            if (node.ToJsonString() != original)
+                WriteAtomic(path, node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         }
     }
 

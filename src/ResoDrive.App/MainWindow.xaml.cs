@@ -1630,12 +1630,18 @@ public partial class MainWindow : WpfWindow
     {
         RefreshTransfersPresentation();
         var mounts = UploadMountRows();
+        var uploadWarning = _powerProtectionUnavailable ||
+            (_mountUploadStatusUnavailable && _model.Mounts.Any(mount => mount.ShouldStop || mount.NeedsHostRecovery)) ||
+            mounts.Any(mount => mount.UploadNeedsAttention &&
+                ((mount.UploadStatus?.UploadStatusStale == true && !mount.UploadStatus.UploadStatusChecking) ||
+                    UploadPresentation.Errors(mount.UploadStatus) > 0 || mount.UploadStatus?.UploadRecoveryRequired == true));
         _tray.UpdateStatus(_model.Mounts.Count(mount => mount.IsMounted),
             ActiveSyncJobCount,
             UploadPresentation.PendingCount(mounts),
-            _powerProtectionUnavailable || (_mountUploadStatusUnavailable && _model.Mounts.Any(mount => mount.ShouldStop || mount.NeedsHostRecovery)) || mounts.Any(mount => mount.UploadNeedsAttention &&
-                ((mount.UploadStatus?.UploadStatusStale == true && !mount.UploadStatus.UploadStatusChecking)
-                    || UploadPresentation.Errors(mount.UploadStatus) > 0 || mount.UploadStatus?.UploadRecoveryRequired == true)));
+            uploadWarning,
+            attentionStatusConfirmed: !_mountUploadStatusUnavailable && _syncStatusAvailable &&
+                mounts.All(mount => mount.UploadStatus?.UploadStatusStale != true &&
+                    mount.UploadStatus?.UploadStatusChecking != true && !UploadPresentation.HasPending(mount.UploadStatus)));
     }
 
     private void OpenAbout_Click(object sender, RoutedEventArgs e) =>

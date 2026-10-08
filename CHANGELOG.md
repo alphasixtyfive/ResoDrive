@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.34] - 2026-10-08
+
+- Move existing installations to the current ResoDrive folders while preserving accounts, settings, cached files and local copies.
+- Keep repeated connection failures and failed scheduled retries within one warning episode until recovery is confirmed.
+- Refresh transfer rows more efficiently and show when sync status is unavailable.
+- Include app version and useful background failure details in protected local diagnostics.
+
 ## [0.3.30] - 2026-10-05
 
 - Combine the reviewed drive settings, quieter status and compact log changes with the input-validation and single-progress-window fixes.

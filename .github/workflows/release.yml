@@ -79,6 +79,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./tests/cross-account-smoke.ps1 -NewAppPath artifacts/win-x64/resodrive/resodrive.exe
+      - name: Verify one-update directory migration and rollback
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./tests/directory-migration-smoke.ps1 -MsiPath (Get-ChildItem artifacts/win-x64/*.msi).FullName -AppPath artifacts/win-x64/resodrive/resodrive.exe
       - name: Verify application tests with one available CPU
         shell: pwsh
         env:
@@ -96,6 +101,8 @@ jobs:
             ${{ runner.temp }}/resodrive-installer-smoke/*.log
             ${{ runner.temp }}/resodrive-installer-smoke/*.json
             ${{ runner.temp }}/resodrive-cross-account-smoke/*
+            ${{ runner.temp }}/resodrive-directory-migration-smoke/*.log
+            ${{ runner.temp }}/resodrive-directory-migration-smoke/*.json
           if-no-files-found: ignore
       - name: Preserve release artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

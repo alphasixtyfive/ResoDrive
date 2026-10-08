@@ -19,10 +19,8 @@ internal static class HostStatusPresentation
         HasUsableMountStatus(response) && response.SyncJobs is not null;
 }
 
-public sealed class ShellViewModel : NotifyBase
+public sealed partial class ShellViewModel : NotifyBase
 {
-    private readonly Dictionary<Guid, DateTimeOffset> _loggedSyncRuns = [];
-    private readonly Dictionary<Guid, MountLogObservation> _mountLogObservations = [];
     private string _mountSummary = "Loading…";
     private string _jobSummary = "Loading…";
     private bool _isInitialized;
@@ -70,7 +68,7 @@ public sealed class ShellViewModel : NotifyBase
         {
             statusMap.TryGetValue(mount.Id, out var status);
             Mounts.Add(new MountRow(mount, status, hostUnavailable || (mountStatusTruncated && status is null)));
-            if (!hostUnavailable) ObserveMountStatus(mount, status);
+            ObserveMountStatus(mount, hostUnavailable ? null : status);
             foreach (var job in mount.SyncJobs)
             {
                 syncMap.TryGetValue((mount.Id, job.Id), out var syncStatus);
@@ -125,6 +123,8 @@ public sealed class ShellViewModel : NotifyBase
 
     public void ApplyHostUnavailable()
     {
+        foreach (var observation in _mountLogObservations.Values)
+            _ = observation.Attention.Observe(attention: false, confirmedHealthy: false);
         foreach (var mount in Mounts)
             mount.MarkHostUnavailable();
         foreach (var job in Jobs)
@@ -146,110 +146,6 @@ public sealed class ShellViewModel : NotifyBase
             AddSyncOutcome(status);
         }
         Refresh();
-    }
-
-    public void AddLogEntry(
-        string title,
-        string detail,
-        LogSeverity severity = LogSeverity.Information,
-        DateTimeOffset? occurredAt = null)
-    {
-        var entry = new LogRow(title, detail, occurredAt ?? DateTimeOffset.Now, severity);
-        var index = 0;
-        while (index < Log.Count && Log[index].OccurredAt > entry.OccurredAt) index++;
-        Log.Insert(index, entry);
-        while (Log.Count > 100)
-            Log.RemoveAt(Log.Count - 1);
-    }
-
-    private void ObserveMountStatus(MountSettings mount, HostMountStatus? status)
-    {
-        if (status is null || !Enum.TryParse<MountLifecycle>(status.Lifecycle, true, out var lifecycle) ||
-            !Enum.IsDefined(lifecycle)) return;
-        _mountLogObservations.TryGetValue(mount.Id, out var previous);
-        var location = mount.Target.DriveLetter is char letter ? $"{letter}:" : mount.RemoteName;
-        var detail = $"{location} · {status.Status}";
-        var errors = UploadPresentation.Errors(status) > 0;
-        var recovery = status.UploadRecoveryRequired;
-        if (status.UploadStatusChecking || status.UploadStatusStale)
-        {
-            errors |= previous?.UploadErrors == true;
-            recovery |= previous?.RecoveryRequired == true;
-        }
-        if (previous?.Lifecycle != lifecycle)
-        {
-            var outcome = lifecycle switch
-            {
-                MountLifecycle.Mounted when previous is not null => ("Mounted", LogSeverity.Success),
-                MountLifecycle.Stopped when previous?.Lifecycle is MountLifecycle.Mounted or MountLifecycle.Degraded or MountLifecycle.Stopping or MountLifecycle.WaitingToRestart =>
-                    ("Stopped", LogSeverity.Information),
-                MountLifecycle.Failed => ("Drive failed", LogSeverity.Error),
-                MountLifecycle.Degraded when !errors && !recovery => ("Drive needs attention", LogSeverity.Warning),
-                MountLifecycle.WaitingToRestart => ("Reconnecting", LogSeverity.Warning),
-                _ => (string.Empty, LogSeverity.Information)
-            };
-            if (outcome.Item1.Length > 0)
-                AddLogEntry($"{outcome.Item1} · {mount.DisplayName}", detail, outcome.Item2);
-        }
-        if (recovery && previous?.RecoveryRequired != true)
-            AddLogEntry($"Cache recovery · {mount.DisplayName}",
-                $"{location} · Cached uploads need attention. Open Transfers to review them.", severity: LogSeverity.Warning);
-        else if (errors && previous?.UploadErrors != true && !recovery)
-            AddLogEntry($"Upload error · {mount.DisplayName}",
-                $"{location} · Open Transfers for affected files and retry details.", severity: LogSeverity.Error);
-        _mountLogObservations[mount.Id] = new(lifecycle, recovery, errors);
-    }
-
-    private sealed record MountLogObservation(MountLifecycle Lifecycle, bool RecoveryRequired, bool UploadErrors);
-
-    private static bool IsTerminalSyncStatus(HostSyncStatus status) =>
-        status.CompletedAt is not null &&
-        Enum.TryParse(status.Lifecycle, true, out SyncLifecycle lifecycle) &&
-        lifecycle is SyncLifecycle.Succeeded or SyncLifecycle.Failed or SyncLifecycle.Cancelled;
-
-    private void AddSyncOutcome(HostSyncStatus status)
-    {
-        if (status.CompletedAt is not { } completedAt ||
-            (_loggedSyncRuns.TryGetValue(status.SyncJobId, out var loggedAt) && loggedAt >= completedAt))
-        {
-            return;
-        }
-        var job = Jobs.FirstOrDefault(item => item.Id == status.SyncJobId);
-        if (job is null || !Enum.TryParse(status.Lifecycle, true, out SyncLifecycle lifecycle))
-        {
-            return;
-        }
-        _loggedSyncRuns[status.SyncJobId] = completedAt;
-
-        var title = lifecycle switch
-        {
-            SyncLifecycle.Succeeded => $"Sync completed · {job.Name}",
-            SyncLifecycle.Failed => $"Sync failed · {job.Name}",
-            SyncLifecycle.Cancelled => $"Sync cancelled · {job.Name}",
-            _ => job.Name
-        };
-        var details = new List<string> { job.MountName };
-        if (!string.IsNullOrWhiteSpace(status.Status))
-            details.Add(status.Status);
-        if (status.TransfersCompleted is > 0)
-            details.Add($"{status.TransfersCompleted} file{(status.TransfersCompleted == 1 ? string.Empty : "s")}");
-        else if (status.ChecksCompleted is > 0)
-            details.Add($"{status.ChecksCompleted} checked");
-        if (status.BytesTransferred is > 0)
-            details.Add($"{DisplayFormatting.Bytes(status.BytesTransferred.Value)} transferred");
-        if (status.Errors is > 0)
-            details.Add($"{status.Errors} error{(status.Errors == 1 ? string.Empty : "s")}");
-
-        AddLogEntry(
-            title,
-            string.Join(" · ", details),
-            lifecycle switch
-            {
-                SyncLifecycle.Succeeded => LogSeverity.Success,
-                SyncLifecycle.Failed => LogSeverity.Error,
-                _ => LogSeverity.Information
-            },
-            completedAt);
     }
 
     public void Refresh()

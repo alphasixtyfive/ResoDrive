@@ -154,6 +154,21 @@ public sealed class InstallerProcessInspectionTests
     }
 
     [Fact]
+    public async Task UserDataMigrationStillRefusesUnverifiedHostAndActiveUploadProcess()
+    {
+        using var fixture = new Fixture();
+        using var host = fixture.StartProcess("resodrive.exe", "/k --host");
+        await Assert.ThrowsAsync<IOException>(() =>
+            InstallerProcessInspection.StopVerifiedUiAsync(fixture.Binaries, null, CancellationToken.None, currentUserOnly: true));
+        Assert.False(host.HasExited);
+        using var rclone = fixture.StartProcess(Path.Combine("components", "rclone", "rclone.exe"));
+        await Assert.ThrowsAsync<IOException>(() =>
+            InstallerProcessInspection.StopOrphanedUiAsync(fixture.Binaries, CancellationToken.None, currentUserOnly: true));
+        Assert.False(host.HasExited);
+        Assert.False(rclone.HasExited);
+    }
+
+    [Fact]
     public async Task CorruptOwnershipRecordBlocksOrphanRecovery()
     {
         using var fixture = new Fixture();

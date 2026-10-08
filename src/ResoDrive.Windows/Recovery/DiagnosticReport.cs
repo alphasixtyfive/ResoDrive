@@ -23,6 +23,10 @@ public static partial class DiagnosticReport
         report.AppendLine("Review this report before sharing it.");
         report.AppendLine(CultureInfo.InvariantCulture, $"Created (UTC): {DateTimeOffset.UtcNow:O}");
         report.AppendLine(CultureInfo.InvariantCulture, $"ResoDrive: {VersionText(applicationVersion)}");
+        report.AppendLine(CultureInfo.InvariantCulture, $"Source commit: {DiagnosticIdentity.CommitText(applicationVersion)}");
+        report.AppendLine(CultureInfo.InvariantCulture, $".NET runtime: {DiagnosticIdentity.RuntimeText}");
+        report.AppendLine(CultureInfo.InvariantCulture, $"Process architecture: {DiagnosticIdentity.ProcessArchitecture}");
+        report.AppendLine(CultureInfo.InvariantCulture, $"Windows architecture: {DiagnosticIdentity.OperatingSystemArchitecture}");
         report.AppendLine(CultureInfo.InvariantCulture, $"rclone: {VersionText(rcloneVersion)}");
         report.AppendLine(CultureInfo.InvariantCulture,
             $"rclone in host identity: {(status.Succeeded ? VersionText(status.ReportedRcloneVersion) : "Unknown")}");
@@ -62,7 +66,7 @@ public static partial class DiagnosticReport
     }
 
     private static string VersionText(string? value) =>
-        value is not null && VersionPattern().IsMatch(value) ? value : "Unknown";
+        DiagnosticIdentity.VersionText(value);
 
     private static string IdentityCheckText(HostResponse status) =>
         !status.Succeeded ? "Unavailable" : status.RcloneIdentityErrorCode switch
@@ -82,8 +86,6 @@ public static partial class DiagnosticReport
 
     [GeneratedRegex(@"\A(?:off|\d+(?:\.\d+)?(?:[kKmMgGtTpP](?:i?[bB])?|ms|s|m|h|d)?)\z", RegexOptions.CultureInvariant)]
     private static partial Regex NumericValue();
-    [GeneratedRegex(@"\Av?\d+\.\d+(?:\.\d+){0,2}(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?\z", RegexOptions.CultureInvariant)]
-    private static partial Regex VersionPattern();
     [GeneratedRegex(@"\A(\d{4}-\d{2}-\d{2}T[\d:.+Z-]+) level=ERROR event=[a-z._]+ errorId=([A-F0-9]{8})(?: |$)", RegexOptions.CultureInvariant)]
     private static partial Regex ErrorReference();
 }

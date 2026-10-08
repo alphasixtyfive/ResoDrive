@@ -38,12 +38,13 @@ public partial class MainWindow
         if (!HostStatusPresentation.HasUsableMountStatus(response)) return;
         _model.ApplyStatus(response.Mounts, response.MountStatusTruncated);
         _mountUploadStatusUnavailable = response.MountStatusTruncated;
-        if (HostStatusPresentation.HasUsableSyncStatus(response))
+        _syncStatusAvailable = HostStatusPresentation.HasUsableSyncStatus(response);
+        if (_syncStatusAvailable)
         {
             _model.ApplySyncStatus(response.SyncJobs, response.SyncStatusTruncated);
             _hostActiveSyncJobs = Math.Max(0, response.ActiveSyncJobs);
-            _syncStatusAvailable = true;
         }
+        else _model.ApplySyncStatus(null, statusTruncated: true);
         _powerProtectionUnavailable = response.SessionProtectionError is not null;
         _orphanUploadMounts.Clear();
         foreach (var mount in (response.Mounts ?? []).Where(status => status.UploadRecoveryRequired &&
