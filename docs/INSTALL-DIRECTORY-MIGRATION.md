@@ -178,8 +178,25 @@ passed isolated process/recovery smoke. The compiled Settings window was rendere
 and inspected with WPF DPI set to 100%, 150% and 200%, at normal and minimum
 window sizes; these are WPF render checks, not separate physical-monitor tests.
 
-This candidate supersedes the unpublished 0.3.34 draft for release preparation.
-The exact 0.3.34 asset acceptance above remains historical evidence and does not
-certify 0.3.35. Publication still requires the new tagged assets' native acceptance
-and final desktop UAC check. The previous cancelled prompt does not count as a
-pass, and production installation/data remain untouched.
+This candidate supersedes the unpublished 0.3.34 draft. The 0.3.34 asset
+acceptance above remains historical evidence.
+
+[Tagged 0.3.35 acceptance 37784471088](https://github.com/alphasixtyfive/ResoDrive/actions/runs/37784471088)
+and [CI 37784454853](https://github.com/alphasixtyfive/ResoDrive/actions/runs/37784454853)
+passed. Native installation verified version `0.3.35+17419b5`, old-updater
+completion, rollback/retry, owner credentials, data relocation, startup state,
+temporary-helper cleanup, repair/removal and the older Setup-owned transition.
+Both full Setup UI receipts show one Setup window, progress and successful exit;
+the 50 ms monitor observed no separate Windows Installer window.
+
+All eight downloaded draft assets match their GitHub digests and SHA-256
+sidecars. The MSI hash is
+`CE77B0FC9240B3D1AE45567A7B270F7888234255245C3662A4E25C8F2EB1AE66`;
+the installed/portable executable hash is
+`4A03ECAE7DC1DFAA8BD30939BD8CB61E52EC4FC26BD521A1D8DC9A65CC3D5C4B`.
+The downloaded executable passed isolated process/recovery smoke and the final
+desktop UAC preparation check against a copied, unelevated public 0.3.30 host.
+The helper was elevated, exited successfully and preserved test settings/cache.
+The real desktop installation remains 0.3.30 with its executable hash unchanged;
+the owner will update it manually. These checks retain the account/sign-in,
+old-UI-click and older-Windows coverage limits documented above.
