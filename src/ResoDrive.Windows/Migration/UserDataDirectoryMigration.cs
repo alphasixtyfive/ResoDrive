@@ -38,6 +38,9 @@ public sealed class UserDataDirectoryMigration
         SensitiveFilePermissions.RestrictDirectoryToCurrentUser(_stateDirectory);
         RejectLink(Path.Combine(_stateDirectory, "migration.lock"));
         using var lease = await AcquireLeaseAsync(cancellationToken).ConfigureAwait(false);
+        // Another cold-starting instance may have finished while we waited for
+        // the lease, including archiving its journal and removing the marker.
+        if (!Directory.Exists(_source) && !File.Exists(_journalPath)) return;
         var journal = ReadJournal();
         if (journal is { Phase: "Complete" })
         {

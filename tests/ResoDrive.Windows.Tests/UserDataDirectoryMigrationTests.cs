@@ -19,6 +19,42 @@ public sealed class UserDataDirectoryMigrationTests : IDisposable
     }
 
     [Fact]
+    public async Task ConcurrentStartsAcceptTheMigrationCompletedByTheFirstInstance()
+    {
+        Directory.CreateDirectory(Source);
+        await File.WriteAllTextAsync(Path.Combine(Source, "settings.json"), "{\"revision\":17}");
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = new UserDataDirectoryMigration(Source, Destination).MigrateAsync(async _ =>
+        {
+            entered.SetResult();
+            await release.Task;
+        });
+        await entered.Task;
+        var second = new UserDataDirectoryMigration(Source, Destination).MigrateAsync(_ =>
+            throw new InvalidOperationException("The first instance already prepared this migration."));
+        release.SetResult();
+        await Task.WhenAll(first, second);
+        Assert.False(Directory.Exists(Source));
+        Assert.Equal("{\"revision\":17}", await File.ReadAllTextAsync(Path.Combine(Destination, "settings.json")));
+    }
+
+    [Fact]
+    public async Task CancellationAfterPreparationKeepsTheSourceAvailableForRetry()
+    {
+        Directory.CreateDirectory(Source);
+        await File.WriteAllTextAsync(Path.Combine(Source, "settings.json"), "{\"revision\":17}");
+        using var cancellation = new CancellationTokenSource();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => new UserDataDirectoryMigration(Source, Destination)
+            .MigrateAsync(_ => { cancellation.Cancel(); return Task.CompletedTask; }, cancellation.Token));
+        Assert.False(Directory.Exists(Destination));
+        Assert.False(File.Exists(Journal));
+        await new UserDataDirectoryMigration(Source, Destination).MigrateAsync(_ => Task.CompletedTask);
+        Assert.False(Directory.Exists(Source));
+        Assert.Equal("{\"revision\":17}", await File.ReadAllTextAsync(Path.Combine(Destination, "settings.json")));
+    }
+
+    [Fact]
     public async Task Migration_PreservesCredentialsCacheManagedCopiesAndRewritesOnlyOwnedPaths()
     {
         Directory.CreateDirectory(Path.Combine(Source, "cache"));
