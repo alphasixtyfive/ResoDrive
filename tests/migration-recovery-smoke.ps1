@@ -41,6 +41,8 @@ try {
     # Reproduce .35's post-handoff state: current program path, old data root,
     # and a running app/host. The baseline's existing bridge flag defers its move.
     $env:RESODRIVE_LEGACY_HANDOFF = '1'
+    $completionPath = Join-Path $local 'ResoDriveMigration\completion.json'
+    [IO.File]::WriteAllText($completionPath, '{"Succeeded":false,"Message":"Prior migration did not finish."}')
     $parent = Start-Process $installedApp -WindowStyle Hidden -PassThru
     Start-Sleep -Seconds 5
     if ($parent.HasExited -or -not (Test-Path $oldData) -or (Test-Path $newData)) { throw 'The partial-migration baseline was not reproduced.' }
@@ -57,6 +59,8 @@ try {
     $deadline = [DateTime]::UtcNow.AddSeconds(90)
     while ((Test-Path $oldData) -and -not $updated.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
     if ((Test-Path $oldData) -or $updated.HasExited) { throw 'The corrected app did not finish the pending default-root move.' }
+    $completion = Get-Content $completionPath -Raw | ConvertFrom-Json
+    if (-not $completion.Succeeded) { throw 'A successful retry left the previous migration failure receipt behind.' }
     foreach ($name in $hashes.Keys) {
         if ((Get-FileHash (Join-Path $newData $name)).Hash -ine $hashes[$name]) { throw "Recovery changed preserved file: $name" }
     }

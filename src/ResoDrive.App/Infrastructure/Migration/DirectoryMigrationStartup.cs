@@ -47,6 +47,7 @@ internal static partial class DirectoryMigrationStartup
         MigrateAsync(CancellationToken.None).GetAwaiter().GetResult();
         if (!string.IsNullOrWhiteSpace(configured))
             Environment.SetEnvironmentVariable("RDRIVE_DATA_DIR", ApplicationPaths.DefaultRoot);
+        WriteResult(true, "The user-data directory has migrated.");
     }
 
     internal static async Task FinishHandoffAsync(CancellationToken token)
