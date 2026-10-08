@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.42] - 2026-10-09 (release candidate)
+## [0.3.42] - 2026-10-09
 
 - Check each installation directory once, including paths supplied by Windows Installer with a trailing dot.
 - Skip waiting for an absent background host while retaining process, account and cached-upload safety checks.
@@ -14,7 +14,7 @@
 
 - Diagnose a deadline-sensitive cache recovery test under hosted load. Keep unknown-cache protection and the production inspection deadline unchanged; isolate the real filesystem fixtures and improve their failure diagnostics in the next candidate.
 
-## [0.3.39] - 2026-10-08
+## [0.3.39] - 2026-10-08 (withdrawn download)
 
 - Complete interrupted upgrades while preserving accounts, settings, cached files and local copies. Wait for migration before opening drives or starting sync jobs.
 - Use one branded Setup window for future in-app updates. Keep update refresh available and resume interrupted downloads.

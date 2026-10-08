@@ -381,3 +381,59 @@ result is historical evidence, not acceptance of the new helper. This owner
 instruction overrides the fresh desktop participation/publication ordering in
 the release procedure; all automated native gates still apply to the exact new
 tagged assets. No UAC policy or upload/account protection was bypassed.
+
+### Exact 0.3.42 native acceptance and publication (2026-10-09)
+
+Annotated tag `v0.3.42` points to
+`08b19ea8076c3d2e9c7a5bcce6a5a576c52e8f99`. Both exact-source
+[CI 37858790934](https://github.com/alphasixtyfive/ResoDrive/actions/runs/37858790934)
+and [Release 37858790689](https://github.com/alphasixtyfive/ResoDrive/actions/runs/37858790689)
+passed their complete build and native acceptance checks without reruns. The
+tagged run passed 1,177 tests with three optional skips and all 343 application
+tests with one available CPU. The local Windows suite also passed with one CPU:
+648 passed and three optional skips.
+
+The exact tagged downloads were verified before publication. Stable and
+versioned Setup are identical; all checksum sidecars name and match their files.
+The portable executable reports ProductVersion
+`0.3.42+08b19ea8076c3d2e9c7a5bcce6a5a576c52e8f99` and passed the isolated
+populated-window/process-recovery check on this desktop.
+
+| Accepted package | SHA-256 |
+| --- | --- |
+| Setup (stable and versioned) | `43D66F69C6AB4489472589529B87F71BD8D086CD52CCC808F0B392DCA691E546` |
+| MSI | `D561A4F5A00AB6077DDE985979F7B9C0FB2F86058C332FF04EC2F2F3E12BD293` |
+| Portable ZIP | `B1EC76A7888D6570DA3990A6A2980AA4D4D8C2AC57BFF635D02E48EE0FC285A5` |
+| Installed/portable executable | `456E58FFA9352055A4605FD80C3D8E997F54816446963F66CBEE903C4ACD6B2B` |
+
+Native receipts confirm fresh install, direct upgrade from public 0.3.39, older
+Setup-owned migration, repair/removal and preserved user data, with one removable
+MSI entry and no retained Setup entry. Different-account preparation blocked an
+active 0.3.39 host, then succeeded after its owner shut it down, preserving
+settings/cache. The actual frozen 0.3.30 updater passed default data relocation,
+native rollback/retry, owner-protected credential preservation, disabled startup,
+signed-out user migration and old-installation cleanup. Its enabled startup drive
+did not start a host before migration. Recovery from the exact 0.3.35 baseline
+authenticated its running host and preserved settings, cache and credentials
+byte for byte while completing the pending move.
+
+The current helper's real passive Setup handoff exited zero, acknowledged its
+reopened window and preserved its custom data root. All three installed
+executable receipts match the accepted portable hash and full source version;
+their MSI/Setup hashes also match the accepted packages. Four native UI receipts
+each observed one branded Setup window, progress and successful exit, with no
+separate Windows Installer window. Sampling was every 50 ms and cannot exclude
+shorter transient windows. New preparation took approximately zero to one second;
+frozen older removal actions still took 15 to 31 seconds. Those old binaries cannot
+receive the optimization retroactively. Fresh desktop UAC and a production
+0.3.42 upgrade were not performed, as recorded in the unattended scope above.
+
+[ResoDrive 0.3.42](https://github.com/alphasixtyfive/ResoDrive/releases/tag/v0.3.42)
+was published as one final stable release using all eight accepted files and the
+tag's plain-language notes. A fresh download of all eight public files matched
+the accepted bytes. GitHub's anonymous latest redirect initially still returned
+0.3.39 while its release metadata already marked 0.3.42 latest; after propagation,
+the actual application update service discovered 0.3.42 from 0.3.39 with the
+correct Setup/checksum links. Only then was the 0.3.39 download withdrawn at the
+owner's request. No drafts remain; immutable 0.3.39/0.3.42 tags and other published
+releases were retained. The owner's production installation remains untouched.
