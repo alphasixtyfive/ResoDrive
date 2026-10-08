@@ -7,7 +7,9 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  # GitHub hides draft releases from tokens without repository push access.
+  # This job only reads their installers and never publishes or replaces assets.
+  contents: write
 
 jobs:
   installer-ui:
