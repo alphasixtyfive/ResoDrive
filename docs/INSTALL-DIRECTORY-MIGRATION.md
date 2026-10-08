@@ -111,7 +111,19 @@ minimum sizes with 100%, 150% and 200% rendering. These use disposable fictional
 data; they do not establish physical-monitor or production-upgrade acceptance.
 
 [Historical acceptance records](INSTALL-DIRECTORY-ACCEPTANCE.md) retain the exact
-0.3.36 source, package hashes, native results and cancelled desktop UAC check.
+source, package hashes, native results and cancelled desktop UAC check.
+The exact 0.3.39 tagged build and source CI both passed. Native checks covered
+installation/repair/removal, different-account preparation, the actual older
+updater's directory migration and rollback/retry, incomplete 0.3.35 recovery,
+startup ordering, credential preservation and the current branded Setup updater
+with a custom data root. Its window monitor observed branded Setup without a
+separate Windows Installer window, subject to its 50 ms sampling interval.
+All eight tagged downloads and checksum sidecars were verified; installed
+executables in the migration, recovery and updater receipts match the downloaded
+portable executable. That exact executable also passed isolated desktop process
+smoke. These checks used disposable data and do not establish desktop UAC or the
+owner's production recovery.
+
 The owner still performs the production recovery manually. Publish only after
 exact-package UAC acceptance and that recovery are confirmed, following
 [the release procedure](RELEASING.md).

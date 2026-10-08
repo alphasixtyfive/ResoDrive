@@ -213,3 +213,58 @@ the failure locally. Fixing the test scene's size and origin retains the pixel,
 container recycling and input assertions without changing product rendering.
 
 The 0.3.38 tag remains immutable and unaccepted. No release or draft was created.
+
+### Exact 0.3.39 package verification
+
+[CI 37842307801](https://github.com/alphasixtyfive/ResoDrive/actions/runs/37842307801)
+and [tagged build 37842311460](https://github.com/alphasixtyfive/ResoDrive/actions/runs/37842311460)
+passed against immutable tag `v0.3.39`, source
+`ef42566f0293dfb2eb71d45418b3423411f36143`. The full package build passed
+1,157 tests with three optional integrations skipped and no warnings or errors.
+All 331 application tests also passed with one available CPU.
+
+Native receipts confirm fresh installation, repair/removal, direct MSI upgrade,
+the older Setup-owned transition and one removable MSI with no retained bundle
+entry. Different-account preparation, actual 0.3.30 updater migration, deliberate
+upgrade failure with rollback/retry, enabled-drive startup ordering, disabled
+startup preservation, signed-out-user migration and old-directory cleanup passed.
+The new host did not start before migration completed, and owner credential
+bytes were preserved.
+
+The signed-out-account fixture invokes migration under the disposable account's
+identity. It verifies that entry point and credential ownership, rather than an
+actual interactive sign-in triggering the scheduled task.
+
+The incomplete 0.3.35 recovery used the exact retained MSI from run `37784471088`
+with SHA-256 `CE77B0FC9240B3D1AE45567A7B270F7888234255245C3662A4E25C8F2EB1AE66`.
+Its prior host was authenticated before Setup preparation. Recovery moved the
+pending default data, replaced the previous failure receipt, preserved settings,
+cache and credential bytes, and acknowledged the reopened application window.
+The actual current updater also passed with a custom data root. Fresh Setup,
+the legacy Setup transition, manual recovery and the current updater's window
+receipts observed branded Setup without a separate Windows Installer window.
+Their 50 ms sampling cannot exclude a shorter transient window.
+
+The eight files from artifact `resodrive-v0.3.39` were downloaded and all checksum
+sidecars verified. Stable and versioned Setup are byte-identical. SHA-256 values:
+
+| Package | SHA-256 |
+| --- | --- |
+| Setup (both filenames) | `EAEB5D909D140E32CE7FC4B61916C893C9B1E96ACBAEE7189555F452EBF15FBD` |
+| MSI | `1FF14DFC1B0D23AAC30A69A866FD96C6CB3497C71CA75D65AE258C4608B6253B` |
+| ZIP | `A20953CB6D975BCE3A3D3D4A693BBAFA5F274A80AF86745257E95CFBA20D2C3A` |
+| Portable executable | `253AD760BF2CE7A326F526F587279FA5229FB3D8D735E93BB3BECEC475A4E18E` |
+
+ProductVersion is `0.3.39+ef42566f0293dfb2eb71d45418b3423411f36143`.
+Installed executable hashes in directory-migration, incomplete-recovery and
+branded-updater receipts match the downloaded portable executable. The downloaded
+executable also passed desktop process smoke with isolated data: populated drive
+rows, simultaneous startup, tray/show acknowledgement, host recovery and relaunch.
+Thirty compiled WPF captures inspected during the code review covered the main
+window, Settings and recovery messages at 100%, 150% and 200% rendering with
+fictional data; these are not separate physical-monitor checks.
+
+No desktop elevation attempt was repeated after the cancelled 0.3.36 check.
+Exact-package desktop UAC acceptance and the owner's manual production recovery
+remain pending. The production 0.3.35 app and data were not changed. No 0.3.39
+release or draft was created; all 19 published releases remain, with 0.3.30 latest.
