@@ -175,7 +175,13 @@ public sealed class DriveDragPreviewTests
         // Finish that dispatcher turn before taking a snapshot or testing input.
         Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.Background);
         VisualTreeHelper.SetRootDpi(decorator, new DpiScale(scale, scale));
+        // Reproduce the larger native host's layout allocation explicitly. The
+        // logical scene must stay at the origin even when its HWND has extra room.
+        decorator.Measure(new WpfSize(600, 400));
+        decorator.Arrange(new Rect(0, 0, 600, 400));
         decorator.UpdateLayout();
+        Assert.Equal(new WpfSize(300, 120), decorator.RenderSize);
+        Assert.Equal(new Vector(), VisualTreeHelper.GetOffset(list));
         Assert.True(list.IsVisible, $"The hosted list must be visible before snapshot and input hit testing at {scale:P0} DPI.");
         var source = Assert.IsType<ListBoxItem>(list.ItemContainerGenerator.ContainerFromIndex(0));
         Assert.Equal(scale, VisualTreeHelper.GetDpi(source).DpiScaleX);
@@ -203,7 +209,7 @@ public sealed class DriveDragPreviewTests
         decorator.UpdateLayout();
         var pixel = Pixel(Render(preview, scale), (int)(point.X * scale), (int)(point.Y * scale));
         Assert.True(pixel[2] > 0,
-            $"The recycled row's ghost must retain red pixels at {scale:P0} DPI; BGRA={string.Join(',', pixel)}, point={point}, viewport={viewport}.");
+            $"The recycled row's ghost must retain red pixels at {scale:P0} DPI; BGRA={string.Join(',', pixel)}, point={point}, viewport={viewport}, previewOffset={VisualTreeHelper.GetOffset(preview)}, listOffset={VisualTreeHelper.GetOffset(list)}, sourceOffset={VisualTreeHelper.GetOffset(source)}.");
         Assert.Equal(0, pixel[0]);
         var target = DriveOrderViewport.FindDropTarget(list, point);
         Assert.NotNull(target);
@@ -285,7 +291,15 @@ public sealed class DriveDragPreviewTests
         };
         VirtualizingPanel.SetIsVirtualizing(list, true);
         VirtualizingPanel.SetVirtualizationMode(list, VirtualizationMode.Recycling);
-        var decorator = new AdornerDecorator { Child = list };
+        // Native source layout uses physical HWND dimensions converted to DIPs.
+        // Pin the logical scene so a larger host cannot center the list and move
+        // its adorner drawing away from the owner-local pixel coordinates.
+        var decorator = new AdornerDecorator
+        {
+            Child = list, Width = 300, Height = 120,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top,
+        };
         decorator.Measure(new WpfSize(300, 120));
         decorator.Arrange(new Rect(0, 0, 300, 120));
         decorator.UpdateLayout();
