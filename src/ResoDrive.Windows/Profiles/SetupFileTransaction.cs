@@ -105,7 +105,15 @@ public sealed class SetupFileTransaction : IDisposable
 
         if (_state is TransactionState.Applied or TransactionState.RecoveryRequired)
         {
-            RestoreAppliedEntries();
+            try
+            {
+                RestoreAppliedEntries();
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or AggregateException)
+            {
+                _state = TransactionState.RecoveryRequired;
+                throw;
+            }
         }
 
         _state = TransactionState.RolledBack;
@@ -131,13 +139,25 @@ public sealed class SetupFileTransaction : IDisposable
 
     private void RestoreAppliedEntries()
     {
+        var applied = _entries.AsEnumerable().Reverse().Where(entry => entry.Applied).ToArray();
+        // Setup files can form an encrypted config/password pair. If an original
+        // backup is missing, keep the entire current set and remaining backups
+        // intact rather than knowingly creating a mixture of old and new files.
+        var missingBackups = applied.Where(entry => entry.BackupPath is not null && !File.Exists(entry.BackupPath))
+            .Select(_ => new IOException("A setup rollback backup is missing. The current files were preserved for manual recovery."))
+            .ToArray();
+        if (missingBackups.Length != 0)
+            throw new AggregateException("Setup files could not be fully restored.", missingBackups);
+
         List<Exception>? failures = null;
-        foreach (var entry in _entries.AsEnumerable().Reverse().Where(entry => entry.Applied))
+        foreach (var entry in applied)
         {
             try
             {
-                if (entry.BackupPath is not null && File.Exists(entry.BackupPath))
+                if (entry.BackupPath is not null)
                 {
+                    if (!File.Exists(entry.BackupPath))
+                        throw new IOException("A setup rollback backup is missing. The current file was preserved for manual recovery.");
                     if (File.Exists(entry.DestinationPath))
                     {
                         File.Replace(entry.BackupPath, entry.DestinationPath, null, ignoreMetadataErrors: true);

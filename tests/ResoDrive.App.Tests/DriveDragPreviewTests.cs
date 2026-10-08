@@ -164,7 +164,9 @@ public sealed class DriveDragPreviewTests
         // This host stays hidden and offscreen, without activating a desktop window.
         using var host = new HwndSource(new HwndSourceParameters("Drive drag recycling regression")
         {
-            Width = 300, Height = 120, PositionX = -10_000, PositionY = -10_000, WindowStyle = 0,
+            // HwndSource dimensions are physical pixels; the scene uses logical WPF units.
+            // Match the other native fixture's room for 150% and 200% desktop scaling.
+            Width = 600, Height = 400, PositionX = -10_000, PositionY = -10_000, WindowStyle = 0,
         }) { RootVisual = decorator };
         decorator.UpdateLayout();
         Assert.True(list.IsVisible);

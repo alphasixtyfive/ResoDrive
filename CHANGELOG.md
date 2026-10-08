@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.37] - 2026-10-08 (release candidate)
+
+- Complete interrupted upgrades while preserving accounts, settings, cached files and local copies. Wait for migration before opening drives or starting sync jobs.
+- Use one branded Setup window for future in-app updates. Keep update refresh available and resume interrupted downloads.
+- Keep repeated offline warnings and failed scheduled retries quiet until recovery is confirmed.
+- Apply reconnect policy changes to waiting retries and preserve pending cached uploads.
+- Preserve newer settings when saving an open drive or sync editor. Explain failed startup or background settings recovery.
+- Retain the working settings backup during repair and preserve remaining setup files if rollback cannot finish.
+- Bound command output draining by the execution timeout and finish owned exit observers before releasing background resources.
+- Organize window behavior and presentation into smaller files, reuse immutable status brushes and document ownership and recovery rules.
+
 ## [0.3.34] - 2026-10-08
 
 - Move existing installations to the current ResoDrive folders while preserving accounts, settings, cached files and local copies.

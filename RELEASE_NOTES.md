@@ -7,6 +7,9 @@ This update fixes an incomplete move of existing app data after an upgrade.
 - The refresh button stays available when an update is shown, so you can check for a newer release.
 - A drive that stays offline reports the problem once. Brief reconnects and repeated retries no longer fill the log or repeat the same warning.
 - Failed scheduled syncs stay quiet until the job has recovered. Transfer progress and new problems still appear as they happen.
+- Changes to reconnect settings take effect even while a drive is waiting to retry.
+- Saving drive or sync settings preserves other changes made while the editor was open. Failed saves explain when startup or background settings need attention.
+- Settings recovery keeps the last working backup. Interrupted setup preserves the remaining files when automatic recovery cannot finish.
 - The Transfers window refreshes more efficiently and shows when sync status is unavailable.
 - Diagnostic reports include the app version and more useful details when background work stops unexpectedly.
 

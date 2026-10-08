@@ -30,10 +30,12 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
     private readonly ConcurrentDictionary<MountId, MountSnapshot> _snapshots = new();
     private readonly ConcurrentDictionary<MountId, int> _restartAttempts = new();
     private readonly ConcurrentDictionary<MountId, SemaphoreSlim> _operationGates = new();
+    private readonly ConcurrentDictionary<Task, byte> _exitObservers = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly SemaphoreSlim _launchGate = new(1, 1);
     private readonly CancellationTokenSource _lifetime = new();
-    private readonly ConcurrentDictionary<MountId, byte> _pausedRecovery = new();
+    private enum RecoveryPause { Disconnected, ReconnectPolicy }
+    private readonly ConcurrentDictionary<MountId, RecoveryPause> _pausedRecovery = new();
     private bool _recovered;
 
     public RcloneMountCoordinator(string rclonePath, string configPath, ApplicationPaths paths, IMountTargetInventory targetInventory)
@@ -116,7 +118,12 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
                     _definitions.TryRemove(old.Key, out _);
                     _snapshots.TryRemove(old.Key, out _);
                     _restartAttempts.TryRemove(old.Key, out _);
+                    _pausedRecovery.TryRemove(old.Key, out _);
                 }
+                else if (next is not null && old.Value.Restart != next.Restart && next.Enabled && next.Restart.Enabled &&
+                    _pausedRecovery.TryGetValue(old.Key, out var pause) && pause == RecoveryPause.ReconnectPolicy &&
+                    (!_restartAttempts.TryGetValue(old.Key, out var attempt) || ShouldRestart(next.Restart, attempt)))
+                    _pausedRecovery.TryRemove(old.Key, out _);
             }
             foreach (var definition in definitions)
             {
@@ -238,14 +245,18 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
         }
         finally
         {
-            _gate.Release();
-            _gate.Dispose();
-            _launchGate.Dispose();
-            foreach (var operationGate in _operationGates.Values)
-                operationGate.Dispose();
-            _ownership.Dispose();
-            _recovery.Dispose();
-            _lifetime.Dispose();
+            try { await DrainExitObserversAsync().ConfigureAwait(false); }
+            finally
+            {
+                _gate.Release();
+                _gate.Dispose();
+                _launchGate.Dispose();
+                foreach (var operationGate in _operationGates.Values)
+                    operationGate.Dispose();
+                _ownership.Dispose();
+                _recovery.Dispose();
+                _lifetime.Dispose();
+            }
         }
     }
 
@@ -277,6 +288,8 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
             {
                 await CompleteStoppedSessionAsync(active).ConfigureAwait(false);
             }
+            if (restarting && !CanRestart(mountId, definition))
+                return CancelPendingRestart(definition);
             if (!restarting)
             {
                 _restartAttempts.TryRemove(mountId, out _);
@@ -320,6 +333,10 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
             }
 
             await _recovery.RecordAsync(definition, _recovery.Find(mountId)?.MetadataPath, cancellationToken, configFingerprint).ConfigureAwait(false);
+            // Reconnect settings can change while inventory and journal I/O await.
+            // Check the current policy again immediately before launching rclone.
+            if (restarting && (!_definitions.TryGetValue(mountId, out var latest) || !CanRestart(mountId, latest)))
+                return CancelPendingRestart(definition);
             Publish(Snapshot(definition, MountLifecycle.Starting, "Starting…") with { UploadStatusStale = true, UploadStatusChecking = true });
             var session = StartSession(definition);
             var process = session.Process;
@@ -329,7 +346,7 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
             await _ownership.UpsertAsync(Owned(session), CancellationToken.None).ConfigureAwait(false);
             if (session.Control is { } control)
                 await _controls.SaveAsync(Owned(session), control.Address, control.User, control.Password, CancellationToken.None).ConfigureAwait(false);
-            _ = ObserveExitAsync(session);
+            TrackExitObserver(ObserveExitAsync(session));
             _launchGate.Release();
             launchReserved = false;
             if (!await ReadyAsync(session, cancellationToken).ConfigureAwait(false))
@@ -383,7 +400,7 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
                 {
                     if (!allowPendingUploads)
                         return Result.Failure("mount.upload_recovery_pending", "The cache has pending or unverified work. Restore the original drive and finish its uploads before disconnecting.", true);
-                    _pausedRecovery[id] = 0;
+                    _pausedRecovery[id] = RecoveryPause.Disconnected;
                     PublishRecoveryPaused(definition);
                     return Result.Success();
                 }
@@ -446,7 +463,7 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
             }
             else
             {
-                if (allowPendingUploads) _pausedRecovery[id] = 0;
+                if (allowPendingUploads) _pausedRecovery[id] = RecoveryPause.Disconnected;
                 PublishRecoveryPaused(definition);
             }
         }
@@ -491,10 +508,12 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
             if (!_sessions.TryGetValue(session.Definition.Id, out var currentSession) ||
                 !ReferenceEquals(currentSession, session)) return;
             await CompleteStoppedSessionAsync(session).ConfigureAwait(false);
-            var policy = session.Definition.Restart;
+            if (!_definitions.TryGetValue(session.Definition.Id, out var definition)) return;
+            var policy = definition.Restart;
             attempt = _restartAttempts.AddOrUpdate(session.Definition.Id, 1, static (_, count) => count + 1);
             if (!ShouldRestart(policy, attempt))
             {
+                PauseRecoveryForPolicy(definition);
                 Fail(session.Definition, "mount.process_exited", $"rclone stopped unexpectedly (exit code {code}).");
                 return;
             }
@@ -511,6 +530,50 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
         catch (OperationCanceledException)
         {
         }
+    }
+
+    private bool CanRestart(MountId id, MountDefinition definition) =>
+        !_lifetime.IsCancellationRequested && definition.Enabled &&
+        _restartAttempts.TryGetValue(id, out var attempt) && ShouldRestart(definition.Restart, attempt);
+
+    private OperationResult CancelPendingRestart(MountDefinition definition)
+    {
+        PauseRecoveryForPolicy(definition);
+        if (_recovery.Find(definition.Id) is not null) PublishRecoveryPaused(definition);
+        else Publish(Snapshot(definition, MountLifecycle.Stopped, "Not mounted"));
+        return Result.Success();
+    }
+
+    private void PauseRecoveryForPolicy(MountDefinition definition)
+    {
+        if (_recovery.Find(definition.Id) is not null)
+            _pausedRecovery.TryAdd(definition.Id, RecoveryPause.ReconnectPolicy);
+    }
+
+    internal void TrackExitObserver(Task observer)
+    {
+        _exitObservers[observer] = 0;
+        _ = observer.ContinueWith((completed, state) =>
+        {
+            // Keep faults for disposal to observe after every observer has drained.
+            if (!completed.IsFaulted)
+                ((ConcurrentDictionary<Task, byte>)state!).TryRemove(completed, out _);
+        }, _exitObservers, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
+
+    private async Task DrainExitObserversAsync()
+    {
+        Exception? failure = null;
+        while (!_exitObservers.IsEmpty)
+        {
+            var observers = _exitObservers.Keys.ToArray();
+            try { await Task.WhenAll(observers).ConfigureAwait(false); }
+#pragma warning disable CA1031 // Drain every observer before rethrowing the first failure and disposing shared gates.
+            catch (Exception exception) { failure ??= exception; }
+#pragma warning restore CA1031
+            foreach (var observer in observers) _exitObservers.TryRemove(observer, out _);
+        }
+        if (failure is not null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
     }
 
     internal static bool ShouldRestart(RestartPolicy policy, int attempt)

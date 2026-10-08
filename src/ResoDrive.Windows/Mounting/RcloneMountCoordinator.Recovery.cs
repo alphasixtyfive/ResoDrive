@@ -156,7 +156,7 @@ public sealed partial class RcloneMountCoordinator
                 _unverifiedOwnedWork.TryRemove(owned.MountId, out _);
                 Publish(Snapshot(definition, MountLifecycle.Degraded, "Recovered drive · Checking readiness") with
                     { UploadRecoveryRequired = true, UploadStatusStale = true });
-                _ = ObserveExitAsync(session);
+                TrackExitObserver(ObserveExitAsync(session));
             }
             finally { operationGate.Release(); }
         }
@@ -174,6 +174,10 @@ public sealed partial class RcloneMountCoordinator
             {
                 if (_sessions.ContainsKey(id) || _unverifiedOwnedWork.ContainsKey(entry.MountId) ||
                     _recovery.Find(id) is not { } current) continue;
+                // The exit observer owns this delayed reconnect and its backoff.
+                // Reconciliation must not launch a second recovery attempt early.
+                if (_snapshots.TryGetValue(id, out var pending) && pending.Lifecycle == MountLifecycle.WaitingToRestart)
+                    continue;
                 if (await RecoveryCacheIsCleanAsync(current, token).ConfigureAwait(false))
                 {
                     await _recovery.RemoveAsync(id, token).ConfigureAwait(false);

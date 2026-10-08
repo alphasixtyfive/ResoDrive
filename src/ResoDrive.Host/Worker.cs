@@ -364,7 +364,7 @@ public sealed partial class Worker : BackgroundService
                     }
                     return cancelled.Succeeded || cancelled.Error?.Code == "sync.not_running" ? Status() : Response(cancelled);
                 }
-                return QueueSync(mountId, syncId, false, token) ? Status()
+                return QueueSync(mountId, syncId, token) ? Status()
                     : new(false, "host.operation_in_progress", "This sync job is already queued or running.");
             }
             if (command == "stop")
@@ -609,7 +609,7 @@ public sealed partial class Worker : BackgroundService
                     {
                         continue;
                     }
-                    QueueSync(item.Mount.Id, item.Job.Id, true, token);
+                    QueueSync(item.Mount.Id, item.Job.Id, token);
                 }
                 _firstSchedulePass = false;
             }
@@ -624,7 +624,7 @@ public sealed partial class Worker : BackgroundService
         } while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false));
     }
 
-    private bool QueueSync(MountId mountId, SyncJobId syncId, bool scheduled, CancellationToken token)
+    private bool QueueSync(MountId mountId, SyncJobId syncId, CancellationToken token)
     {
         var coordinator = _syncs;
         return coordinator is not null && Queue(SyncKey(syncId), async operationToken =>
@@ -635,10 +635,6 @@ public sealed partial class Worker : BackgroundService
             // otherwise create an unbounded error loop on unattended machines.
             _lastRuns[syncId] = DateTimeOffset.UtcNow;
             await SaveScheduleStateAsync(CancellationToken.None).ConfigureAwait(false);
-            if (scheduled && !result.Succeeded)
-            {
-                LogOperationFailure(_logger, SyncKey(syncId), result.Error?.Code, result.Error?.Message);
-            }
             return result;
         }, token, () => coordinator.MarkQueued(mountId, syncId));
     }
