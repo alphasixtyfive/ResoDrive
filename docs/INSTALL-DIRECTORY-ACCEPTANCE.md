@@ -324,3 +324,27 @@ preparation and post-install migration also probed the absent host. Candidate
 absent-mutex pipe wait; all existing account, process, upload and mutex-protected
 fallback checks remain. Frozen older packages retain their own preparation code
 and cannot receive this optimization retroactively.
+
+### Unpublished 0.3.40 verification and recovery-test diagnosis
+
+Candidate source `85ceb42749adc161f2e7c79a6b6cd779420d6494` passed the local
+full build, 1,165 tests with three optional skips, all 331 application tests with
+one CPU, and isolated process smoke. Its tagged build passed the same test suite,
+but [CI 37856028354](https://github.com/alphasixtyfive/ResoDrive/actions/runs/37856028354)
+reported `Failed` instead of `Stopped` in the clean interrupted-drive fixture.
+No 0.3.40 release was published and the tag remains immutable.
+
+A disposable standalone reproduction completed the clean inspection in roughly
+32 ms normally. Holding both worker threads for 4.2 seconds exhausted the real
+three-second deadline before the queued inspection ran. The coordinator then
+preserved the recovery journal and attempted protected cache recovery; the
+fixture's deliberately missing rclone produced the observed `Failed` lifecycle.
+The CI log's five-second duration is consistent with that mechanism, but its
+limited diagnostics cannot exclude a transient filesystem error.
+
+Candidate 0.3.41 keeps the production deadline and unknown-cache behavior
+unchanged. It isolates this class of real filesystem/deadline tests from competing
+parallel workload, while retaining clean/dirty recovery assertions and adding
+the actual status to failures. The new source still requires its own complete
+build and native package acceptance; a passing 0.3.40 tagged test run cannot
+substitute for the failed CI result.

@@ -1,9 +1,13 @@
 # Changelog
 
-## [0.3.40] - 2026-10-08 (release candidate)
+## [0.3.41] - 2026-10-08 (release candidate)
 
 - Check each installation directory once, including paths supplied by Windows Installer with a trailing dot.
 - Skip waiting for an absent background host while retaining process, account and cached-upload safety checks.
+
+## [0.3.40] - 2026-10-08 (unpublished verification build)
+
+- Diagnose a deadline-sensitive cache recovery test under hosted load. Keep unknown-cache protection and the production inspection deadline unchanged; isolate the real filesystem fixtures and improve their failure diagnostics in the next candidate.
 
 ## [0.3.39] - 2026-10-08
 

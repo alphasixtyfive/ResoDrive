@@ -7,6 +7,15 @@ using ResoDrive.Windows;
 
 namespace ResoDrive.Windows.Tests;
 
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class MountRecoveryInspectionGroup
+{
+    // Real metadata inspection has a bounded wall-clock deadline. Keep its
+    // integration fixtures apart from tests that saturate this process's pool.
+    public const string Name = "Bounded mount recovery inspection";
+}
+
+[Collection(MountRecoveryInspectionGroup.Name)]
 public sealed class MountUploadRecoveryTests : IDisposable
 {
     private readonly ApplicationPaths _paths = new(Path.Combine(Path.GetTempPath(), "rdrive-recovery-tests", Guid.NewGuid().ToString("N")));
@@ -96,7 +105,9 @@ public sealed class MountUploadRecoveryTests : IDisposable
         await SeedAsync(definition, dirty: false);
         await using var coordinator = Coordinator();
         Assert.True((await coordinator.ReconcileAsync([definition])).Succeeded);
-        Assert.Equal(MountLifecycle.Stopped, Assert.Single(coordinator.GetSnapshots()).Lifecycle);
+        var snapshot = Assert.Single(coordinator.GetSnapshots());
+        Assert.True(snapshot.Lifecycle == MountLifecycle.Stopped,
+            $"Expected a stopped clean drive, got {snapshot.Lifecycle}: {snapshot.StatusText}; recovery required={snapshot.UploadRecoveryRequired}.");
         Assert.True((await coordinator.CheckPendingUploadsAsync()).Succeeded);
         using var reloaded = new MountRecoveryStore(_paths);
         Assert.Empty(reloaded.GetEntries());
