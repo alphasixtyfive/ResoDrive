@@ -57,15 +57,26 @@ try {
     if ((Get-FileHash $installedApp).Hash -ne (Get-FileHash $candidate).Hash) { throw 'Recovery executable mismatch.' }
     $updated = Start-Process $installedApp -ArgumentList '--show' -WindowStyle Hidden -PassThru
     $deadline = [DateTime]::UtcNow.AddSeconds(90)
-    while ((Test-Path $oldData) -and -not $updated.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
-    if ((Test-Path $oldData) -or $updated.HasExited) { throw 'The corrected app did not finish the pending default-root move.' }
-    $completion = Get-Content $completionPath -Raw | ConvertFrom-Json
-    if (-not $completion.Succeeded) { throw 'A successful retry left the previous migration failure receipt behind.' }
+    $completed = $false
+    while (-not $updated.HasExited -and [DateTime]::UtcNow -lt $deadline) {
+        try { $completed = -not (Test-Path $oldData) -and (Get-Content $completionPath -Raw | ConvertFrom-Json).Succeeded }
+        catch { $completed = $false } # Receipt publication can race this read.
+        if ($completed) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    if (-not $completed -or $updated.HasExited) { throw 'The corrected app did not finish the move and replace the previous failure receipt.' }
+    $show = Start-Process $installedApp -ArgumentList '--show' -WindowStyle Hidden -PassThru
+    try {
+        if (-not $show.WaitForExit(120000) -or $show.ExitCode -ne 0 -or $updated.HasExited) {
+            throw 'The recovered app did not acknowledge its actual ready window.'
+        }
+    } finally { $show.Dispose() }
     foreach ($name in $hashes.Keys) {
         if ((Get-FileHash (Join-Path $newData $name)).Hash -ine $hashes[$name]) { throw "Recovery changed preserved file: $name" }
     }
     [ordered]@{ PriorVersion = '0.3.35'; InstalledVersion = (Get-Item $installedApp).VersionInfo.ProductVersion;
-        PendingDefaultDataMoved = $true; SettingsCacheAndCredentialBytesPreserved = $true;
+        PendingDefaultDataMoved = $true; ReadyWindowAcknowledged = $true; PreviousFailureReplaced = $true;
+        SettingsCacheAndCredentialBytesPreserved = $true;
         SetupSha256 = (Get-FileHash $setup).Hash; InstalledExeSha256 = (Get-FileHash $installedApp).Hash } |
         ConvertTo-Json | Set-Content (Join-Path $evidence 'result.json')
     $remove = Start-Process msiexec.exe -ArgumentList @('/x', ('"' + (Join-Path (Split-Path $setup) ((Split-Path $setup -Leaf) -replace '-setup.exe$', '.msi')) + '"'),
