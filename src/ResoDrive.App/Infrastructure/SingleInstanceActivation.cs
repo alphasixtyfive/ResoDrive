@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.IO;
 using System.IO.Pipes;
+using ResoDrive.Windows;
 
 namespace ResoDrive.App;
 
@@ -108,12 +109,7 @@ internal sealed class SingleInstanceActivation : IDisposable
             NamedPipeServerStream? pipe = null;
             try
             {
-                pipe = new NamedPipeServerStream(
-                    _pipeName,
-                    PipeDirection.InOut,
-                    NamedPipeServerStream.MaxAllowedServerInstances,
-                    PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+                pipe = CurrentUserPipe.CreateServer(_pipeName);
                 await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
                 _ = HandleConnectionAsync(pipe, requestReceived, cancellationToken);
                 pipe = null;
@@ -167,11 +163,7 @@ internal sealed class SingleInstanceActivation : IDisposable
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            using var pipe = new NamedPipeClientStream(
-                ".",
-                pipeName,
-                PipeDirection.InOut,
-                PipeOptions.Asynchronous);
+            using var pipe = CurrentUserPipe.CreateClient(pipeName);
             try
             {
                 await pipe.ConnectAsync(250, cancellationToken).ConfigureAwait(false);
@@ -186,6 +178,7 @@ internal sealed class SingleInstanceActivation : IDisposable
                 continue;
             }
 
+            CurrentUserPipe.ValidateServerIdentity(pipe);
             await pipe.WriteAsync(new[] { ShowRequest }, cancellationToken).ConfigureAwait(false);
             await pipe.FlushAsync(cancellationToken).ConfigureAwait(false);
             var response = new byte[1];

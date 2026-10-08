@@ -222,6 +222,23 @@ public sealed class ApplicationUpdateHandoffTests
     }
 
     [Fact]
+    public async Task CompleteAsync_ReopensVerifiedMovedInstallationAndDoesNotUsePortableFallback()
+    {
+        using var directory = new TemporaryDirectory();
+        var request = Request(directory.Path);
+        var moved = Path.Combine(directory.Path, "ResoDrive", "resodrive.exe");
+        var runtime = new FakeRuntime { InstallerExitCode = 0, ResolvedExecutable = moved, ReadyAcknowledged = true };
+        Assert.Equal(0, await ApplicationUpdateHandoff.CompleteAsync(request, runtime));
+        Assert.Equal([moved], runtime.StartedPaths);
+
+        var failedStart = new FakeRuntime { InstallerExitCode = 0, ResolvedExecutable = moved,
+            FirstStartException = new Win32Exception(2), ReadyAcknowledged = true };
+        Assert.Equal(1, await ApplicationUpdateHandoff.CompleteAsync(request, failedStart));
+        Assert.Equal([moved], failedStart.StartedPaths);
+        Assert.False(ReadOutcome(request.OutcomePath).RelaunchAcknowledged);
+    }
+
+    [Fact]
     public async Task CompleteAsync_PreparesSourceAndInstalledLocationsBeforeStartingInstaller()
     {
         using var directory = new TemporaryDirectory();
@@ -393,6 +410,7 @@ public sealed class ApplicationUpdateHandoffTests
         public Exception? PreparationException { get; init; }
         public bool ReadyAcknowledged { get; init; }
         public Exception? FirstStartException { get; init; }
+        public string? ResolvedExecutable { get; init; }
         public bool ApplicationStarted { get; private set; }
         public string? StartedPath { get; private set; }
         public List<string> PreparedDirectories { get; } = [];
@@ -437,6 +455,7 @@ public sealed class ApplicationUpdateHandoffTests
         }
 
         public bool RequestReady(string activationScope, TimeSpan timeout) => ReadyAcknowledged;
+        public string? ResolveInstalledApplication(string version) => ResolvedExecutable;
     }
 
     private sealed class TemporaryDirectory : IDisposable

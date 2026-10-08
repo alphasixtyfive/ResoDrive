@@ -57,7 +57,7 @@ unhandled failures. User-facing logs redact common secrets, credential-bearing
 URLs, host names, and absolute paths before display.
 
 Startup milestones are timestamped in
-`%LOCALAPPDATA%\rdrive\logs\resodrive-ui.log`. The interval from `startup.begin`
+`%LOCALAPPDATA%\ResoDrive\logs\resodrive-ui.log`. The interval from `startup.begin`
 to `startup.ready` measures ResoDrive initialization; a delay before
 `startup.begin` belongs to Windows sign-in and task launch rather than drive
 mounting. This distinction makes slow-start reports diagnosable without adding a
@@ -70,8 +70,8 @@ into the host.
 
 The application directory is read for binaries, assets, an optional `profiles.json`,
 and the inert `profiles.sample.json` template;
-ResoDrive never relocates itself. Mutable per-user state and the managed rclone
-runtime are kept in `%LOCALAPPDATA%\rdrive`. Optional startup is a current-user,
+Windows Installer owns the application location. Mutable per-user state and the managed rclone
+runtime are kept in `%LOCALAPPDATA%\ResoDrive`. Optional startup is a current-user,
 interactive Windows Task Scheduler task that launches the installed executable
 with `--background`. It runs with the user's normal privileges and has no artificial
 delay or network-availability gate. A normal second launch restores the existing
@@ -94,7 +94,8 @@ when it is not already installed.
 
 ## Compatibility identities
 
-The user-data directory, host pipe and mutex names, and MSI installation directory
-use the internal `rdrive` identity. They are stable machine-facing identifiers,
-not user-facing product copy. Renaming them would orphan encrypted configuration,
-allow competing host instances, or break in-place MSI upgrades.
+The host pipe and mutex names, compatibility environment variable and MSI upgrade
+identities retain the internal `rdrive` identity so existing clients can coordinate
+safe shutdown. Program and default user-data folders use `ResoDrive`; separate
+[migration modules](INSTALL-DIRECTORY-MIGRATION.md) handle the legacy paths,
+encrypted configuration, startup tasks and the prior updater's old relaunch path.

@@ -37,7 +37,19 @@
       />
     </Property>
     <Property Id="RDRIVE_DATA_ROOT" Secure="yes" />
-    <SetProperty Id="RDRIVE_DATA_ROOT" Value="[LocalAppDataFolder]rdrive" Before="CostFinalize" Sequence="execute" Condition="NOT RDRIVE_DATA_ROOT" />
+    <!-- Installer discovery property: fresh/current-layout installs never run the
+         legacy migration actions. AppSearch reads it again in the execute session. -->
+    <Property Id="RDRIVE_DIRECTORY_LAYOUT">
+      <RegistrySearch Id="InstalledDirectoryLayout" Root="HKLM" Key="SOFTWARE\ResoDrive\Installation"
+        Name="DirectoryLayout" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="RDRIVE_PREVIOUS_DIRECTORY">
+      <!-- The published sample-profile component has this fixed identity.
+           Without a FileSearch signature, MSI returns its parent directory. -->
+      <ComponentSearch Id="PreviousApplicationDirectory" Guid="2E1BB141-3D85-4177-8498-54A0833D2B23" Type="file" />
+    </Property>
+    <SetProperty Id="RDRIVE_DATA_ROOT" Value="[LocalAppDataFolder]ResoDrive" Before="CostFinalize" Sequence="execute" Condition="NOT RDRIVE_DATA_ROOT" />
+    <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" Sequence="execute" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch $(var.ResoDriveProductName)" />
     <netfx:DotNetCompatibilityCheck
@@ -57,18 +69,22 @@
     />
 
     <StandardDirectory Id="ProgramFiles64Folder">
-      <Directory Id="INSTALLFOLDER" Name="rdrive" />
+      <Directory Id="INSTALLFOLDER" Name="ResoDrive" />
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder">
       <Directory Id="ApplicationProgramsFolder" Name="$(var.ResoDriveProductName)" />
     </StandardDirectory>
 
     <ComponentGroup Id="ApplicationFiles" Directory="INSTALLFOLDER">
+      <Component Id="DirectoryLayoutIdentity" Guid="0F42F167-D9D1-4A9A-B221-B70FAC5C5C6B">
+        <RegistryValue Root="HKLM" Key="SOFTWARE\ResoDrive\Installation" Name="DirectoryLayout"
+          Value="ResoDrive-v1" Type="string" KeyPath="yes" />
+      </Component>
       <Files Include="$(var.PackageSource)\**">
         <Exclude Files="$(var.PackageSource)\$(var.ResoDriveExecutableName)" />
         <Exclude Files="$(var.PackageSource)\profiles.sample.json" />
       </Files>
-      <Component Id="SampleProfiles" Guid="2E1BB141-3D85-4177-8498-54A0833D2B23">
+      <Component Id="SampleProfiles" Guid="907B649A-88CA-4F4F-8F62-35265627F125">
         <File Id="SampleProfilesFile" Source="$(var.PackageSource)\profiles.sample.json" KeyPath="yes" />
       </Component>
       <Component Id="ResoDriveExecutable" Guid="*">
@@ -111,7 +127,7 @@
     <CustomAction
       Id="PrepareInstalledResoDriveForUpgrade"
       BinaryRef="ResoDriveInstallationHelper"
-      ExeCommand="--prepare-install &quot;[INSTALLFOLDER].&quot; [UILevel] &quot;[RDRIVE_DATA_ROOT]\.&quot;"
+      ExeCommand="--prepare-registered-install &quot;[INSTALLFOLDER].&quot; [UILevel] &quot;[RDRIVE_DATA_ROOT]\.&quot;"
       Execute="immediate"
       Return="check"
       Impersonate="yes"
@@ -124,6 +140,17 @@
       Return="ignore"
       Impersonate="yes"
     />
+
+    <!-- Temporary migration artifacts have explicit rollback/commit handling.
+         MSI continues to own all normal application files and registration. -->
+    <CustomAction Id="RollbackInstallationDirectoryMigration" BinaryRef="ResoDriveInstallationHelper"
+      ExeCommand="--rollback-install-migration" Execute="rollback" Return="ignore" Impersonate="no" />
+    <CustomAction Id="StageInstallationDirectoryMigration" BinaryRef="ResoDriveInstallationHelper"
+      ExeCommand="--stage-install-migration &quot;[RDRIVE_PREVIOUS_DIRECTORY].&quot;" Execute="deferred" Return="check" Impersonate="no" />
+    <CustomAction Id="ApplyInstallationDirectoryMigration" BinaryRef="ResoDriveInstallationHelper"
+      ExeCommand="--apply-install-migration" Execute="deferred" Return="check" Impersonate="no" />
+    <CustomAction Id="CommitInstallationDirectoryMigration" BinaryRef="ResoDriveInstallationHelper"
+      ExeCommand="--commit-install-migration" Execute="commit" Return="ignore" Impersonate="no" />
 
     <InstallUISequence>
       <FindRelatedProducts Before="AppSearch" />
@@ -145,6 +172,14 @@
         Before="RemoveFiles"
         Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE"
       />
+      <Custom Action="RollbackInstallationDirectoryMigration" Before="StageInstallationDirectoryMigration"
+        Condition="WIX_UPGRADE_DETECTED AND NOT Installed AND RDRIVE_DIRECTORY_LAYOUT &lt;&gt; &quot;ResoDrive-v1&quot;" />
+      <Custom Action="StageInstallationDirectoryMigration" Before="InstallFiles"
+        Condition="WIX_UPGRADE_DETECTED AND NOT Installed AND RDRIVE_DIRECTORY_LAYOUT &lt;&gt; &quot;ResoDrive-v1&quot;" />
+      <Custom Action="ApplyInstallationDirectoryMigration" After="InstallFiles"
+        Condition="WIX_UPGRADE_DETECTED AND NOT Installed AND RDRIVE_DIRECTORY_LAYOUT &lt;&gt; &quot;ResoDrive-v1&quot;" />
+      <Custom Action="CommitInstallationDirectoryMigration" After="ApplyInstallationDirectoryMigration"
+        Condition="WIX_UPGRADE_DETECTED AND NOT Installed AND RDRIVE_DIRECTORY_LAYOUT &lt;&gt; &quot;ResoDrive-v1&quot;" />
     </InstallExecuteSequence>
 
     <UI>

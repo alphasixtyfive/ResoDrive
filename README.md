@@ -88,7 +88,8 @@ and open ResoDrive. The first time through:
 3. If you want a mounted drive, install WinFsp when prompted.
 
 Your settings, encrypted credentials, logs, cache, and managed rclone copy live in
-`%LOCALAPPDATA%\rdrive`. An upgrade leaves that folder alone. After the first
+`%LOCALAPPDATA%\ResoDrive`. The legacy `rdrive` location is migrated once while
+preserving your account data; see the [migration notes](docs/INSTALL-DIRECTORY-MIGRATION.md). After the first
 install, you can check for and install ResoDrive updates from Settings.
 Application and rclone downloads can continue from a partial file after a dropped
 connection, which avoids starting large transfers again on metered or satellite links.
@@ -140,7 +141,7 @@ For a team deployment, start with [`profiles.sample.json`](profiles.sample.json)
 add the connection presets you want to offer, and save the result as:
 
 ```text
-%LOCALAPPDATA%\rdrive\profiles.json
+%LOCALAPPDATA%\ResoDrive\profiles.json
 ```
 
 Profiles are for connection details and defaults. Do not put passwords, tokens, or

@@ -5,6 +5,20 @@ namespace ResoDrive.Windows;
 
 internal static class SensitiveFilePermissions
 {
+    public static void RestrictDirectoryToCurrentUser(string path)
+    {
+        using var identity = WindowsIdentity.GetCurrent(TokenAccessLevels.Query);
+        var user = identity.User ?? throw new InvalidOperationException("The Windows account could not be identified.");
+        var security = new DirectorySecurity();
+        security.SetOwner(user);
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        foreach (var sid in new[] { user, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+            new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null) })
+            security.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.FullControl,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+        new DirectoryInfo(path).SetAccessControl(security);
+    }
+
     public static void RestrictToCurrentUser(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);

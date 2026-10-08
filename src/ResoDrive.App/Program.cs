@@ -10,15 +10,49 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
-        if (args.Length is 3 or 4 && args[0].Equals("--prepare-install", StringComparison.OrdinalIgnoreCase))
+        if (args.Length == 1 && args[0] == "--inspect-installation")
+        {
+            Console.Out.WriteLine(System.Text.Json.JsonSerializer.Serialize(InstalledApplicationLocator.GetInstallationDirectories()));
+            return 0;
+        }
+        if (args.Length is 1 or 2 && args[0].EndsWith("install-migration", StringComparison.Ordinal))
+        {
+            try
+            {
+                switch (args[0])
+                {
+                    case "--stage-install-migration" when args.Length == 2: InstallerDirectoryMigration.Stage(args[1]); return 0;
+                    case "--apply-install-migration": InstallerDirectoryMigration.Apply(); return 0;
+                    case "--rollback-install-migration": InstallerDirectoryMigration.Rollback(); return 0;
+                    case "--commit-install-migration": InstallerDirectoryMigration.Commit(); return 0;
+                    case "--cleanup-install-migration": InstallerDirectoryMigration.CleanupAsync(CancellationToken.None).GetAwaiter().GetResult(); return 0;
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or
+                System.ComponentModel.Win32Exception or System.Runtime.InteropServices.COMException or System.Text.Json.JsonException)
+            {
+                // Diagnostic output belongs to the installation journal, never a
+                // default user-data folder that could recreate a migrated root.
+                InstallerDirectoryMigration.RecordFailure(args[0], exception);
+                return 1;
+            }
+        }
+        if (args.Length == 1 && args[0] == DirectoryMigrationStartup.CompletionArgument)
+            return DirectoryMigrationStartup.CompleteAsync().GetAwaiter().GetResult();
+        if (args.Length == 1 && args[0] == "--migrate-user-data")
+            return DirectoryMigrationStartup.MigrateWithoutLaunchingAsync().GetAwaiter().GetResult();
+
+        if (args.Length is 3 or 4 && (args[0].Equals("--prepare-install", StringComparison.OrdinalIgnoreCase) ||
+            args[0].Equals("--prepare-registered-install", StringComparison.OrdinalIgnoreCase)))
         {
             if (args.Length == 4)
             {
                 if (!Path.IsPathFullyQualified(args[3]))
                     return 2;
-                Environment.SetEnvironmentVariable("RDRIVE_DATA_DIR", Path.GetFullPath(args[3]));
+                Environment.SetEnvironmentVariable("RDRIVE_DATA_DIR", InstallationDirectories.PreparationDataRoot(Path.GetFullPath(args[3])));
             }
-            return InstallerPreparation.Run(args[1], int.TryParse(args[2], out var uiLevel) && uiLevel >= 3);
+            return InstallerPreparation.Run(args[1], int.TryParse(args[2], out var uiLevel) && uiLevel >= 3,
+                includeRegisteredInstallation: args[0].Equals("--prepare-registered-install", StringComparison.OrdinalIgnoreCase));
         }
 
         if (ApplicationUpdateHandoff.TryParseCompletionRequest(args, out var completionRequest))
@@ -48,6 +82,22 @@ public static class Program
                 .SetEnabledAsync(false)
                 .GetAwaiter().GetResult();
             return result.Succeeded ? 0 : 1;
+        }
+
+        try
+        {
+            if (Environment.ProcessPath is { } current && InstallationDirectories.SamePath(current, InstallationDirectories.LegacyExecutable))
+                return LegacyInstallationBridge.Run(args);
+            DirectoryMigrationStartup.EnsureReady();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or
+            System.ComponentModel.Win32Exception or System.Text.Json.JsonException)
+        {
+            // No normal app/host startup, diagnostics or folder creation until the
+            // migration succeeds. Preserve the original root on any preflight error.
+            if (!args.Contains("--host", StringComparer.OrdinalIgnoreCase))
+                System.Windows.MessageBox.Show(exception.Message, "ResoDrive migration needs attention", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+            return 1;
         }
 
         if (args.Any(argument => argument.Equals("--host", StringComparison.OrdinalIgnoreCase)))

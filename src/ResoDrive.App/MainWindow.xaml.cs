@@ -133,6 +133,7 @@ public partial class MainWindow : WpfWindow
             _timer.Start();
             IsStartupReady = true;
             StartupReady?.Invoke(this, EventArgs.Empty);
+            DirectoryMigrationStartup.ScheduleCompletion();
             _ = ObservePreviousUpdateOutcomeAsync();
             await RefreshConnectionMetadataAsync();
             await Task.WhenAll(CheckApplicationUpdateAsync(), CheckRcloneUpdateAsync());
@@ -397,6 +398,12 @@ public partial class MainWindow : WpfWindow
     private async Task ReconcileAutostartAsync()
     {
         var autostart = new ScheduledTaskAutostartService(CurrentExecutablePath);
+        if (InstallationDirectories.SamePath(CurrentExecutablePath, InstallationDirectories.Executable))
+        {
+            var migration = autostart.MigrateFrom(InstallationDirectories.LegacyExecutable);
+            if (!migration.Succeeded)
+                _model.AddLogEntry("Windows startup task was not migrated", migration.Error?.Message ?? "The task was preserved.", LogSeverity.Error);
+        }
         var current = await autostart.IsEnabledAsync(_lifetimeCancellation.Token);
         if (!current.Succeeded)
         {
@@ -1751,10 +1758,8 @@ public partial class MainWindow : WpfWindow
     private static string CurrentExecutablePath =>
         Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "resodrive.exe");
 
-    private static string MsiInstalledExecutablePath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-        "rdrive",
-        "resodrive.exe");
+    private static string MsiInstalledExecutablePath =>
+        InstalledApplicationLocator.ResolveExecutablePath() ?? InstallationDirectories.Executable;
 
     private void ShowError(string title, string message)
     {

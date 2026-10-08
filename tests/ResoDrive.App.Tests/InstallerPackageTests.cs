@@ -7,13 +7,31 @@ public sealed class InstallerPackageTests
     private static readonly XNamespace Wix = "http://wixtoolset.org/schemas/v4/wxs";
 
     [Fact]
+    public void LegacyMigrationUsesExistingHelperAndSkipsFreshAndCurrentLayoutInstallations()
+    {
+        var document = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Package.wxs"));
+        var migrationActions = document.Descendants(Wix + "CustomAction").Where(action =>
+            ((string?)action.Attribute("Id"))?.EndsWith("InstallationDirectoryMigration", StringComparison.Ordinal) == true).ToArray();
+        Assert.Equal(4, migrationActions.Length);
+        foreach (var action in migrationActions)
+        {
+            Assert.Equal("ResoDriveInstallationHelper", (string?)action.Attribute("BinaryRef"));
+            Assert.Equal("no", (string?)action.Attribute("Impersonate"));
+            Assert.NotEqual("immediate", (string?)action.Attribute("Execute"));
+            var scheduled = Assert.Single(document.Descendants(Wix + "Custom"), row =>
+                (string?)row.Attribute("Action") == (string?)action.Attribute("Id"));
+            Assert.Equal("WIX_UPGRADE_DETECTED AND NOT Installed AND RDRIVE_DIRECTORY_LAYOUT <> \"ResoDrive-v1\"", (string?)scheduled.Attribute("Condition"));
+        }
+    }
+
+    [Fact]
     public void UpgradePreparationHonorsUploadProtectionAndRunsWithoutPowerShell()
     {
         var action = LoadAction("PrepareInstalledResoDriveForUpgrade");
 
         Assert.Null(action.Attribute("FileRef"));
         Assert.Equal("ResoDriveInstallationHelper", (string?)action.Attribute("BinaryRef"));
-        Assert.Equal("--prepare-install \"[INSTALLFOLDER].\" [UILevel] \"[RDRIVE_DATA_ROOT]\\.\"", (string?)action.Attribute("ExeCommand"));
+        Assert.Equal("--prepare-registered-install \"[INSTALLFOLDER].\" [UILevel] \"[RDRIVE_DATA_ROOT]\\.\"", (string?)action.Attribute("ExeCommand"));
         Assert.Equal("check", (string?)action.Attribute("Return"));
         Assert.Equal("yes", (string?)action.Attribute("Impersonate"));
     }
@@ -43,7 +61,7 @@ public sealed class InstallerPackageTests
         var document = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Bundle.wxs"));
         var application = Assert.Single(document.Descendants(bal + "WixStandardBootstrapperApplication"));
         Assert.Equal("SetupTheme.xml", (string?)application.Attribute("ThemeFile"));
-        Assert.Equal("[ProgramFiles64Folder]rdrive\\resodrive.exe", (string?)application.Attribute("LaunchTarget"));
+        Assert.Equal("[ProgramFiles64Folder]ResoDrive\\resodrive.exe", (string?)application.Attribute("LaunchTarget"));
     }
 
     [Fact]

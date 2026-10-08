@@ -11,8 +11,8 @@ internal static class InstallerPreparation
 {
     internal const string ResultFileName = "installer-preparation.json";
 
-    internal static int Run(string installationDirectory, bool interactive) =>
-        Run(interactive, () => PrepareAsync(installationDirectory), ShowFailure);
+    internal static int Run(string installationDirectory, bool interactive, bool includeRegisteredInstallation = false) =>
+        Run(interactive, () => PrepareAsync(installationDirectory, includeRegisteredInstallation), ShowFailure);
 
     internal static int Run(bool interactive, Func<Task<InstallerPreparationResult>> prepare, Action<string> showFailure)
     {
@@ -43,13 +43,16 @@ internal static class InstallerPreparation
         application.Shutdown(1);
     }
 
-    private static async Task<InstallerPreparationResult> PrepareAsync(string directory)
+    private static async Task<InstallerPreparationResult> PrepareAsync(string directory, bool includeRegisteredInstallation)
     {
         InstallerPreparationResult result;
         try
         {
             UiDiagnosticLog.Current.Information("installer.prepare_started");
-            await new InstallationPreparationService().PrepareAsync(directory).ConfigureAwait(false);
+            var directories = (includeRegisteredInstallation ? InstalledApplicationLocator.GetInstallationDirectories() : [])
+                .Append(directory).Distinct(StringComparer.OrdinalIgnoreCase);
+            foreach (var installed in directories)
+                await new InstallationPreparationService().PrepareAsync(installed).ConfigureAwait(false);
             result = new(true, "ResoDrive stopped safely. Installation can continue.", DateTimeOffset.UtcNow);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or

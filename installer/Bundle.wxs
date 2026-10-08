@@ -20,8 +20,8 @@
         Theme="hyperlinkLicense" ThemeFile="SetupTheme.xml"
         LicenseUrl="https://github.com/alphasixtyfive/ResoDrive/blob/main/LICENSE"
         LogoFile="$(var.LogoSource)" SuppressOptionsUI="yes"
-        LaunchTarget="[ProgramFiles64Folder]rdrive\resodrive.exe"
-        LaunchWorkingFolder="[ProgramFiles64Folder]rdrive" />
+        LaunchTarget="[ProgramFiles64Folder]ResoDrive\resodrive.exe"
+        LaunchWorkingFolder="[ProgramFiles64Folder]ResoDrive" />
       <Payload SourceFile="$(var.IconSource)" Name="app.ico" />
     </BootstrapperApplication>
 

@@ -41,7 +41,7 @@ PC a separate app password when first setting it up.
    `https://cloud.example`. The host also recovers compatible imported connections
    as described above.
 3. Complete setup and confirm the connection works. The protected
-   `%LOCALAPPDATA%\rdrive\remote-wipe.dpapi` file stores registrations. If using
+   `%LOCALAPPDATA%\ResoDrive\remote-wipe.dpapi` file stores registrations. If using
    `RDRIVE_DATA_DIR`, look in that directory instead. Do not open or share the file.
 
 ResoDrive reuses a manually created app password; it does not implement
@@ -56,7 +56,7 @@ Nextcloud account, choose **Store downloads in ResoDrive** in the sync editor.
 New download jobs on enrolled accounts use this choice by default; existing jobs keep their
 previous paths and behavior. The editor shows the exact managed destination.
 
-Managed copies live at `%LOCALAPPDATA%\rdrive\managed-sync\<job-id>` (or below the
+Managed copies live at `%LOCALAPPDATA%\ResoDrive\managed-sync\<job-id>` (or below the
 active `RDRIVE_DATA_DIR`). ResoDrive owns this dedicated tree. A confirmed wipe
 deletes everything inside it, including local edits or files manually placed
 there. Files left in the active managed-sync tree stay covered after a job is

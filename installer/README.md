@@ -11,9 +11,11 @@ MSI remains available for managed deployment and in-app updates, where the runti
 prerequisite is already satisfied.
 
 The MSI is a 64-bit, per-machine package that installs to
-`%ProgramFiles%\rdrive`, creates a common Start menu shortcut, registers with
+`%ProgramFiles%\ResoDrive`, creates a common Start menu shortcut, registers with
 Windows Installed apps, and preserves all per-user data in
-`%LOCALAPPDATA%\rdrive` during upgrades and uninstall.
+`%LOCALAPPDATA%\ResoDrive` during upgrades and uninstall. Legacy `rdrive` folders
+have a separate, one-time [migration](../docs/INSTALL-DIRECTORY-MIGRATION.md).
+Fresh installs and upgrades already using the new layout skip its custom actions.
 
 The setup EXE uses a branded native WiX theme with the ResoDrive logo, installation
 progress, a setup-log link on failure, and an **Open ResoDrive** button after

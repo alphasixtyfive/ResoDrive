@@ -37,6 +37,7 @@ internal interface IApplicationUpdateRuntime
         CancellationToken cancellationToken);
     bool StartApplication(string executablePath);
     bool RequestReady(string activationScope, TimeSpan timeout);
+    string? ResolveInstalledApplication(string version) => null;
 }
 
 internal static class ApplicationUpdateHandoff
@@ -286,9 +287,20 @@ internal static class ApplicationUpdateHandoff
 
         var acknowledged = false;
         Exception? relaunchException = null;
-        var relaunchPaths = status == "succeeded"
-            ? new[] { request.InstalledExecutablePath, request.SourceExecutablePath }
-            : new[] { request.SourceExecutablePath };
+        string[] relaunchPaths;
+        try
+        {
+            var resolved = status == "succeeded" ? runtime.ResolveInstalledApplication(request.Version) : null;
+            relaunchPaths = status == "succeeded"
+                ? resolved is not null ? [resolved] : [request.InstalledExecutablePath, request.SourceExecutablePath]
+                : [request.SourceExecutablePath];
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+            InvalidOperationException or Win32Exception)
+        {
+            relaunchException = exception;
+            relaunchPaths = [];
+        }
         foreach (var relaunchPath in relaunchPaths)
         {
             try
@@ -500,6 +512,9 @@ internal static class ApplicationUpdateHandoff
 
     private sealed class ApplicationUpdateRuntime : IApplicationUpdateRuntime
     {
+        public string ResolveInstalledApplication(string version) =>
+            InstalledApplicationLocator.ResolveExecutablePath(version)
+            ?? throw new IOException("Windows did not register the updated ResoDrive application.");
         public async Task WaitForParentExitAsync(int processId, CancellationToken cancellationToken)
         {
             try

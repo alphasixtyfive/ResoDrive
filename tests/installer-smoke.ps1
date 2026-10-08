@@ -27,8 +27,9 @@ if ([string]::IsNullOrWhiteSpace($PreviousVersion)) {
 if ($PreviousVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid previous version.' }
 Write-Output "Testing upgrade from public ResoDrive $PreviousVersion."
 $setup = (Resolve-Path -LiteralPath $SetupPath).Path
-$app = Join-Path $env:ProgramFiles 'rdrive\resodrive.exe'
-if (Test-Path -LiteralPath $app) { throw 'Refusing to overwrite a pre-existing installation.' }
+$app = Join-Path $env:ProgramFiles 'ResoDrive\resodrive.exe'
+$legacyApp = Join-Path $env:ProgramFiles 'rdrive\resodrive.exe'
+if ((Test-Path -LiteralPath $app) -or (Test-Path -LiteralPath $legacyApp)) { throw 'Refusing to overwrite a pre-existing installation.' }
 $testRoot = Join-Path $env:RUNNER_TEMP 'resodrive-installer-smoke'
 New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
 $oldDataRoot = $env:RDRIVE_DATA_DIR
@@ -70,9 +71,26 @@ function Assert-DataPreserved {
         (Get-FileHash -LiteralPath $marker).Hash -ne $markerHash -or
         (Get-FileHash -LiteralPath $managedCopy).Hash -ne $managedCopyHash) { throw 'Installation changed user settings, cache or managed copies.' }
 }
-function Start-TestApplication {
-    if (-not (Test-Path -LiteralPath $app)) { throw 'The installed app is missing.' }
-    $process = Start-Process -FilePath $app -WindowStyle Hidden -PassThru
+function Assert-NoMigrationTasks {
+    $tasks = @(Get-ScheduledTask | Where-Object {
+        $_.TaskName -eq 'ResoDrive Installation Migration Cleanup' -or
+        $_.TaskName.StartsWith('ResoDrive Data Migration - ', [StringComparison]::Ordinal)
+    })
+    if ($tasks.Count -ne 0) { throw 'Unexpected migration tasks remain.' }
+}
+function Wait-LegacyInstallationCleanup {
+    $deadline = [DateTime]::UtcNow.AddSeconds(60)
+    $legacyDirectory = Split-Path -Parent $legacyApp
+    while ((Test-Path -LiteralPath $legacyDirectory) -and [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 250
+    }
+    if (Test-Path -LiteralPath $legacyDirectory) { throw 'The old installation directory was not cleaned up.' }
+    Assert-NoMigrationTasks
+}
+function Start-TestApplication([string]$ExecutablePath = $app) {
+    if (-not (Test-Path -LiteralPath $ExecutablePath)) { throw 'The installed app is missing.' }
+    $process = Start-Process -FilePath $ExecutablePath -WindowStyle Hidden -PassThru
+    $process | Add-Member -NotePropertyName TestedExecutablePath -NotePropertyValue $ExecutablePath
     Start-Sleep -Seconds 5
     $process.Refresh()
     if ($process.HasExited) { throw 'The installed application exited unexpectedly.' }
@@ -81,7 +99,7 @@ function Start-TestApplication {
 function Assert-Stopped($Process) {
     try {
         if (-not $Process.WaitForExit(15000)) { throw 'Installer left the old application running.' }
-        $remaining = @(Get-Process resodrive -ErrorAction SilentlyContinue | Where-Object Path -EQ $app)
+        $remaining = @(Get-Process resodrive -ErrorAction SilentlyContinue | Where-Object Path -EQ $Process.TestedExecutablePath)
         if ($remaining.Count -gt 0) { throw 'Installer left a background host running.' }
     } finally { $Process.Dispose() }
 }
@@ -236,6 +254,8 @@ try {
     $candidateProductVersion = (Get-Item -LiteralPath $app).VersionInfo.ProductVersion
     if (($candidateProductVersion -split '\+', 2)[0] -cne $expectedVersion) { throw 'Fresh installation has an unexpected product version.' }
     Assert-OneRemovableAppEntry
+    Assert-NoMigrationTasks
+    if (Test-Path -LiteralPath $legacyApp) { throw 'Fresh installation created a legacy launcher.' }
     Invoke-Installer $setup "/uninstall /quiet /norestart /log `"$testRoot\unsupported-setup-uninstall.log`"" -ExpectFailure
     Assert-CandidateInstalled
     Assert-OneRemovableAppEntry
@@ -262,12 +282,14 @@ try {
     if (-not $match.Success -or $match.Groups[2].Value -cne $name -or
         (Get-FileHash -LiteralPath $previous).Hash -ine $match.Groups[1].Value) { throw 'Previous installer checksum is invalid.' }
     Invoke-Installer $msiexec "/i `"$previous`" /quiet /norestart /l*v `"$testRoot\previous.log`""
-    $running = Start-TestApplication
+    $baselineApp = if (Test-Path -LiteralPath $legacyApp) { $legacyApp } else { $app }
+    $running = Start-TestApplication $baselineApp
     Invoke-Installer $msiexec "/i `"$candidateMsi`" /quiet /norestart /l*v `"$testRoot\upgrade.log`""
     Assert-Stopped $running
     Assert-CandidateInstalled
     Assert-OneRemovableAppEntry
     Assert-DataPreserved
+    Wait-LegacyInstallationCleanup
     $running = Start-TestApplication
     Invoke-Installer $msiexec "/x $candidateProductCode /quiet /norestart /l*v `"$testRoot\upgrade-uninstall.log`""
     Assert-Stopped $running
@@ -284,11 +306,12 @@ try {
     Assert-VerifiedAsset $previousSetup | Out-Null
     Invoke-Installer $previousSetup "/install /quiet /norestart /log `"$testRoot\legacy-setup.log`""
     Assert-BundleCount 1
-    $legacyHash = (Get-FileHash -LiteralPath $app).Hash
-    $running = Start-TestApplication
+    $baselineApp = if (Test-Path -LiteralPath $legacyApp) { $legacyApp } else { $app }
+    $legacyHash = (Get-FileHash -LiteralPath $baselineApp).Hash
+    $running = Start-TestApplication $baselineApp
     $blockedLog = Join-Path $testRoot 'legacy-msi-blocked.log'
     Invoke-Installer $msiexec "/i `"$candidateMsi`" /quiet /norestart /l*v `"$blockedLog`"" -ExpectFailure
-    if ((Get-FileHash -LiteralPath $app).Hash -ine $legacyHash -or $running.HasExited) {
+    if ((Get-FileHash -LiteralPath $baselineApp).Hash -ine $legacyHash -or $running.HasExited) {
         throw 'The rejected MSI migration changed or stopped the legacy installation.'
     }
     if (-not (Select-String -LiteralPath $blockedLog -Pattern 'Use ResoDrive-Setup\.exe to update this installation' -Quiet) -or
@@ -319,9 +342,10 @@ try {
         Assert-BundleCount 0
         Invoke-Installer $msiexec "/i `"$baselineMsi`" /quiet /norestart /l*v `"$testRoot\same-version-msi-baseline.log`""
         Assert-OneRelatedMsiProduct $baselineProductCode
-        $baselineAppHash = (Get-FileHash -LiteralPath $app -Algorithm SHA256).Hash
+        $baselineApp = if (Test-Path -LiteralPath $legacyApp) { $legacyApp } else { $app }
+        $baselineAppHash = (Get-FileHash -LiteralPath $baselineApp -Algorithm SHA256).Hash
         if ($baselineAppHash -ieq $candidateAppHash) { throw 'The baseline executable already matches the candidate; replacement was not exercised.' }
-        $running = Start-TestApplication
+        $running = Start-TestApplication $baselineApp
         Invoke-Installer $msiexec "/i `"$candidateMsi`" /quiet /norestart /l*v `"$testRoot\same-version-msi-replace.log`""
         Assert-Stopped $running
         Assert-CandidateInstalled
@@ -336,8 +360,9 @@ try {
         Invoke-Installer $baselineSetup "/install /quiet /norestart /log `"$testRoot\same-version-bundle-baseline.log`""
         Assert-OneRelatedMsiProduct $baselineProductCode
         Assert-BundleCount 1
-        if ((Get-FileHash -LiteralPath $app -Algorithm SHA256).Hash -ine $baselineAppHash) { throw 'The baseline bundle and MSI contain different executables.' }
-        $running = Start-TestApplication
+        $baselineApp = if (Test-Path -LiteralPath $legacyApp) { $legacyApp } else { $app }
+        if ((Get-FileHash -LiteralPath $baselineApp -Algorithm SHA256).Hash -ine $baselineAppHash) { throw 'The baseline bundle and MSI contain different executables.' }
+        $running = Start-TestApplication $baselineApp
         Invoke-Installer $setup "/install /quiet /norestart /log `"$testRoot\same-version-bundle-replace.log`""
         Assert-Stopped $running
         Assert-CandidateInstalled
@@ -373,7 +398,7 @@ try {
     Write-Output 'Installer smoke passed: one removable app entry, fresh install, running-app repair/removal, direct MSI upgrade, blocked legacy MSI migration, native Setup migration and preserved user data.'
 } finally {
     try {
-        foreach ($diagnosticRoot in @($env:RDRIVE_DATA_DIR, (Join-Path $env:LOCALAPPDATA 'rdrive'))) {
+        foreach ($diagnosticRoot in @($env:RDRIVE_DATA_DIR, (Join-Path $env:LOCALAPPDATA 'ResoDrive'), (Join-Path $env:LOCALAPPDATA 'rdrive'))) {
             foreach ($relative in @('logs\resodrive-ui.log', 'updates\installer-preparation.json')) {
                 $diagnostic = Join-Path $diagnosticRoot $relative
                 if (Test-Path -LiteralPath $diagnostic) {

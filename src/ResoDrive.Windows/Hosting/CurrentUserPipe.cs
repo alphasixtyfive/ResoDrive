@@ -29,8 +29,13 @@ public static partial class CurrentUserPipe
     public static void ValidateServerIdentity(NamedPipeClientStream pipe)
     {
         ArgumentNullException.ThrowIfNull(pipe);
+        ValidateProcessIdentity(GetServerProcessId(pipe));
+    }
+
+    public static void ValidateProcessIdentity(int processId)
+    {
         using var identity = WindowsIdentity.GetCurrent();
-        using var process = OpenProcess(0x1000, false, GetServerProcessId(pipe)); // PROCESS_QUERY_LIMITED_INFORMATION
+        using var process = OpenProcess(0x1000, false, processId); // PROCESS_QUERY_LIMITED_INFORMATION
         if (process.IsInvalid || !OpenProcessToken(process, 0x0008, out var token)) // TOKEN_QUERY
             throw new UnauthorizedAccessException("The ResoDrive background host identity could not be verified.");
         using (token)
