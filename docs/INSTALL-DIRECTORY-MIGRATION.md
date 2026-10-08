@@ -118,8 +118,22 @@ MSI rollback. That test exposed unfinished migration state blocking a subsequent
 retry; the rollback now preserves the independent destination profile and
 completes its journal, and acceptance explicitly checks both outcomes.
 
-Full old-updater first-hop, post-rollback retry, temporary-helper removal and
-second-user migration acceptance are still pending. No release/tag/publication
-or production data migration was performed. Same-session disposable account tests
-do not establish an interactive standard-user/separate-admin UAC prompt or the
-actual sign-in trigger of the second user's task.
+[Hosted acceptance run 37773217549](https://github.com/alphasixtyfive/ResoDrive/actions/runs/37773217549)
+passed the full old-updater first hop, post-rollback retry, default data rename,
+byte-preserved settings/cache/managed copies/owner-protected credentials, disabled
+startup preservation, temporary-helper deletion and old installation cleanup.
+It ran the actual public 0.3.30 executable's update helper against native MSI,
+then verified installed version `0.3.34+2634d7a` and the exact executable hash.
+The second account migrated under its own loaded profile and decrypted its own
+credential afterward. Fresh install, repair/removal and the older Setup-owned
+transition passed in the same run.
+
+Tagged assets and their final desktop UAC check remain pending. No production
+data migration was performed. Same-session disposable account tests do not
+establish an interactive standard-user/separate-admin UAC prompt or the actual
+sign-in trigger of the second user's task. The second user's migration entry
+point was invoked under that account after verifying the registered task's
+identity and least privilege. The old updater acceptance invokes its real
+completion entry point; it does not automate the old UI's download/update click.
+Cancellation and upload rejection have regression coverage; no live account or
+pending production upload was used to provoke a shutdown block.
