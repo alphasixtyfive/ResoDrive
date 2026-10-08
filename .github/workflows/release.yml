@@ -72,7 +72,7 @@ jobs:
               CandidateMsiPath = 'artifacts/win-x64/resodrive-win-x64-0.3.19.msi'
             }
           }
-          ./tests/installer-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName @recovery
+          ./tests/installer-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName -FullSetupUi @recovery
       - name: Verify different-account preparation on disposable user
         shell: pwsh
         timeout-minutes: 4

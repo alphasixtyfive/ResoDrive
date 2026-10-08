@@ -35,6 +35,9 @@ public repository before publishing.
    bundle entry. Cover both a previous direct-MSI installation and an older
    Setup-owned installation: reject the latter's MSI-only upgrade before
    preparation, then migrate it through Setup and verify repair/removal.
+   Run `tests/installer-smoke.ps1 -FullSetupUi` on the disposable hosted runner:
+   fresh Setup and the older Setup-owned transition must show their own progress
+   without a separate Windows Installer window. Preserve the window receipts.
 4. Commit the release and create an annotated tag matching the version exactly,
    for example `git tag -a v0.3.0 -m "ResoDrive 0.3.0"`.
 5. Push the commit and tag. The Release workflow rebuilds and tests from the tag,

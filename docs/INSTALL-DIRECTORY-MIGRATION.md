@@ -128,8 +128,26 @@ The second account migrated under its own loaded profile and decrypted its own
 credential afterward. Fresh install, repair/removal and the older Setup-owned
 transition passed in the same run.
 
-Tagged assets and their final desktop UAC check remain pending. No production
-data migration was performed. Same-session disposable account tests do not
+[Tagged release acceptance 37775702295](https://github.com/alphasixtyfive/ResoDrive/actions/runs/37775702295)
+passed the same native checks with installed version `0.3.34+1b75bcb`.
+All eight draft assets match their GitHub digests and SHA-256 sidecars. The MSI
+hash is `CC79F131EF5A6BAD410EC10ACDFED0821344D8D4EEEF159E65765357D4CE00E8`;
+the installed/portable executable hash is
+`167F2C83711C5E75FDBE2B92A47E255CA3700073ADDFC2EF775E64BA0D696C14`.
+
+[Visible installer acceptance 37777664209](https://github.com/alphasixtyfive/ResoDrive/actions/runs/37777664209)
+used those exact draft installers. Full fresh Setup and the older Setup-owned
+upgrade each displayed a single `ResoDrive Setup` window with a real progress
+page and exited successfully. No separate Windows Installer window was observed
+by the 50 ms polling monitor. This does not establish every older Windows version
+or exclude a shorter transient window. Repair/removal and user-data preservation
+also passed. The accepted portable app passed process/recovery smoke and its
+compiled window was inspected at the desktop's 150% scaling using disposable data.
+
+The exact draft's final desktop UAC check remains pending: the elevation prompt
+was cancelled before the helper started. The earlier UAC pass above used a
+development binary, not this accepted executable. Publication remains on hold.
+No production data migration was performed. Same-session disposable account tests do not
 establish an interactive standard-user/separate-admin UAC prompt or the actual
 sign-in trigger of the second user's task. The second user's migration entry
 point was invoked under that account after verifying the registered task's
