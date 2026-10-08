@@ -10,7 +10,9 @@ $candidate = (Resolve-Path -LiteralPath $AppPath).Path
 $version = ((Get-Item $candidate).VersionInfo.ProductVersion -split '\+', 2)[0]
 $oldInstall = Join-Path $env:ProgramFiles 'rdrive'
 $newInstall = Join-Path $env:ProgramFiles 'ResoDrive'
-if ((Test-Path $oldInstall) -or (Test-Path $newInstall)) { throw 'An installation already exists.' }
+if ((Test-Path (Join-Path $oldInstall 'resodrive.exe')) -or (Test-Path (Join-Path $newInstall 'resodrive.exe'))) {
+    throw 'An application installation already exists.'
+}
 $evidence = Join-Path $env:RUNNER_TEMP 'resodrive-setup-update-smoke'
 $data = Join-Path $evidence 'data'
 $updates = Join-Path $data 'updates'

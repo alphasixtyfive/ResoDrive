@@ -197,7 +197,7 @@ if ($Verify) {
     $premigrationHosts = @(Receive-Job $monitor -ErrorAction Stop)
     Remove-Job $monitor
     $monitor = $null
-    $premigrationHosts | ConvertTo-Json | Set-Content (Join-Path $evidence 'premigration-hosts.json')
+    ConvertTo-Json -InputObject $premigrationHosts | Set-Content (Join-Path $evidence 'premigration-hosts.json')
     if ($premigrationHosts.Count -ne 0) { throw 'A new host started before user-data migration finished.' }
     if (-not $receipt.Succeeded -or (Test-Path $oldData)) { throw "User migration failed: $($receipt.Message)" }
     Wait-Until { -not (Test-Path (Join-Path $local 'ResoDriveMigration\resodrive-migration-helper.exe')) } 'The temporary user migration executable remains.'
