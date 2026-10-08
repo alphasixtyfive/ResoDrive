@@ -5,7 +5,8 @@ on:
     tags: ['v*']
 
 permissions:
-  contents: write
+  contents: read
+  actions: read
 
 jobs:
   release:
@@ -118,23 +119,8 @@ jobs:
             ${{ runner.temp }}/resodrive-migration-recovery-smoke/*.log
             ${{ runner.temp }}/resodrive-migration-recovery-smoke/*.json
           if-no-files-found: ignore
-      - name: Preserve release artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: resodrive-${{ github.ref_name }}
-          path: |
-            artifacts/win-x64/*.zip
-            artifacts/win-x64/*.zip.sha256
-            artifacts/win-x64/*.msi
-            artifacts/win-x64/*.msi.sha256
-            artifacts/win-x64/*.exe
-            artifacts/win-x64/*.exe.sha256
-          if-no-files-found: error
-      - name: Stage GitHub release for desktop acceptance
+      - name: Prepare package downloads
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           $releaseDirectory = 'artifacts\win-x64'
           $versionedSetup = Get-ChildItem -LiteralPath $releaseDirectory -File -Filter 'resodrive-win-x64-*-setup.exe'
@@ -152,8 +138,15 @@ jobs:
           if ($assets.Count -ne 8) {
             throw "Expected eight release files, found $($assets.Count)."
           }
-          gh release create $env:RELEASE_TAG $assets.FullName `
-            --draft --verify-tag --notes-file RELEASE_NOTES.md --title "ResoDrive $env:RELEASE_TAG"
-          if ($LASTEXITCODE -ne 0) {
-            throw "GitHub release creation failed with exit code $LASTEXITCODE."
-          }
+      - name: Preserve packages for desktop acceptance
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: resodrive-${{ github.ref_name }}
+          path: |
+            artifacts/win-x64/*.zip
+            artifacts/win-x64/*.zip.sha256
+            artifacts/win-x64/*.msi
+            artifacts/win-x64/*.msi.sha256
+            artifacts/win-x64/*.exe
+            artifacts/win-x64/*.exe.sha256
+          if-no-files-found: error

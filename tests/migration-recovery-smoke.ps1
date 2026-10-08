@@ -31,14 +31,22 @@ try {
         [IO.Path]::GetFullPath($oldData) -ine (Join-Path $local 'rdrive')) { throw 'Unexpected fixture paths.' }
     [IO.Directory]::Move($newData, $oldData)
     $env:RDRIVE_DATA_DIR = $oldData
-    gh release download v0.3.35 --dir $evidence --pattern 'resodrive-win-x64-0.3.35.msi*'
-    if ($LASTEXITCODE -ne 0) { throw 'Could not download the withdrawn recovery baseline.' }
-    $baseline = Join-Path $evidence 'resodrive-win-x64-0.3.35.msi'
+    # Keep the exact withdrawn binary independent of GitHub release visibility.
+    # This pinned tagged-build artifact must never be replaced with a rebuild.
+    $baselineDirectory = Join-Path $evidence 'baseline'
+    gh run download 37784471088 --name 'resodrive-v0.3.35' --dir $baselineDirectory
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not download the exact .35 recovery baseline from its tagged Actions build. Restore the archived baseline; do not substitute a rebuilt binary.'
+    }
+    $baseline = Join-Path $baselineDirectory 'resodrive-win-x64-0.3.35.msi'
     $expected = (Get-Content "$baseline.sha256" -Raw).Split(' ', [StringSplitOptions]::RemoveEmptyEntries)[0].Trim()
-    if ((Get-FileHash $baseline).Hash -ine $expected) { throw 'Recovery baseline hash mismatch.' }
+    $pinnedMsiHash = 'CE77B0FC9240B3D1AE45567A7B270F7888234255245C3662A4E25C8F2EB1AE66'
+    if ($expected -ine $pinnedMsiHash -or (Get-FileHash $baseline).Hash -ine $pinnedMsiHash) { throw 'Recovery baseline hash mismatch.' }
     $baselineInstall = Start-Process msiexec.exe -ArgumentList @('/i', ('"' + $baseline + '"'), '/qn', '/norestart',
         ('RDRIVE_DATA_ROOT="' + $oldData + '\."'), '/l*v', ('"' + $evidence + '\baseline.log"')) -Wait -PassThru
     try { if ($baselineInstall.ExitCode -ne 0) { throw 'Recovery baseline installation failed.' } } finally { $baselineInstall.Dispose() }
+    $pinnedExeHash = '4A03ECAE7DC1DFAA8BD30939BD8CB61E52EC4FC26BD521A1D8DC9A65CC3D5C4B'
+    if ((Get-FileHash $installedApp).Hash -ine $pinnedExeHash) { throw 'The installed recovery baseline differs from the withdrawn .35 executable.' }
     # Reproduce .35's post-handoff state: current program path, old data root,
     # and a running app/host. These are the baseline's actual failure-fallback
     # flags: defer the move and suppress its automatic second helper attempt.
@@ -79,6 +87,7 @@ try {
         if ((Get-FileHash (Join-Path $newData $name)).Hash -ine $hashes[$name]) { throw "Recovery changed preserved file: $name" }
     }
     [ordered]@{ PriorVersion = '0.3.35'; InstalledVersion = (Get-Item $installedApp).VersionInfo.ProductVersion;
+        BaselineRun = 37784471088; BaselineMsiSha256 = $pinnedMsiHash; BaselineExeSha256 = $pinnedExeHash;
         PendingDefaultDataMoved = $true; ReadyWindowAcknowledged = $true; PreviousFailureReplaced = $true;
         SettingsCacheAndCredentialBytesPreserved = $true;
         SetupSha256 = (Get-FileHash $setup).Hash; InstalledExeSha256 = (Get-FileHash $installedApp).Hash } |

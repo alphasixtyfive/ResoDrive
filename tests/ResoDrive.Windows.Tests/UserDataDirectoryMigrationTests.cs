@@ -133,6 +133,7 @@ public sealed class UserDataDirectoryMigrationTests : IDisposable
         const string networkPath = @"\\server\rdrive\archive";
         // Traversal resolves outside our root and must remain an external value.
         var outsidePath = Source.Replace('\\', '/') + "/../other/data";
+        var prefixSibling = Source.Replace('\\', '/') + "-archive/data";
         await File.WriteAllTextAsync(Path.Combine(Source, "settings.json"), JsonSerializer.Serialize(new
         {
             mounts = new[] { new { target = new { directoryPath = dataPath }, syncJobs = new[] {
@@ -140,8 +141,15 @@ public sealed class UserDataDirectoryMigrationTests : IDisposable
         }));
         await File.WriteAllTextAsync(Path.Combine(Source, "ownership.json"), JsonSerializer.Serialize(new[]
         {
-            new { executablePath = programPath, target = dataPath, arguments = new[] { dataPath, programPath, externalPath, remotePath, networkPath } }
+            new { executablePath = programPath, target = dataPath, arguments = new[] { dataPath, programPath, externalPath, remotePath, networkPath,
+                prefixSibling, Source.Replace('\\', '/'), InstallationDirectories.Legacy.Replace('\\', '/') } }
         }));
+        await File.WriteAllTextAsync(Path.Combine(Source, "mount-upload-recovery.json"), JsonSerializer.Serialize(new[]
+        {
+            new { metadataPath = dataPath, arguments = new[] { dataPath, programPath, externalPath, remotePath, networkPath } }
+        }));
+        foreach (var name in new[] { "settings.json", "ownership.json", "mount-upload-recovery.json" })
+            File.Copy(Path.Combine(Source, name), Path.Combine(Source, name + ".bak"));
 
         await new UserDataDirectoryMigration(Source, Destination).MigrateAsync(_ => Task.CompletedTask);
 
@@ -155,8 +163,16 @@ public sealed class UserDataDirectoryMigrationTests : IDisposable
         var ownership = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(Destination, "ownership.json")))![0]!;
         Assert.Equal(expectedProgramPath, ownership["executablePath"]!.GetValue<string>());
         Assert.Equal(expectedDataPath, ownership["target"]!.GetValue<string>());
-        Assert.Equal(new[] { expectedDataPath, expectedProgramPath, externalPath, remotePath, networkPath },
+        Assert.Equal(new[] { expectedDataPath, expectedProgramPath, externalPath, remotePath, networkPath, prefixSibling,
+                Destination, InstallationDirectories.Current },
             ownership["arguments"]!.AsArray().Select(argument => argument!.GetValue<string>()));
+        var recovery = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(Destination, "mount-upload-recovery.json")))![0]!;
+        Assert.Equal(expectedDataPath, recovery["metadataPath"]!.GetValue<string>());
+        Assert.Equal(new[] { expectedDataPath, expectedProgramPath, externalPath, remotePath, networkPath },
+            recovery["arguments"]!.AsArray().Select(argument => argument!.GetValue<string>()));
+        foreach (var name in new[] { "settings.json", "ownership.json", "mount-upload-recovery.json" })
+            Assert.Equal(await File.ReadAllBytesAsync(Path.Combine(Destination, name)),
+                await File.ReadAllBytesAsync(Path.Combine(Destination, name + ".bak")));
     }
 
     [Fact]

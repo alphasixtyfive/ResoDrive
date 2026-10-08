@@ -8,6 +8,11 @@ public sealed class UserDataDirectoryMigration
 {
     private sealed record Journal(Guid Id, string Source, string Destination, string Phase);
     private const string MarkerName = ".directory-migration.json";
+    private static readonly string[] MigratedJsonFiles =
+    [
+        "settings.json", "settings.json.bak", "mount-upload-recovery.json",
+        "mount-upload-recovery.json.bak", "ownership.json", "ownership.json.bak"
+    ];
     private readonly string _source;
     private readonly string _destination;
     private readonly string _stateDirectory;
@@ -143,7 +148,7 @@ public sealed class UserDataDirectoryMigration
 
     private void RewritePaths()
     {
-        foreach (var name in new[] { "settings.json", "settings.json.bak", "mount-upload-recovery.json", "mount-upload-recovery.json.bak", "ownership.json", "ownership.json.bak" })
+        foreach (var name in MigratedJsonFiles)
         {
             var path = Path.Combine(_destination, name);
             if (!File.Exists(path)) continue;
@@ -217,7 +222,7 @@ public sealed class UserDataDirectoryMigration
 
     private static void ValidateJson(string directory)
     {
-        foreach (var name in new[] { "settings.json", "settings.json.bak", "mount-upload-recovery.json", "mount-upload-recovery.json.bak", "ownership.json", "ownership.json.bak" })
+        foreach (var name in MigratedJsonFiles)
         {
             var path = Path.Combine(directory, name);
             if (!File.Exists(path)) continue;

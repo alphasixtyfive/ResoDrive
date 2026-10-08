@@ -47,17 +47,25 @@ public repository before publishing.
 4. Commit the release and create an annotated tag matching the version exactly,
    for example `git tag -a v0.3.0 -m "ResoDrive 0.3.0"`.
 5. Push the commit and tag. The Release workflow rebuilds and tests from the tag,
-   uploads the versioned ZIP, MSI, setup executable, SHA-256 files, and stable
-   `ResoDrive-Setup.exe` download, then creates a draft GitHub release.
-6. Download the draft's assets and verify their SHA-256 sidecars. Complete the
+   then uploads an Actions artifact named `resodrive-<tag>` containing the
+   versioned ZIP, MSI, setup executable, SHA-256 files, and stable
+   `ResoDrive-Setup.exe` download. It creates no GitHub release or draft.
+6. Download that successful tagged run's artifact and verify all eight files and
+   their SHA-256 sidecars. Record the run, tag, commit and package hashes. Complete the
    desktop UAC and actual prior-version updater checks using those exact assets.
    Record installer outcome, installed commit and preservation of account data.
    Do not rebuild or replace the accepted assets.
    Use the exact Setup as well when a legacy bundle remains on the test PC.
    Confirm its native migration removes the old bundle without removing the
    current MSI, changing user data, or retaining its own bundle registration.
-7. Publish the accepted draft and mark it latest. Confirm that Settings >
-   Components > ResoDrive discovers the published version.
+   The owner performs their production upgrade manually. For the .35 correction,
+   confirm their existing data has moved and the app opens correctly before
+   publication; isolated fixtures alone do not establish that recovery.
+7. Create one final public GitHub release from the accepted eight files, using
+   `gh release create <tag> <files> --verify-tag --latest --notes-file RELEASE_NOTES.md`.
+   Use the notes from the accepted tag. Do not create intermediate draft releases.
+   Verify uploaded asset hashes against the accepted files, then confirm that
+   Settings > Components > ResoDrive discovers the published version.
 
 GitHub Actions are pinned to immutable commit hashes. Dependabot proposes action
 and NuGet updates for review.
@@ -79,11 +87,21 @@ in the remote-wipe boundary test. Keep the actual ownership checks unchanged.
 Read the [September 2026 installer incident](INSTALLER-INCIDENT-2026-09.md)
 before changing installer shutdown, IPC security, or updater handoff code.
 
+The .35 recovery check uses its exact withdrawn MSI from a pinned successful
+Actions run rather than a draft release. Actions artifacts expire according to
+repository retention settings; a pinned run ID does not preserve its files
+indefinitely. Retain the baseline MSI and checksum in a trusted archive before
+expiry. If the pinned artifact becomes unavailable, fail the check and restore
+those exact hash-verified files to a new Actions artifact, updating the pinned
+run and expected hashes through review. A rebuild from the immutable .35 tag is
+a different test baseline and needs explicit revalidation; do not silently
+substitute it for the installer users received.
+
 An elevated CI runner alone cannot prove that a normal user's app can be upgraded.
 From an **unelevated** Windows PowerShell session, run the isolated reproduction:
 
 ```powershell
-./tests/elevation-smoke.ps1 -PreviousAppPath 'C:\Program Files\rdrive\resodrive.exe' -NewAppPath './artifacts/win-x64/resodrive/resodrive.exe'
+./tests/elevation-smoke.ps1 -PreviousAppPath 'C:\Program Files\ResoDrive\resodrive.exe' -NewAppPath '<accepted artifact executable>'
 ```
 
 The test copies the old single-file app, creates disposable settings and cache,

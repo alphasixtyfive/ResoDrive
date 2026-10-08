@@ -46,13 +46,23 @@ try {
     try { if ($prepare.ExitCode -ne 0) { throw 'The old app did not close safely.' } } finally { $prepare.Dispose() }
     if (-not $parent.WaitForExit(15000)) { throw 'The old window remains.' }
     Wait-VisibleSetup $helper '' (Join-Path $evidence 'setup-ui.json') -Passive
-    if ($helper.ExitCode -ne 0) { throw "Setup updater failed: $(Get-Content $outcome -Raw)" }
-    $receipt = Get-Content $outcome -Raw | ConvertFrom-Json
-    if (-not $receipt.Finalized -or -not $receipt.RelaunchAcknowledged -or $receipt.Status -ne 'succeeded') { throw 'Updater did not confirm the actual reopened app.' }
+    # The reopened UI consumes its finalized receipt. The actual current helper
+    # returns zero only after both installer success and a real ready-window ACK;
+    # requiring the transient receipt afterward races that normal UI behavior.
+    if ($helper.ExitCode -ne 0) { throw "Setup updater failed with code $($helper.ExitCode). See the retained installer logs." }
     $newApp = Join-Path $newInstall 'resodrive.exe'
     if ((Get-FileHash $newApp).Hash -ne (Get-FileHash $candidate).Hash) { throw 'Installed executable mismatch.' }
     if ((Get-FileHash $settings).Hash -ne $settingsHash) { throw 'Custom-root settings changed.' }
+    # A second activation must reach the already reopened window. A process
+    # that starts a fresh window instead stays running and fails this check.
+    $show = Start-Process $newApp -ArgumentList '--show' -WindowStyle Hidden -PassThru
+    try {
+        if (-not $show.WaitForExit(120000) -or $show.ExitCode -ne 0) {
+            throw 'The actual reopened app did not acknowledge its ready window.'
+        }
+    } finally { $show.Dispose() }
     [ordered]@{ Version = $version; BrandedSetup = $true; ActualCurrentUpdater = $true; CustomRootPreserved = $true;
+        UpdaterExitCode = $helper.ExitCode; ReadyWindowAcknowledged = $true;
         SetupSha256 = (Get-FileHash $setup).Hash; InstalledExeSha256 = (Get-FileHash $newApp).Hash } |
         ConvertTo-Json | Set-Content (Join-Path $evidence 'result.json')
     $installed = Get-ChildItem 'HKLM:/Software/Microsoft/Windows/CurrentVersion/Uninstall' | Get-ItemProperty |

@@ -109,8 +109,7 @@ internal static partial class DirectoryMigrationStartup
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or
             System.ComponentModel.Win32Exception or TimeoutException or JsonException)
         {
-            _ = UserDataDirectoryMigration.PrepareHelperDirectory();
-            WriteResult(false, RecoveryToolsService.Sanitize(exception.Message));
+            RecordHandoffFailure(exception);
             return 1;
         }
     }
