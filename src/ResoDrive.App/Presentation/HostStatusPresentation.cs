@@ -10,4 +10,3 @@ internal static class HostStatusPresentation
     public static bool HasUsableSyncStatus(HostResponse response) =>
         HasUsableMountStatus(response) && response.SyncJobs is not null;
 }
-

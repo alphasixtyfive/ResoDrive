@@ -152,4 +152,3 @@ public sealed partial class ShellViewModel : NotifyBase
     }
 
 }
-

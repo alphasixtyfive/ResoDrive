@@ -30,4 +30,3 @@ internal static class StatusPalette
         return brush;
     }
 }
-

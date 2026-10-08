@@ -140,4 +140,3 @@ public sealed class SyncRow : NotifyBase
         Changed(nameof(ActionAccessibleName));
     }
 }
-

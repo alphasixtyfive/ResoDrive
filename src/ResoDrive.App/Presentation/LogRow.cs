@@ -30,4 +30,3 @@ public sealed record LogRow(
         _ => "\uE946"
     };
 }
-

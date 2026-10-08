@@ -267,4 +267,3 @@ public sealed class MountRow : NotifyBase
         secondary.Length == 0 || primary == secondary ? primary
             : primary.Length == 0 ? secondary : $"{primary} · {secondary}";
 }
-
