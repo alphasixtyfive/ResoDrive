@@ -1,9 +1,14 @@
 # Changelog
 
-## [0.3.41] - 2026-10-08 (release candidate)
+## [0.3.42] - 2026-10-09 (release candidate)
 
 - Check each installation directory once, including paths supplied by Windows Installer with a trailing dot.
 - Skip waiting for an absent background host while retaining process, account and cached-upload safety checks.
+- Finish migration when the previous updater exits during process inspection, while continuing to reject live helpers whose identity cannot be verified.
+
+## [0.3.41] - 2026-10-08 (unpublished verification build)
+
+- Verify isolated recovery tests and retain the diagnosed legacy-helper exit-race correction for the final candidate.
 
 ## [0.3.40] - 2026-10-08 (unpublished verification build)
 

@@ -348,3 +348,36 @@ parallel workload, while retaining clean/dirty recovery assertions and adding
 the actual status to failures. The new source still requires its own complete
 build and native package acceptance; a passing 0.3.40 tagged test run cannot
 substitute for the failed CI result.
+
+The tagged 0.3.40 native run also installed successfully and acknowledged its
+reopened migration window, but relocation then failed with Windows error 299
+(partial process-memory read). The earlier profile-conflict receipt belonged to
+the deliberate rollback check, not this failure. The new preparation action took
+under one second; the frozen 0.3.30 removal still took 15 seconds. Removing the
+empty waits exposed process inspection racing with the old updater's exit.
+
+Candidate 0.3.41 retained that boundary and remains unpublished even though its
+native checks subsequently passed. Candidate 0.3.42 retains the same process
+handle while inspecting a helper, ignores inspection errors only after confirmed
+exit, and permits one kernel exit wait of up to one second for error 299. A live
+or unverifiable helper still blocks relocation; access denial gets no wait.
+Twelve real-process regression cases cover these boundaries, including a freshly
+discovered process and exclusion of other sessions before handle acquisition. No image-read retry,
+process termination or weaker account check was added.
+
+### Final 0.3.42 local checks and unattended acceptance scope
+
+The final source passed the complete Windows build, MSI validation and Setup
+build with zero warnings/errors: 1,177 tests passed and three optional integration
+tests were skipped. All 343 application tests also passed with one available CPU.
+The disposable process check passed populated window rendering, simultaneous
+launch, tray/show acknowledgement, host recovery and relaunch.
+
+The owner explicitly requested unattended testing and publication, followed by
+withdrawal of the previous download. Their production installation remains
+untouched. Windows requires interactive consent on the secure desktop, so a
+fresh 0.3.42 desktop UAC check is not included. The recorded 0.3.39 desktop UAC
+result is historical evidence, not acceptance of the new helper. This owner
+instruction overrides the fresh desktop participation/publication ordering in
+the release procedure; all automated native gates still apply to the exact new
+tagged assets. No UAC policy or upload/account protection was bypassed.

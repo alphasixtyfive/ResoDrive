@@ -132,14 +132,10 @@ internal static partial class DirectoryMigrationStartup
                 var retained = false;
                 try
                 {
-                    if (process.HasExited || process.SessionId != current.SessionId) continue;
-                    if (process.MainModule?.FileName is not { } path) throw new IOException("An update helper's executable identity could not be verified.");
-                    if (!InstallationDirectories.SamePath(path, expected)) continue;
-                    CurrentUserPipe.ValidateProcessIdentity(process.Id);
+                    if (!IsLegacyHelper(process, expected, current.SessionId)) continue;
                     result.Add(process);
                     retained = true;
                 }
-                catch (InvalidOperationException) when (process.HasExited) { }
                 finally { if (!retained) process.Dispose(); }
             }
             return new(result);
@@ -148,6 +144,54 @@ internal static partial class DirectoryMigrationStartup
         {
             foreach (var process in result) process.Dispose();
             throw;
+        }
+    }
+
+    internal static bool IsLegacyHelper(Process process, string expectedPath, int sessionId,
+        Func<Process, string?>? readExecutablePath = null, Func<Process, int, bool>? waitForExit = null)
+    {
+        try
+        {
+            if (process.HasExited || process.SessionId != sessionId) return false;
+            // Process retains this handle until disposal, preventing PID reuse from
+            // changing the identity checked below or the process waited on at exit.
+            _ = process.SafeHandle;
+            if (process.HasExited) return false;
+            var path = readExecutablePath is null ? process.MainModule?.FileName : readExecutablePath(process);
+            if (path is null)
+            {
+                if (process.HasExited) return false;
+                throw new IOException("An update helper's executable identity could not be verified.");
+            }
+            if (!InstallationDirectories.SamePath(path, expectedPath)) return false;
+            CurrentUserPipe.ValidateProcessIdentity(process.Id);
+            return true;
+        }
+        catch (Exception exception) when (
+            (exception is System.ComponentModel.Win32Exception or InvalidOperationException or UnauthorizedAccessException) &&
+            HelperHasConfirmedExit(process, exception is System.ComponentModel.Win32Exception { NativeErrorCode: 299 }, waitForExit))
+        {
+            // The same process exited during image/account inspection. An unreadable
+            // live helper still blocks migration; no process is guessed or terminated.
+            return false;
+        }
+    }
+
+    private static bool HelperHasConfirmedExit(Process process, bool allowPartialCopyExitWait,
+        Func<Process, int, bool>? waitForExit)
+    {
+        try
+        {
+            // ERROR_PARTIAL_COPY can occur while a helper unloads its modules just
+            // before kernel exit. Wait once on the retained handle; never retry the
+            // image read or treat a still-live unreadable process as safe to ignore.
+            if (process.HasExited) return true;
+            if (!allowPartialCopyExitWait) return false;
+            return waitForExit is null ? process.WaitForExit(1000) : waitForExit(process, 1000);
+        }
+        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            return false; // Preserve the original inspection failure if exit is unverifiable.
         }
     }
 
