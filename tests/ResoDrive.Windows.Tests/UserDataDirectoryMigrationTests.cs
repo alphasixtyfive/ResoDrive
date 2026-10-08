@@ -119,6 +119,46 @@ public sealed class UserDataDirectoryMigrationTests : IDisposable
         Assert.Contains("2", await File.ReadAllTextAsync(Path.Combine(Destination, "settings.json")), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Migration_RemapsAlternateWindowsSeparatorsAndPreservesExternalValues(bool mixedSeparators)
+    {
+        Directory.CreateDirectory(Source);
+        var dataPath = Source.Replace('\\', '/') + (mixedSeparators ? "\\custom/subdirectory" : "/custom/subdirectory");
+        var programPath = InstallationDirectories.Legacy.Replace('\\', '/') +
+            (mixedSeparators ? "\\tools/rclone.exe" : "/tools/rclone.exe");
+        const string externalPath = "D:/Personal\\rdrive-documents";
+        const string remotePath = "remote:rdrive/archive";
+        const string networkPath = @"\\server\rdrive\archive";
+        // Traversal resolves outside our root and must remain an external value.
+        var outsidePath = Source.Replace('\\', '/') + "/../other/data";
+        await File.WriteAllTextAsync(Path.Combine(Source, "settings.json"), JsonSerializer.Serialize(new
+        {
+            mounts = new[] { new { target = new { directoryPath = dataPath }, syncJobs = new[] {
+                new { localPath = dataPath }, new { localPath = externalPath }, new { localPath = outsidePath } } } }
+        }));
+        await File.WriteAllTextAsync(Path.Combine(Source, "ownership.json"), JsonSerializer.Serialize(new[]
+        {
+            new { executablePath = programPath, target = dataPath, arguments = new[] { dataPath, programPath, externalPath, remotePath, networkPath } }
+        }));
+
+        await new UserDataDirectoryMigration(Source, Destination).MigrateAsync(_ => Task.CompletedTask);
+
+        var expectedDataPath = Path.Combine(Destination, "custom", "subdirectory");
+        var expectedProgramPath = Path.Combine(InstallationDirectories.Current, "tools", "rclone.exe");
+        var settings = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(Destination, "settings.json")))!;
+        Assert.Equal(expectedDataPath, settings["mounts"]![0]!["target"]!["directoryPath"]!.GetValue<string>());
+        Assert.Equal(expectedDataPath, settings["mounts"]![0]!["syncJobs"]![0]!["localPath"]!.GetValue<string>());
+        Assert.Equal(externalPath, settings["mounts"]![0]!["syncJobs"]![1]!["localPath"]!.GetValue<string>());
+        Assert.Equal(outsidePath, settings["mounts"]![0]!["syncJobs"]![2]!["localPath"]!.GetValue<string>());
+        var ownership = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(Destination, "ownership.json")))![0]!;
+        Assert.Equal(expectedProgramPath, ownership["executablePath"]!.GetValue<string>());
+        Assert.Equal(expectedDataPath, ownership["target"]!.GetValue<string>());
+        Assert.Equal(new[] { expectedDataPath, expectedProgramPath, externalPath, remotePath, networkPath },
+            ownership["arguments"]!.AsArray().Select(argument => argument!.GetValue<string>()));
+    }
+
     [Fact]
     public async Task Migration_LeavesUnchangedSettingsAndBackupByteIdentical()
     {

@@ -165,11 +165,16 @@ public sealed class ApplicationUpdateHandoffTests
         Assert.Equal(request.SourceExecutablePath, runtime.StartedPath);
     }
 
-    [Fact]
-    public async Task CompleteAsync_RecordsInstallerFailureAndRelaunchesApplication()
+    [Theory]
+    [InlineData(".msi", ".msi.log")]
+    [InlineData("-setup.exe", ".setup.log")]
+    public async Task CompleteAsync_RecordsInstallerFailureAndRelaunchesApplication(string installerSuffix, string logSuffix)
     {
         using var directory = new TemporaryDirectory();
-        var request = Request(directory.Path);
+        var request = Request(directory.Path) with
+        {
+            InstallerPath = Path.Combine(directory.Path, "update" + installerSuffix),
+        };
         var runtime = new FakeRuntime { InstallerExitCode = 1603, ReadyAcknowledged = true };
 
         var exitCode = await ApplicationUpdateHandoff.CompleteAsync(request, runtime);
@@ -181,6 +186,10 @@ public sealed class ApplicationUpdateHandoffTests
         Assert.True(outcome.RelaunchAcknowledged);
         Assert.True(outcome.Finalized);
         Assert.Contains("1603", outcome.Message, StringComparison.Ordinal);
+        var actualLog = Path.ChangeExtension(request.InstallerPath, logSuffix);
+        Assert.Contains(actualLog, outcome.Message, StringComparison.Ordinal);
+        Assert.Contains('"' + actualLog + '"', ApplicationUpdateHandoff.CreateInstallerStartInfo(request.InstallerPath).Arguments,
+            StringComparison.Ordinal);
         Assert.Equal(request.SourceExecutablePath, runtime.StartedPath);
     }
 

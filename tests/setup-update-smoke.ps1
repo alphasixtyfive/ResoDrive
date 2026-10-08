@@ -62,6 +62,22 @@ try {
     try { if ($remove.ExitCode -ne 0) { throw 'Updated app removal failed.' } } finally { $remove.Dispose() }
     Write-Output 'Setup updater acceptance passed: one branded progress window, current helper, reopened app and custom-root preservation.'
 } finally {
+    # Keep the installer and handoff diagnostics available to the workflow even
+    # when Setup fails. Never collect account configuration or credential files.
+    if (Test-Path -LiteralPath $updates) {
+        $diagnostics = @(Get-ChildItem -LiteralPath $updates -File -Filter '*.log')
+        foreach ($name in @('application-update-result.json', 'application-update-result.json.tmp', 'installer-preparation.json')) {
+            $path = Join-Path $updates $name
+            if (Test-Path -LiteralPath $path -PathType Leaf) {
+                $diagnostics += Get-Item -LiteralPath $path
+            }
+        }
+        foreach ($file in $diagnostics) {
+            $name = if ($file.Name -eq 'application-update-result.json.tmp') { 'application-update-result-staged.json' } else { $file.Name }
+            try { Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $evidence $name) -Force }
+            catch { Write-Warning "Could not preserve updater diagnostic $name." }
+        }
+    }
     $env:RDRIVE_DATA_DIR = $previousRoot
     if ($parent) { $parent.Dispose() }
     if ($helper) { $helper.Dispose() }

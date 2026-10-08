@@ -254,7 +254,7 @@ internal static class ApplicationUpdateHandoff
                 if (preparation is not null)
                     message += " " + preparation;
                 message += " See the installer log at " +
-                    Path.ChangeExtension(request.InstallerPath, ".msi.log") + ".";
+                    InstallerLogPath(request.InstallerPath) + ".";
             }
         }
         catch (Win32Exception exception) when (exception.NativeErrorCode == ErrorCancelled)
@@ -467,19 +467,22 @@ internal static class ApplicationUpdateHandoff
     internal static ProcessStartInfo CreateInstallerStartInfo(string installerPath)
     {
         var setup = Path.GetExtension(installerPath).Equals(".exe", StringComparison.OrdinalIgnoreCase);
-        var logPath = Path.ChangeExtension(installerPath, ".msi.log");
+        var logPath = InstallerLogPath(installerPath);
         var dataRoot = new ApplicationPaths().Root;
         return new ProcessStartInfo
         {
             FileName = setup ? installerPath : Path.Combine(Environment.SystemDirectory, "msiexec.exe"),
             Arguments = setup
-                ? $"/passive /norestart /log \"{Path.ChangeExtension(installerPath, ".setup.log")}\" ResoDriveDataRoot=\"{Path.TrimEndingDirectorySeparator(dataRoot)}\\.\""
+                ? $"/passive /norestart /log \"{logPath}\" ResoDriveDataRoot=\"{Path.TrimEndingDirectorySeparator(dataRoot)}\\.\""
                 : $"/i \"{installerPath}\" /passive /norestart /l*v \"{logPath}\" RDRIVE_DATA_ROOT=\"{Path.TrimEndingDirectorySeparator(dataRoot)}\\.\"",
             UseShellExecute = true,
             Verb = "runas",
             WorkingDirectory = Path.GetDirectoryName(installerPath),
         };
     }
+
+    private static string InstallerLogPath(string installerPath) => Path.ChangeExtension(installerPath,
+        Path.GetExtension(installerPath).Equals(".exe", StringComparison.OrdinalIgnoreCase) ? ".setup.log" : ".msi.log");
 
     private static bool IsExpectedInstallerPath(string path, string directory, string version) =>
         path.Equals(Path.Combine(directory, $"resodrive-win-x64-{version}-setup.exe"), StringComparison.OrdinalIgnoreCase) ||

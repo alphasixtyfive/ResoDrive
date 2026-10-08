@@ -198,11 +198,19 @@ public sealed class UserDataDirectoryMigration
 
     private string RemapPath(string value)
     {
+        // Stored Windows paths may use either separator. Only normalize ordinary
+        // absolute drive paths, leaving remote arguments and external values exact.
+        if (value.Length < 3 || !char.IsAsciiLetter(value[0]) || value[1] != ':' || value[2] is not ('\\' or '/'))
+            return value;
+        string candidate;
+        try { candidate = Path.GetFullPath(value); }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        { return value; }
         foreach (var (source, destination) in new[] { (_source, _destination), (InstallationDirectories.Legacy, InstallationDirectories.Current) })
         {
-            if (value.Equals(source, StringComparison.OrdinalIgnoreCase)) return destination;
-            if (value.StartsWith(source + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                return destination + value[source.Length..];
+            if (candidate.Equals(source, StringComparison.OrdinalIgnoreCase)) return destination;
+            if (candidate.StartsWith(source + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                return destination + candidate[source.Length..];
         }
         return value;
     }
