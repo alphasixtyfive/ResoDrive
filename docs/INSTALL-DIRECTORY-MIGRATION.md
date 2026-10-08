@@ -210,8 +210,17 @@ directory and removed the old program directory. Its user-data move failed:
 the reopened app had already started drives before the second shutdown, and
 the upload/cache guard rejected that shutdown. The failed completion receipt
 was preserved, but the old implementation silently resumed against the old root.
-The .35 release was withdrawn to draft; the immutable tag and assets are retained.
+The .35 release was withdrawn and its draft was later deleted with the other
+unpublished releases. Its immutable tag remains. The exact baseline MSI and
+checksum are preserved in the original tagged Actions artifact and a verified
+local archive for recovery testing; Actions retention remains finite.
 The latest public release is .30 while the correction is being accepted.
+
+CI and the tagged Release workflow now run the full visible Setup checks directly
+and preserve their receipts. The separate draft-dependent installer UI workflow
+was removed because it duplicated those checks. The Release workflow prepares
+all eight download files as an Actions artifact for acceptance, without creating
+a GitHub draft. Only the accepted final release is published.
 
 The previous hosted migration fixture had no startup drives and did not reproduce
 this ordering. The full Setup window test also did not exercise the in-app path:

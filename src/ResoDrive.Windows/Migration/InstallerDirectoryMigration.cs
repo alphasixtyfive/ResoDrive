@@ -200,7 +200,15 @@ public static class InstallerDirectoryMigration
         }
         using var lease = Lease();
         var plan = ReadPlan();
-        if (plan is null || plan.Phase != "Committed") return;
+        if (plan is null) return;
+        if (plan.Phase == "Complete")
+        {
+            // Completion may have been recorded just before task deletion failed.
+            // Retry only our identified staging artifacts, never installation files.
+            FinishCleanupArtifacts(plan);
+            return;
+        }
+        if (plan.Phase != "Committed") return;
         if (!InstalledApplicationLocator.GetInstallationDirectories().Any(directory => InstallationDirectories.SamePath(directory, InstallationDirectories.Current)))
             throw new IOException("The migrated MSI installation could not be verified; cleanup was deferred.");
         DeleteMatching(InstallationDirectories.LegacyExecutable, plan.BridgeHash);
@@ -216,9 +224,21 @@ public static class InstallerDirectoryMigration
             if (task is not null && IsUserMigrationTask(task.Xml, profile.UserId)) store.Delete(profile.TaskName);
         }
         if (pending) return; // A signed-out user's own task completes at next sign-in.
-        WritePlan(plan with { Phase = "Complete" });
-        DeleteCleanupTask();
-        DeleteMatching(ProfilePath, plan.ProfileHash);
+        FinishCleanupArtifacts(plan);
+    }
+
+    private static void FinishCleanupArtifacts(Plan plan) => FinishCleanupArtifacts(
+        plan.Phase == "Complete",
+        () => DeleteMatching(ProfilePath, plan.ProfileHash),
+        () => WritePlan(plan with { Phase = "Complete" }),
+        DeleteCleanupTask);
+
+    internal static void FinishCleanupArtifacts(bool completed, Action removeStagedProfile, Action recordComplete, Action removeTask)
+    {
+        // Keep the retry task until profile cleanup and durable completion succeed.
+        removeStagedProfile();
+        if (!completed) recordComplete();
+        removeTask();
     }
 
     private static bool LegacyHandoffRunning()
