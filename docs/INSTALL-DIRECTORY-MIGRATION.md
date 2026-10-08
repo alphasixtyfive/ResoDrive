@@ -265,6 +265,9 @@ downloaded portable executable. Setup hash:
 `3546D01E5087E53ED6AB1EB96E9275FDFB957E4047507ADF77E70E603799F66B`.
 MSI hash: `A94B95D71BFB6760ED8357E0BA4DF2FBCFB5DABA7E00710ED9F442BF2BEBCAD4`.
 Executable hash: `0DB62167A9A1A6332115741EE3CED6132EFA3A73029523247632F9A8EE532EBD`.
+That downloaded executable also passed isolated desktop process smoke: populated
+drive rendering, simultaneous startup, tray/show acknowledgement, host recovery
+and relaunch.
 
 The desktop UAC preparation test used a copied .35 host and disposable data,
 but elevation was cancelled before its helper started. It is not a passing UAC
