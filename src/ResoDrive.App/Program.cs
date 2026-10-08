@@ -10,6 +10,9 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == DirectoryMigrationStartup.CleanupArgument)
+            return int.TryParse(args[1], out var migrationParent)
+                ? DirectoryMigrationStartup.CleanupHelperAsync(migrationParent).GetAwaiter().GetResult() : 2;
         if (args.Length == 1 && args[0] == "--inspect-installation")
         {
             Console.Out.WriteLine(System.Text.Json.JsonSerializer.Serialize(InstalledApplicationLocator.GetInstallationDirectories()));

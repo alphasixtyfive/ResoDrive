@@ -39,6 +39,7 @@ the data root and to the old program path to survive the old updater's handoff.
    activation request to the real new window. Once the old update helper exits,
    a user helper safely closes the reopened app, migrates its data and restarts
    it at the new root. Readiness requires a real window acknowledgement.
+   The installed app removes the temporary user helper after that helper exits.
 5. A temporary SYSTEM cleanup task waits for old updater/launcher processes to
    exit, verifies the registered new MSI and removes the hash-matched old launcher
    and deployment profile. It removes the old program directory only when empty.
@@ -95,18 +96,30 @@ development artifacts or bypass upload protection to obtain a passing result.
 ### Local implementation checks (2026-10-08)
 
 - Windows build, MSI validation and Setup build: passed with zero warnings/errors.
-- Core/Windows/application tests: 1,057 passed, three optional integration tests
+- Core/Windows/application tests: 1,091 passed, three optional integration tests
   skipped (two real-rclone cases and the hosted-MSI catalog case).
-- Application tests with `DOTNET_PROCESSOR_COUNT=1`: 291 passed.
+- Application tests with `DOTNET_PROCESSOR_COUNT=1`: 303 passed.
 - Isolated process smoke: passed window rendering, simultaneous launch, tray/show
   acknowledgement, host recovery and relaunch. It uses a custom disposable root.
 - Real UAC preparation smoke against a copied public 0.3.30 unelevated host:
   passed, preserving settings/cache hashes. This checks the shutdown boundary;
   subsequent migration-only edits passed the complete build/test suite.
 - Read-only native MSI AppSearch: found `C:\Program Files\rdrive\` correctly.
-- Current development MSI versus the accepted 0.3.30 MSI: 77,824 additional bytes
-  (76 KiB, about 0.22%). Compression can vary this slightly between builds.
+- Development MSI including diagnostics and connection improvements versus the
+  accepted 0.3.30 MSI: 180,224 additional bytes (176 KiB, about 0.51%). Compression
+  can vary this slightly between builds.
 
-Machine-wide migration, old-updater first-hop, rollback and shared-user acceptance
-remain pending on disposable Windows installs. No release/tag/publication or
-production data migration was performed.
+Disposable hosted Windows runs passed native fresh install, repair, removal,
+public 0.3.30 direct-MSI upgrades and the older 0.3.20 Setup-owned transition.
+Different-account preparation refused an active foreign host, then passed after
+its owner stopped it, preserving settings/cache. A deliberate deployment-profile
+conflict restored the old executable and disabled startup task through native
+MSI rollback. That test exposed unfinished migration state blocking a subsequent
+retry; the rollback now preserves the independent destination profile and
+completes its journal, and acceptance explicitly checks both outcomes.
+
+Full old-updater first-hop, post-rollback retry, temporary-helper removal and
+second-user migration acceptance are still pending. No release/tag/publication
+or production data migration was performed. Same-session disposable account tests
+do not establish an interactive standard-user/separate-admin UAC prompt or the
+actual sign-in trigger of the second user's task.

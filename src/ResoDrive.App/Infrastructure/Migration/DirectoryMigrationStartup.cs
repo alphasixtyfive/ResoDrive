@@ -5,7 +5,7 @@ using ResoDrive.Windows;
 
 namespace ResoDrive.App;
 
-internal static class DirectoryMigrationStartup
+internal static partial class DirectoryMigrationStartup
 {
     internal const string BridgeEnvironmentVariable = "RESODRIVE_LEGACY_HANDOFF";
     internal const string CompletionArgument = "--finish-user-data-migration";
@@ -135,6 +135,7 @@ internal static class DirectoryMigrationStartup
                 if (!SingleInstanceActivation.RequestShow(App.CreateInstanceScope(InstallationDirectories.Current), TimeSpan.FromMinutes(2)))
                     throw new IOException("The migrated application did not acknowledge a ready window.");
                 WriteResult(true, "Both application and user-data locations have migrated.");
+                ScheduleHelperCleanup();
                 return 0;
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or

@@ -98,6 +98,11 @@ try {
     if ((Get-FileHash $oldApp).Hash -ine $oldHash -or (Test-Path $newApp)) { throw 'Native MSI rollback did not restore the old executable.' }
     $task = Get-ScheduledTask -TaskName $startupName
     if ($task.State -ne 'Disabled' -or $task.Actions[0].Execute -ine $oldApp) { throw 'Rollback did not restore the disabled startup task.' }
+    $plan = Get-Content (Join-Path $env:ProgramData 'ResoDriveMigration\installation.json') -Raw | ConvertFrom-Json
+    if ($plan.Phase -ne 'Complete') { throw 'Rollback did not finish its migration journal; a retry would be blocked.' }
+    if ([IO.File]::ReadAllText((Join-Path $newInstall 'profiles.json')) -cne '{"schemaVersion":2,"profiles":[],"conflict":true}') {
+        throw 'Rollback changed the independent destination profile.'
+    }
     Remove-Item -LiteralPath (Join-Path $newInstall 'profiles.json')
 
     # Initialize a signed-out account's old default root under that account's identity.
@@ -166,6 +171,7 @@ if ($Verify) {
     } 'No successful migration completion receipt for this updater handoff.'
     $receipt = Get-Content (Join-Path $local 'ResoDriveMigration\completion.json') -Raw | ConvertFrom-Json
     if (-not $receipt.Succeeded -or (Test-Path $oldData)) { throw "User migration failed: $($receipt.Message)" }
+    Wait-Until { -not (Test-Path (Join-Path $local 'ResoDriveMigration\resodrive-migration-helper.exe')) } 'The temporary user migration executable remains.'
     if ((Get-FileHash $newApp).Hash -ine (Get-FileHash $candidate).Hash) { throw 'Installed executable differs from the exact candidate.' }
     foreach ($name in $preserved.Keys) {
         if ((Get-FileHash (Join-Path $newData $name)).Hash -ine $preserved[$name]) { throw "Migration changed preserved file: $name" }
@@ -210,5 +216,13 @@ if ($Verify) {
     }
     foreach ($path in @((Join-Path $env:ProgramData 'ResoDriveMigration\failure.json'), (Join-Path $local 'ResoDriveMigration\completion.json'))) {
         if (Test-Path $path) { Copy-Item $path (Join-Path $evidence ([IO.Path]::GetFileName($path))) -Force }
+    }
+    # Preserve the first-hop outcome and MSI log even if its helper fails, rather
+    # than losing the underlying error when a later attempt updates the journal.
+    foreach ($root in @($oldData, $newData)) {
+        foreach ($name in @('application-update-result.json', "resodrive-win-x64-$version.msi.log")) {
+            $path = Join-Path $root "updates\$name"
+            if (Test-Path -LiteralPath $path) { Copy-Item -LiteralPath $path -Destination (Join-Path $evidence $name) -Force }
+        }
     }
 }

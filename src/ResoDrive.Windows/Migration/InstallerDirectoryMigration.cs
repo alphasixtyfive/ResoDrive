@@ -152,7 +152,12 @@ public static class InstallerDirectoryMigration
         if (plan.BridgeHash is not null && File.Exists(InstallationDirectories.LegacyExecutable) &&
             Hash(InstallationDirectories.LegacyExecutable) == plan.BridgeHash)
             File.Delete(InstallationDirectories.LegacyExecutable);
-        DeleteMatching(Path.Combine(InstallationDirectories.Current, "profiles.json"), plan.ProfileHash);
+        // Apply may have failed because an independent destination profile already
+        // existed. It belongs to neither this transaction nor its rollback. Keep
+        // that file and still finish the journal so a corrected retry is possible.
+        var destinationProfile = Path.Combine(InstallationDirectories.Current, "profiles.json");
+        if (plan.ProfileHash is not null && File.Exists(destinationProfile) && Hash(destinationProfile) == plan.ProfileHash)
+            File.Delete(destinationProfile);
         RemoveIfEmpty(InstallationDirectories.Legacy);
         WritePlan(plan with { Phase = "Complete" });
     }
