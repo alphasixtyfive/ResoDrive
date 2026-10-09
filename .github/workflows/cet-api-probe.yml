@@ -4,7 +4,10 @@ on:
     branches: ['fix/**']
     paths:
       - tests/CetImagePolicyProbe.ps1
+      - tests/CetImageResetProbe.ps1
       - .github/workflows/cet-api-probe.yml
+      - installer/CetPolicy.ps1
+      - tests/CetPolicyTests.ps1
 permissions:
   contents: read
 jobs:
@@ -15,6 +18,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Inspect Windows empty-filter reset behavior
+        shell: powershell
+        run: ./tests/CetImageResetProbe.ps1
       - name: Verify a narrow CET policy change preserves Windows settings
         shell: powershell
         run: ./tests/CetImagePolicyProbe.ps1 -ApplicationPath "$env:WINDIR/System32/cmd.exe"
+      - name: Verify the actual installer policy transactions
+        shell: powershell
+        run: ./tests/CetPolicyTests.ps1 -Native
