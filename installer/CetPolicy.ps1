@@ -76,12 +76,16 @@ function Load-MitigationModule {
     }
 }
 
-function Read-Policy {
+function Read-Policy([bool] $forOptOut = $false) {
     $policies = @(ProcessMitigations\Get-ProcessMitigation -Name $script:installedPath -ErrorAction Stop)
     if ($policies.Count -eq 0) { return 'NOTSET' }
     if ($policies.Count -ne 1 -or $null -eq $policies[0].UserShadowStack -or
         $null -eq $policies[0].UserShadowStack.UserShadowStack) {
         throw 'Windows could not identify the installed executable CET override.'
+    }
+    if ($forOptOut -and ($policies[0].UserShadowStack.AuditUserShadowStack.ToString() -eq 'ON' -or
+        $policies[0].UserShadowStack.UserShadowStackStrictMode.ToString() -eq 'ON')) {
+        throw 'The installed executable has CET audit or strict mode enabled by an administrator. These settings require shadow stacks and cannot be preserved with the requested CET opt-out.'
     }
     $value = $policies[0].UserShadowStack.UserShadowStack.ToString()
     if ($value -notin @('ON', 'OFF', 'NOTSET')) {
@@ -131,8 +135,8 @@ function Invoke-CetAction([string] $Action, [string] $DisableCet) {
     else {
         if ($null -ne $pending) { throw 'An earlier CET compatibility transaction is unfinished.' }
         Load-MitigationModule
-        $current = Read-Policy
         $optOut = $Action -eq 'Apply' -and $DisableCet -eq '1'
+        $current = Read-Policy $optOut
         if ($optOut) {
             # Preserve our baseline across repairs/upgrades. If an administrator
             # changed our last OFF value, their new value becomes the baseline.

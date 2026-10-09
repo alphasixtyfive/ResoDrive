@@ -28,6 +28,7 @@ function Reset-Fixture([string] $policy) {
     $script:loads = 0
     $script:unsupported = $false
     $script:failAfterPolicyWrite = $false
+    $script:conflictingOptions = $false
 }
 function Read-State([string] $name) { return $script:state[$name] }
 function Write-State([string] $name, [string] $value) { $script:state[$name] = $value; $script:writes++ }
@@ -36,7 +37,10 @@ function Load-MitigationModule {
     $script:loads++
     if ($script:unsupported) { throw 'Unsupported Windows capability.' }
 }
-function Read-Policy { return $script:policy }
+function Read-Policy([bool] $forOptOut = $false) {
+    if ($forOptOut -and $script:conflictingOptions) { throw 'Administrator CET audit or strict mode requires shadow stacks.' }
+    return $script:policy
+}
 function Write-Policy([string] $value) {
     Assert ($script:state.ContainsKey('Pending')) 'Policy changed without a durable undo record.'
     $script:policy = $value
@@ -131,6 +135,11 @@ Expect-Failure { Invoke-CetAction 'Apply' '1' }
 Assert ($script:writes -eq 0) 'An unsupported requested opt-out must fail before any write.'
 
 Reset-Fixture 'ON'
+$script:conflictingOptions = $true
+Expect-Failure { Invoke-CetAction 'Apply' '1' }
+Assert ($script:writes -eq 0 -and -not $script:state.ContainsKey('Pending')) 'A conflicting administrator CET option must fail before any write.'
+
+Reset-Fixture 'ON'
 $script:state.Baseline = '{"Schema":1,"ExecutablePath":"C:\\Other\\resodrive.exe","Original":"ON","Applied":"OFF"}'
 Expect-Failure { Invoke-CetAction 'Remove' '0' }
 Assert ($script:writes -eq 0 -and $script:loads -eq 0) 'State from another installation was accepted.'
@@ -202,20 +211,37 @@ if ($Native) {
     Import-Module $nativeModule -ErrorAction Stop
     $fixture = Join-Path ([IO.Path]::GetTempPath()) ('resodrive-cet-policy-' + [Guid]::NewGuid().ToString('N'))
     $fixtureExecutable = Join-Path $fixture 'resodrive.exe'
+    $fixtureScript = Join-Path $fixture 'CetPolicy.ps1'
+    $fixtureDiagnostic = Join-Path $fixture 'cet-policy-error.txt'
     $null = New-Item -ItemType Directory -Path $fixture
     Copy-Item -LiteralPath (Join-Path $systemDirectory 'cmd.exe') -Destination $fixtureExecutable
+    Copy-Item -LiteralPath $source -Destination $fixtureScript
 
     function Invoke-NativeAction([string] $operation, [string] $disable = '0') {
-        & $nativePowerShell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $source `
-            -Action $operation -ExecutablePath $fixtureExecutable -DisableCet $disable
-        if ($LASTEXITCODE -ne 0) { throw "Native CET action $operation failed with exit $LASTEXITCODE." }
+        Write-Host "Native CET action: $operation DisableCet=$disable"
+        if ([IO.File]::Exists($fixtureDiagnostic)) { [IO.File]::Delete($fixtureDiagnostic) }
+        $actionErrorPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue' # Collect the child's specific error and exit status.
+            & $nativePowerShell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $fixtureScript `
+                -Action $operation -ExecutablePath $fixtureExecutable -DisableCet $disable -DiagnosticPath $fixtureDiagnostic
+            $actionExit = $LASTEXITCODE
+        }
+        finally { $ErrorActionPreference = $actionErrorPreference }
+        if ($actionExit -ne 0) {
+            $reason = if ([IO.File]::Exists($fixtureDiagnostic)) { [IO.File]::ReadAllText($fixtureDiagnostic) } else { 'No diagnostic receipt.' }
+            throw "Native CET action $operation failed with exit ${actionExit}: $reason"
+        }
     }
     function Assert-NativePolicy([string] $cet) {
         $actual = ProcessMitigations\Get-ProcessMitigation -Name $fixtureExecutable -ErrorAction Stop
+        Write-Host ('Native policy readback: ' + (ConvertTo-Json -InputObject $actual -Depth 4 -Compress))
         Assert ($null -ne $actual -and $actual.UserShadowStack.UserShadowStack.ToString() -eq $cet) 'Native CET readback did not match the requested state.'
         Assert ($actual.Cfg.Enable.ToString() -eq 'ON') 'A different administrator mitigation was overwritten.'
-        Assert ($actual.UserShadowStack.AuditUserShadowStack.ToString() -eq 'ON') 'A different CET option was overwritten.'
+        Assert ($actual.UserShadowStack.AuditUserShadowStack.ToString() -eq 'NOTSET') 'A different CET option was overwritten.'
     }
+    $nativeFailure = $null
+    $cleanupFailures = New-Object 'Collections.Generic.List[string]'
     try {
         Invoke-NativeAction 'Apply' '0'
         $afterDefault = $nativeRegistry.OpenSubKey($nativeStatePath)
@@ -223,7 +249,10 @@ if ($Native) {
             Assert ($null -eq $afterDefault -or $afterDefault.ValueCount -eq 0) 'Native default0 wrote installer state.'
         }
         finally { if ($null -ne $afterDefault) { $afterDefault.Dispose() } }
-        $null = ProcessMitigations\Set-ProcessMitigation -Name $fixtureExecutable -Enable CFG, AuditUserShadowStack -ErrorAction Stop
+        # Audit ON requires shadow stacks ON, so it cannot be combined with the
+        # requested OFF fixture. Preserve its original NOTSET value and CFG ON.
+        $null = ProcessMitigations\Set-ProcessMitigation -Name $fixtureExecutable -Enable CFG -ErrorAction Stop
+        Write-Host ('Native initial policy: ' + (ConvertTo-Json -InputObject (ProcessMitigations\Get-ProcessMitigation -Name $fixtureExecutable) -Depth 4 -Compress))
         Invoke-NativeAction 'Apply' '1'
         Assert-NativePolicy 'OFF'
         Invoke-NativeAction 'Commit'
@@ -242,25 +271,54 @@ if ($Native) {
         Assert-NativePolicy 'NOTSET'
         Write-Host 'Native CET policy checks passed for a disposable path; CFG and CET audit settings were preserved.'
     }
+    catch {
+        $nativeFailure = $_
+        Write-Host ('FIRST native CET acceptance failure: ' + $_.Exception.Message)
+        try {
+            Write-Host ('Native failure policy: ' + (ConvertTo-Json -InputObject (ProcessMitigations\Get-ProcessMitigation -Name $fixtureExecutable) -Depth 4 -Compress))
+            $failureState = $nativeRegistry.OpenSubKey($nativeStatePath)
+            if ($null -ne $failureState) {
+                try {
+                    Write-Host ('Native Baseline: ' + $failureState.GetValue('Baseline'))
+                    Write-Host ('Native Pending: ' + $failureState.GetValue('Pending'))
+                }
+                finally { $failureState.Dispose() }
+            }
+        }
+        catch { Write-Warning ('Failure evidence could not be collected: ' + $_.Exception.Message) }
+    }
     finally {
         # Restore only this fixture and the installer state created during its test.
-        Invoke-NativeAction 'Rollback'
-        Invoke-NativeAction 'Remove'
-        Invoke-NativeAction 'Commit'
-        $null = ProcessMitigations\Set-ProcessMitigation -Name $fixtureExecutable -Remove -Disable UserShadowStack, CFG, AuditUserShadowStack -ErrorAction Stop
-        $remaining = $nativeRegistry.OpenSubKey($nativeStatePath)
+        foreach ($operation in @('Rollback', 'Remove', 'Commit')) {
+            try { Invoke-NativeAction $operation }
+            catch { $cleanupFailures.Add($_.Exception.Message); Write-Warning ('Cleanup: ' + $_.Exception.Message) }
+        }
         try {
+            $null = ProcessMitigations\Set-ProcessMitigation -Name $fixtureExecutable -Remove -Disable UserShadowStack, CFG -ErrorAction Stop
+        }
+        catch { $cleanupFailures.Add($_.Exception.Message); Write-Warning ('Fixture policy cleanup: ' + $_.Exception.Message) }
+        $remaining = $null
+        try {
+            $remaining = $nativeRegistry.OpenSubKey($nativeStatePath)
             if (-not $keyExisted -and $null -ne $remaining -and $remaining.ValueCount -eq 0 -and $remaining.SubKeyCount -eq 0) {
                 $remaining.Dispose()
                 $remaining = $null
                 $nativeRegistry.DeleteSubKey($nativeStatePath, $false)
             }
         }
+        catch { $cleanupFailures.Add($_.Exception.Message); Write-Warning ('Fixture state cleanup: ' + $_.Exception.Message) }
         finally {
             if ($null -ne $remaining) { $remaining.Dispose() }
             $nativeRegistry.Dispose()
         }
-        Remove-Item -LiteralPath $fixtureExecutable -Force
-        Remove-Item -LiteralPath $fixture -Force
+        try {
+            if ([IO.File]::Exists($fixtureDiagnostic)) { [IO.File]::Delete($fixtureDiagnostic) }
+            [IO.File]::Delete($fixtureScript)
+            [IO.File]::Delete($fixtureExecutable)
+            [IO.Directory]::Delete($fixture)
+        }
+        catch { $cleanupFailures.Add($_.Exception.Message); Write-Warning ('Fixture file cleanup: ' + $_.Exception.Message) }
     }
+    if ($null -ne $nativeFailure) { throw $nativeFailure }
+    if ($cleanupFailures.Count -gt 0) { throw ('Native CET fixture cleanup failed: ' + ($cleanupFailures -join '; ')) }
 }
