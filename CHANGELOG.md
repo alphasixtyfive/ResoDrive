@@ -1,11 +1,10 @@
 # Changelog
 
-## [0.3.43] - 2026-10-09 (unpublished candidate)
+## [0.3.43] - 2026-10-09
 
-- Inspect process account and executable identity with query-only rights and a retained process handle, avoiding false account-verification failures from unnecessary synchronization or module-memory access.
-- Accept an already exited process during inspection; a live or unverifiable process still blocks migration and installation.
-- Preserve sanitized migration failure details, including native errors and a matching error ID, outside the data folders being moved.
-- Add a hidden CET compatibility opt-out to the standard installer and remember it for repairs and in-app updates, while retaining one CET-compatible application build.
+- Fixed updates that could stop at "Setup could not verify which Windows account owns a running ResoDrive process" even when the app was running under the same account.
+- Keep settings and cached files protected during updates. If migration fails, the message now includes a reference for its diagnostic log.
+- Added an optional startup compatibility mode for affected older Windows machines. Install with `ResoDrive-Setup.exe ResoDriveDisableCet=1` to disable CET for ResoDrive; repairs and future in-app updates remember the choice. Fresh installations without the option keep CET enabled.
 
 ## [0.3.42] - 2026-10-09
 

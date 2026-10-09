@@ -1,6 +1,6 @@
 # CET compatibility
 
-The unpublished 0.3.43 candidate keeps one application build and one standard
+ResoDrive 0.3.43 keeps one application build and one standard
 installer. The application remains CET-compatible. Administrators can request
 the hidden compatibility option when installing:
 
@@ -17,10 +17,17 @@ before ResoDrive applied its override.
 Setup saves the choice in HKLM64 `SOFTWARE\ResoDrive\Installation\DisableCet`.
 Repair and upgrades load it before preparation, including unattended in-app
 updates. The installed executable receives a path-specific Windows
-`UserShadowStack` override through the supported ProcessMitigations cmdlets.
-The script saves the original tri-state, verifies readback, and journals changes
+`UserShadowStack` override through Windows' per-image mitigation API.
+The script saves the original field, verifies readback, and journals changes
 for MSI rollback. Removal restores only the installer-owned setting; it leaves
-other mitigations and a later administrator change alone.
+other mitigations and a later administrator change alone. A conflicting
+administrator policy stops the compatibility change before mutation. This includes
+an existing basename-wide exploit-protection rule: creating an exact-path filter
+can change how Windows inherits that rule. ResoDrive reports the conflict instead
+of copying or replacing the administrator's policies.
+When restoring the default, it removes an empty path filter only if its durable
+receipt proves that filter did not exist before installation. Existing filters
+and filters with other administrator settings remain intact.
 
 Copied update helpers and temporary MSI helpers cannot inherit an installed-path
 override. They are created through the native Windows process API with only the
@@ -45,11 +52,11 @@ launched on that machine, according to the reported test. The old archived probe
 also established that the same .NET 10 binary can run with shadow stacks on or
 off when the creation policy changes.
 
-This candidate cannot rewrite an older MSI's already cached preparation helper.
+This release cannot rewrite an older MSI's already cached preparation helper.
 The first manual transition from an older affected installation still runs that
 old MSI during major-upgrade removal, and needs acceptance on the affected
 machine. An older app's copied updater also predates the native launcher; use
-manual Setup for that first transition. Once this candidate is installed with
+manual Setup for that first transition. Once this release is installed with
 the option, its subsequent helpers and upgrades preserve the choice.
 
 ## Verification
@@ -58,13 +65,17 @@ Local tests cover strict saved-choice parsing, native mitigation creation,
 arguments, Unicode paths, environment and current-account preservation.
 Policy transaction tests cover defaults, repair, rollback, removal and later
 administrator edits. Elevated policy and complete update tests run only on
-disposable hosted Windows runners. Their acceptance receipt will be recorded
-after the exact-commit run completes.
+disposable hosted Windows runners. The native policy transactions passed at
+commit `3e7a049` in [the isolated Windows check](https://github.com/alphasixtyfive/ResoDrive/actions/runs/37923324138),
+including CFG, nonzero sibling and audit fields, empty-filter cleanup, rollback,
+future basename-policy inheritance and rejection before mutation. Full installer
+and update acceptance is recorded with the final release assets.
 
 The actual Windows 10 vessel and its cached old MSI have not been tested with
-this candidate. A public release still requires the acceptance steps in
+this release. Publication follows the acceptance steps in
 [RELEASING.md](RELEASING.md), including the desktop UAC transition.
 
 References: [Microsoft .NET CET support](https://learn.microsoft.com/en-us/dotnet/core/compatibility/interop/9.0/cet-support),
 [Windows process creation attributes](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute),
 and [Windows exploit-protection policy](https://learn.microsoft.com/defender-endpoint/enable-exploit-protection).
+The installed-path override uses [RtlSetImageMitigationPolicy](https://learn.microsoft.com/en-us/windows/win32/debug/rtlsetimagemitigationpolicy-function).

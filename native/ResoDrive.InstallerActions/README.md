@@ -58,7 +58,7 @@ requires the application's actual PE extended DLL characteristics to retain CET.
 Resource verification maps the DLL as data without invoking executable code.
 MSVC x64 tools and the Windows SDK are required. This component does not modify
 persistent Windows mitigation bitfields itself; the embedded script uses Windows'
-policy cmdlets. It cannot fix an older MSI's cached helper or prove acceptance on
+per-image policy API. It cannot fix an older MSI's cached helper or prove acceptance on
 an affected Windows version. Windows before build 19041 has no CET process
 mitigation and uses normal creation. A supported mitigation request failure is
 reported instead of retrying without the requested protection setting.
