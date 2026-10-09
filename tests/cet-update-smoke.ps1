@@ -152,6 +152,14 @@ function Wait-LaunchReceipt([string]$Path, $Process) {
     return $receipt
 }
 
+function Assert-RepairApplied([string]$LogPath) {
+    $log = Get-Content -LiteralPath $LogPath -Raw
+    if ($log -notmatch 'i301: Applying execute package: resodrive_win_x64_[\d.]+\.msi, action: Repair,' -or
+        $log -notmatch '\bREINSTALL=ALL\b') {
+        throw 'Setup did not apply an actual MSI repair.'
+    }
+}
+
 $originalPolicy = Get-IfeoSnapshot
 $previousData = $env:RDRIVE_DATA_DIR
 $previousHandoff = $env:RDRIVE_UPDATE_HANDOFF_DIR
@@ -173,19 +181,23 @@ try {
     if ((Get-CetPreference) -ne '1' -or (Get-FileHash -LiteralPath $installedApp).Hash -ne (Get-FileHash -LiteralPath $currentApp).Hash) {
         throw 'Fresh install did not preserve the choice and identical CET-marked application.'
     }
-    $repair = Start-Process -FilePath $currentSetup -ArgumentList @('/repair', '/norestart', ('ResoDriveDataRoot="' + $data + '"'), '/log', ('"' + (Join-Path $evidence 'repair.log') + '"')) -WindowStyle Hidden -PassThru
+    # MSI owns maintenance, so Burn has no registered Modify page. Passive mode
+    # applies the requested repair while retaining branded progress acceptance.
+    $repair = Start-Process -FilePath $currentSetup -ArgumentList @('/repair', '/passive', '/norestart', ('ResoDriveDataRoot="' + $data + '"'), '/log', ('"' + (Join-Path $evidence 'repair.log') + '"')) -WindowStyle Hidden -PassThru
     try {
-        Wait-VisibleSetup $repair 'Repair' (Join-Path $evidence 'repair-ui.json')
+        Wait-VisibleSetup $repair '' (Join-Path $evidence 'repair-ui.json') -Passive
         if ($repair.ExitCode -ne 0) { throw "Compatibility repair failed: $($repair.ExitCode)." }
+        Assert-RepairApplied (Join-Path $evidence 'repair.log')
     } finally { $repair.Dispose() }
     if ((Get-CetPreference) -ne '1' -or (Get-FileHash -LiteralPath $installedApp).Hash -ne (Get-FileHash -LiteralPath $currentApp).Hash) {
         throw 'Repair changed the choice or application bytes.'
     }
     foreach ($choice in @('0', '1')) {
-        $toggle = Start-Process -FilePath $currentSetup -ArgumentList @('/repair', '/norestart', "ResoDriveDisableCet=$choice", ('ResoDriveDataRoot="' + $data + '"'), '/log', ('"' + (Join-Path $evidence "repair-$choice.log") + '"')) -WindowStyle Hidden -PassThru
+        $toggle = Start-Process -FilePath $currentSetup -ArgumentList @('/repair', '/passive', '/norestart', "ResoDriveDisableCet=$choice", ('ResoDriveDataRoot="' + $data + '"'), '/log', ('"' + (Join-Path $evidence "repair-$choice.log") + '"')) -WindowStyle Hidden -PassThru
         try {
-            Wait-VisibleSetup $toggle 'Repair' (Join-Path $evidence "repair-$choice-ui.json")
+            Wait-VisibleSetup $toggle '' (Join-Path $evidence "repair-$choice-ui.json") -Passive
             if ($toggle.ExitCode -ne 0) { throw "Compatibility repair with choice $choice failed: $($toggle.ExitCode)." }
+            Assert-RepairApplied (Join-Path $evidence "repair-$choice.log")
         } finally { $toggle.Dispose() }
         if ((Get-CetPreference) -ne $choice) { throw "Repair did not store explicit CET choice $choice." }
         if ($choice -eq '0' -and (Get-IfeoSnapshot) -cne $originalPolicy) { throw 'Explicit CET re-enable did not restore the original mitigation policy.' }

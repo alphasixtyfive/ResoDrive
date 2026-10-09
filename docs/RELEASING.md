@@ -122,7 +122,7 @@ actual root in the MSI log rather than trusting the shell command.
 
 For CET compatibility, use the standard Setup with `ResoDriveDisableCet=1`.
 Omitting it preserves the saved choice. To restore the prior Windows setting,
-repair using `/repair ResoDriveDisableCet=0`. Both CI and release acceptance
+repair using `/repair /passive /norestart ResoDriveDisableCet=0`. Both CI and release acceptance
 verify the native helpers, Windows policy rollback, and a real next-version
 in-app update with the flag omitted. Review [the CET compatibility notes](CET-COMPATIBILITY.md)
 and test the first transition on an affected Windows machine before publication:

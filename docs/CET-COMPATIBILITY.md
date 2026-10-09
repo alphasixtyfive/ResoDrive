@@ -11,8 +11,12 @@ the hidden compatibility option when installing:
 The versioned Setup download accepts the same argument. Direct MSI installations
 accept `RDRIVE_DISABLE_CET=1`. Only the exact strings `0` and `1` are accepted.
 Omitting the option preserves the installed choice; a fresh install defaults to
-`0`. Repairing with `/repair ResoDriveDisableCet=0` restores the Windows setting that existed
-before ResoDrive applied its override.
+`0`. If this version is already installed, use
+`/repair /passive /norestart ResoDriveDisableCet=1` to enable compatibility mode.
+The passive option runs repair directly and displays progress; the unregistered
+Setup bundle's full interface instead offers Install. Repairing with
+`/repair /passive /norestart ResoDriveDisableCet=0` restores the Windows setting
+that existed before ResoDrive applied its override.
 
 Setup saves the choice in HKLM64 `SOFTWARE\ResoDrive\Installation\DisableCet`.
 Repair and upgrades load it before preparation, including unattended in-app

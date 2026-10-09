@@ -10,7 +10,7 @@ If ResoDrive cannot launch because of the CET compatibility issue, open PowerShe
 .\ResoDrive-Setup.exe ResoDriveDisableCet=1
 ```
 
-The choice is saved for repairs and future in-app updates. A fresh installation without this option keeps CET enabled. To restore the previous Windows setting later, run the installer with `/repair ResoDriveDisableCet=0`.
+The choice is saved for repairs and future in-app updates. A fresh installation without this option keeps CET enabled. If this version is already installed, add `/repair /passive` to change the option. To restore the previous Windows setting later, run `ResoDrive-Setup.exe /repair /passive /norestart ResoDriveDisableCet=0`.
 
 An older installer's cached helper is outside this option's control, so the first upgrade from an affected older version can still require recovery. See [the compatibility notes](https://github.com/alphasixtyfive/ResoDrive/blob/v0.3.43/docs/CET-COMPATIBILITY.md).
 
