@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.45] - 2026-10-09
+
+- Fix automatic startup after a legacy upgrade when a briefly inaccessible ResoDrive process is still exiting.
+- Wait for confirmed process exit before migrating user data, preserving account checks, upload protection, settings, and cached files.
+
 ## [0.3.44] - 2026-10-09
 
 - Keep update progress visible while background work stops, avoiding an unnecessary 15-second pause before Setup opens.
