@@ -118,7 +118,7 @@ internal static class ApplicationUpdateHandoff
         startInfo.ArgumentList.Add(expectedSha256.ToUpperInvariant());
         startInfo.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
         startInfo.Environment[HandoffDirectoryEnvironmentVariable] = directory;
-        using var helper = Process.Start(startInfo);
+        using var helper = CetCompatibility.StartInstalledHelper(startInfo, sourceExecutable);
         if (helper is null)
             throw new InvalidOperationException("The update handoff process could not be started.");
     }
@@ -575,11 +575,11 @@ internal static class ApplicationUpdateHandoff
 
         public bool StartApplication(string executablePath)
         {
-            using var process = Process.Start(new ProcessStartInfo(executablePath)
+            using var process = CetCompatibility.StartInstalledHelper(new ProcessStartInfo(executablePath)
             {
                 UseShellExecute = false,
                 WorkingDirectory = Path.GetDirectoryName(executablePath),
-            });
+            }, executablePath);
             return process is not null;
         }
 

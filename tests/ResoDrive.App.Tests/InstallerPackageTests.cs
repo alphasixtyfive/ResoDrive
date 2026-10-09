@@ -15,7 +15,9 @@ public sealed class InstallerPackageTests
         Assert.Equal(4, migrationActions.Length);
         foreach (var action in migrationActions)
         {
-            Assert.Equal("ResoDriveInstallationHelper", (string?)action.Attribute("BinaryRef"));
+            Assert.Equal("ResoDriveInstallerActions", (string?)action.Attribute("BinaryRef"));
+            Assert.NotNull(action.Attribute("DllEntry"));
+            Assert.Null(action.Attribute("ExeCommand"));
             Assert.Equal("no", (string?)action.Attribute("Impersonate"));
             Assert.NotEqual("immediate", (string?)action.Attribute("Execute"));
             var scheduled = Assert.Single(document.Descendants(Wix + "Custom"), row =>
@@ -30,8 +32,9 @@ public sealed class InstallerPackageTests
         var action = LoadAction("PrepareInstalledResoDriveForUpgrade");
 
         Assert.Null(action.Attribute("FileRef"));
-        Assert.Equal("ResoDriveInstallationHelper", (string?)action.Attribute("BinaryRef"));
-        Assert.Equal("--prepare-registered-install \"[INSTALLFOLDER].\" [UILevel] \"[RDRIVE_DATA_ROOT]\\.\"", (string?)action.Attribute("ExeCommand"));
+        Assert.Equal("ResoDriveInstallerActions", (string?)action.Attribute("BinaryRef"));
+        Assert.Equal("PrepareRegisteredInstallation", (string?)action.Attribute("DllEntry"));
+        Assert.Null(action.Attribute("ExeCommand"));
         Assert.Equal("check", (string?)action.Attribute("Return"));
         Assert.Equal("yes", (string?)action.Attribute("Impersonate"));
     }
@@ -91,7 +94,8 @@ public sealed class InstallerPackageTests
     {
         XNamespace bal = "http://wixtoolset.org/schemas/v4/wxs/bal";
         var document = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Bundle.wxs"));
-        var condition = Assert.Single(document.Descendants(bal + "Condition"));
+        var condition = Assert.Single(document.Descendants(bal + "Condition"), item =>
+            (string?)item.Attribute("Condition") == "WixBundleCommandLineAction <> 4");
 
         Assert.Equal("WixBundleCommandLineAction <> 4", (string?)condition.Attribute("Condition"));
         Assert.Contains("Windows Settings > Apps > Installed apps", (string?)condition.Attribute("Message"));

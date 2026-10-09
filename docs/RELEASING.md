@@ -120,6 +120,14 @@ For a repair using that root, use `/i package.msi REINSTALL=ALL REINSTALLMODE=am
 with `RDRIVE_DATA_ROOT`; `/f` ignores property arguments. Inspect the helper's
 actual root in the MSI log rather than trusting the shell command.
 
+For CET compatibility, use the standard Setup with `ResoDriveDisableCet=1`.
+Omitting it preserves the saved choice. To restore the prior Windows setting,
+repair using `/repair ResoDriveDisableCet=0`. Both CI and release acceptance
+verify the native helpers, Windows policy rollback, and a real next-version
+in-app update with the flag omitted. Review [the CET compatibility notes](CET-COMPATIBILITY.md)
+and test the first transition on an affected Windows machine before publication:
+an older cached MSI helper is outside the new wrapper's control.
+
 ## Signing
 
 Current local packages include SHA-256 sidecars but are not Authenticode signed.

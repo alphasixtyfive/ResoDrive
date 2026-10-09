@@ -86,8 +86,8 @@ in their version metadata; they are development acceptance assets, not published
 release assets. Build and process/elevation receipts are held locally under
 `output/migration-account-diagnostic` in the containing workspace.
 
-The corrected source still needs exact-commit hosted native installer/migration
-acceptance, and any public release must follow `RELEASING.md` with immutable
+The corrected source passed exact-commit hosted native installer/migration
+acceptance; any public release must follow `RELEASING.md` with immutable
 accepted assets. No Windows 10 machine or actual affected user's update was
 used in local acceptance. The post-recovery diagnostic cannot fill that gap.
 
@@ -101,6 +101,8 @@ The corrected fixture run at commit `50a32fc` passed
 [hosted CI](https://github.com/alphasixtyfive/ResoDrive/actions/runs/37912507974),
 including native installation, upgrade/removal, different-account preparation,
 directory migration/rollback, incomplete-migration recovery and branded Setup
-updater checks. The final simplification requires its own hosted run.
+updater checks. The final simplification at commit `7e80f9b` also passed
+[hosted CI](https://github.com/alphasixtyfive/ResoDrive/actions/runs/37914392851),
+including the same native installer and updater acceptance checks.
 An additional local elevated fixture run was cancelled at UAC; it does not
 invalidate the separate successful prior-version-host/elevated-helper check.

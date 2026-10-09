@@ -37,6 +37,16 @@
       />
     </Property>
     <Property Id="RDRIVE_DATA_ROOT" Secure="yes" />
+    <Property Id="RDRIVE_DISABLE_CET" Secure="yes" />
+    <!-- Keep transitional helpers runnable while restoring a prior opt-out. -->
+    <Property Id="RDRIVE_HELPER_DISABLE_CET" Value="0" Secure="yes" />
+    <Property Id="RDRIVE_PREVIOUS_DISABLE_CET" Secure="yes">
+      <RegistrySearch Id="InstalledCetPreference" Root="HKLM" Key="SOFTWARE\ResoDrive\Installation"
+        Name="DisableCet" Type="raw" Bitness="always64" />
+    </Property>
+    <CustomAction Id="LoadCetPreference" Property="RDRIVE_DISABLE_CET" Value="[RDRIVE_PREVIOUS_DISABLE_CET]" />
+    <CustomAction Id="DefaultCetPreference" Property="RDRIVE_DISABLE_CET" Value="0" />
+    <CustomAction Id="SetCetHelperPreference" Property="RDRIVE_HELPER_DISABLE_CET" Value="1" />
     <!-- Installer discovery property: fresh/current-layout installs never run the
          legacy migration actions. AppSearch reads it again in the execute session. -->
     <Property Id="RDRIVE_DIRECTORY_LAYOUT">
@@ -63,6 +73,8 @@
       Condition="Installed OR DOTNET_DESKTOP_RUNTIME_CHECK = 0"
       Message="$(var.ResoDriveProductName) requires the .NET 10 Desktop Runtime. Run ResoDrive-Setup.exe to install it automatically."
     />
+    <Launch Condition="RDRIVE_DISABLE_CET = &quot;0&quot; OR RDRIVE_DISABLE_CET = &quot;1&quot;"
+      Message="The CET compatibility setting is invalid. Use RDRIVE_DISABLE_CET=0 or 1, or repair the installation." />
     <Launch
       Condition="Installed OR NOT WIX_UPGRADE_DETECTED OR RDRIVE_FROM_SETUP = &quot;1&quot; OR (RDRIVE_PREVIOUS_SYSTEM_COMPONENT &lt;&gt; &quot;#1&quot; AND NOT (WIX_UPGRADE_DETECTED &gt;&lt; &quot;;&quot;))"
       Message="Use ResoDrive-Setup.exe to update this installation. Setup will replace its older installer entry and preserve your settings."
@@ -79,6 +91,10 @@
       <Component Id="DirectoryLayoutIdentity" Guid="0F42F167-D9D1-4A9A-B221-B70FAC5C5C6B">
         <RegistryValue Root="HKLM" Key="SOFTWARE\ResoDrive\Installation" Name="DirectoryLayout"
           Value="ResoDrive-v1" Type="string" KeyPath="yes" />
+      </Component>
+      <Component Id="CetPreference" Guid="163F974C-10DE-48DF-922E-473815D77B61">
+        <RegistryValue Root="HKLM" Key="SOFTWARE\ResoDrive\Installation" Name="DisableCet"
+          Value="[RDRIVE_DISABLE_CET]" Type="string" KeyPath="yes" />
       </Component>
       <Files Include="$(var.PackageSource)\**">
         <Exclude Files="$(var.PackageSource)\$(var.ResoDriveExecutableName)" />
@@ -123,19 +139,19 @@
       Impersonate="yes"
     />
     <!-- Always use preparation code shipped by THIS package, including for legacy upgrades. -->
-    <Binary Id="ResoDriveInstallationHelper" SourceFile="$(var.PackageSource)\$(var.ResoDriveExecutableName)" />
+    <Binary Id="ResoDriveInstallerActions" SourceFile="$(var.InstallationActionsSource)" />
     <CustomAction
       Id="PrepareInstalledResoDriveForUpgrade"
-      BinaryRef="ResoDriveInstallationHelper"
-      ExeCommand="--prepare-registered-install &quot;[INSTALLFOLDER].&quot; [UILevel] &quot;[RDRIVE_DATA_ROOT]\.&quot;"
+      BinaryRef="ResoDriveInstallerActions"
+      DllEntry="PrepareRegisteredInstallation"
       Execute="immediate"
       Return="check"
       Impersonate="yes"
     />
     <CustomAction
       Id="UnregisterResoDriveAutostart"
-      FileRef="ResoDriveExecutableFile"
-      ExeCommand="--unregister-autostart"
+      BinaryRef="ResoDriveInstallerActions"
+      DllEntry="UnregisterAutostart"
       Execute="immediate"
       Return="ignore"
       Impersonate="yes"
@@ -143,21 +159,44 @@
 
     <!-- Temporary migration artifacts have explicit rollback/commit handling.
          MSI continues to own all normal application files and registration. -->
-    <CustomAction Id="RollbackInstallationDirectoryMigration" BinaryRef="ResoDriveInstallationHelper"
-      ExeCommand="--rollback-install-migration" Execute="rollback" Return="ignore" Impersonate="no" />
-    <CustomAction Id="StageInstallationDirectoryMigration" BinaryRef="ResoDriveInstallationHelper"
-      ExeCommand="--stage-install-migration &quot;[RDRIVE_PREVIOUS_DIRECTORY].&quot;" Execute="deferred" Return="check" Impersonate="no" />
-    <CustomAction Id="ApplyInstallationDirectoryMigration" BinaryRef="ResoDriveInstallationHelper"
-      ExeCommand="--apply-install-migration" Execute="deferred" Return="check" Impersonate="no" />
-    <CustomAction Id="CommitInstallationDirectoryMigration" BinaryRef="ResoDriveInstallationHelper"
-      ExeCommand="--commit-install-migration" Execute="commit" Return="ignore" Impersonate="no" />
+    <CustomAction Id="RollbackInstallationDirectoryMigration" BinaryRef="ResoDriveInstallerActions"
+      DllEntry="RollbackMigration" Execute="rollback" Return="ignore" Impersonate="no" />
+    <CustomAction Id="StageInstallationDirectoryMigration" BinaryRef="ResoDriveInstallerActions"
+      DllEntry="StageMigration" Execute="deferred" Return="check" Impersonate="no" />
+    <CustomAction Id="ApplyInstallationDirectoryMigration" BinaryRef="ResoDriveInstallerActions"
+      DllEntry="ApplyMigration" Execute="deferred" Return="check" Impersonate="no" />
+    <CustomAction Id="CommitInstallationDirectoryMigration" BinaryRef="ResoDriveInstallerActions"
+      DllEntry="CommitMigration" Execute="commit" Return="ignore" Impersonate="no" />
+    <SetProperty Id="RollbackInstallationDirectoryMigration" Value="[RDRIVE_HELPER_DISABLE_CET]" Before="RollbackInstallationDirectoryMigration" Sequence="execute" />
+    <SetProperty Id="StageInstallationDirectoryMigration" Value="[RDRIVE_HELPER_DISABLE_CET]&#10;[RDRIVE_PREVIOUS_DIRECTORY]" Before="StageInstallationDirectoryMigration" Sequence="execute" />
+    <SetProperty Id="ApplyInstallationDirectoryMigration" Value="[RDRIVE_HELPER_DISABLE_CET]" Before="ApplyInstallationDirectoryMigration" Sequence="execute" />
+    <SetProperty Id="CommitInstallationDirectoryMigration" Value="[RDRIVE_HELPER_DISABLE_CET]" Before="CommitInstallationDirectoryMigration" Sequence="execute" />
+
+    <CustomAction Id="RollbackCetPolicy" BinaryRef="ResoDriveInstallerActions" DllEntry="RollbackCetPolicy"
+      Execute="rollback" Return="ignore" Impersonate="no" />
+    <CustomAction Id="ConfigureCetPolicy" BinaryRef="ResoDriveInstallerActions" DllEntry="ConfigureCetPolicy"
+      Execute="deferred" Return="check" Impersonate="no" />
+    <CustomAction Id="CommitCetPolicy" BinaryRef="ResoDriveInstallerActions" DllEntry="CommitCetPolicy"
+      Execute="commit" Return="check" Impersonate="no" />
+    <CustomAction Id="RemoveCetPolicy" BinaryRef="ResoDriveInstallerActions" DllEntry="RemoveCetPolicy"
+      Execute="deferred" Return="check" Impersonate="no" />
+    <SetProperty Id="RollbackCetPolicy" Value="[RDRIVE_DISABLE_CET]&#10;[INSTALLFOLDER]resodrive.exe" Before="RollbackCetPolicy" Sequence="execute" />
+    <SetProperty Id="ConfigureCetPolicy" Value="[RDRIVE_DISABLE_CET]&#10;[INSTALLFOLDER]resodrive.exe" Before="ConfigureCetPolicy" Sequence="execute" />
+    <SetProperty Id="CommitCetPolicy" Value="[RDRIVE_DISABLE_CET]&#10;[INSTALLFOLDER]resodrive.exe" Before="CommitCetPolicy" Sequence="execute" />
+    <SetProperty Id="RemoveCetPolicy" Value="[RDRIVE_DISABLE_CET]&#10;[INSTALLFOLDER]resodrive.exe" Before="RemoveCetPolicy" Sequence="execute" />
 
     <InstallUISequence>
       <FindRelatedProducts Before="AppSearch" />
+      <Custom Action="LoadCetPreference" After="AppSearch" Condition="RDRIVE_DISABLE_CET = &quot;&quot; AND RDRIVE_PREVIOUS_DISABLE_CET &lt;&gt; &quot;&quot;" />
+      <Custom Action="DefaultCetPreference" After="LoadCetPreference" Condition="RDRIVE_DISABLE_CET = &quot;&quot;" />
+      <Custom Action="SetCetHelperPreference" After="DefaultCetPreference" Condition="RDRIVE_DISABLE_CET = &quot;1&quot; OR RDRIVE_PREVIOUS_DISABLE_CET = &quot;1&quot;" />
     </InstallUISequence>
 
     <InstallExecuteSequence>
       <FindRelatedProducts Before="AppSearch" />
+      <Custom Action="LoadCetPreference" After="AppSearch" Condition="RDRIVE_DISABLE_CET = &quot;&quot; AND RDRIVE_PREVIOUS_DISABLE_CET &lt;&gt; &quot;&quot;" />
+      <Custom Action="DefaultCetPreference" After="LoadCetPreference" Condition="RDRIVE_DISABLE_CET = &quot;&quot;" />
+      <Custom Action="SetCetHelperPreference" After="DefaultCetPreference" Condition="RDRIVE_DISABLE_CET = &quot;1&quot; OR RDRIVE_PREVIOUS_DISABLE_CET = &quot;1&quot;" />
       <!--
         Drain work before replacing or removing installed files. Match processes
         by installation path so portable copies are never stopped.
@@ -180,6 +219,10 @@
         Condition="WIX_UPGRADE_DETECTED AND NOT Installed AND RDRIVE_DIRECTORY_LAYOUT &lt;&gt; &quot;ResoDrive-v1&quot;" />
       <Custom Action="CommitInstallationDirectoryMigration" After="ApplyInstallationDirectoryMigration"
         Condition="WIX_UPGRADE_DETECTED AND NOT Installed AND RDRIVE_DIRECTORY_LAYOUT &lt;&gt; &quot;ResoDrive-v1&quot;" />
+      <Custom Action="RollbackCetPolicy" Before="RemoveCetPolicy" Condition="NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="ConfigureCetPolicy" After="ApplyInstallationDirectoryMigration" Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
+      <Custom Action="CommitCetPolicy" After="ConfigureCetPolicy" Condition="NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="RemoveCetPolicy" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
     </InstallExecuteSequence>
 
     <UI>

@@ -13,6 +13,7 @@
     <OutputName>$(ResoDriveExecutableBaseName)-$(ResoDriveRuntime)-$(ResoDriveVersion)</OutputName>
     <DefineConstants>
       PackageSource=$(PackageSource);
+      InstallationActionsSource=$(InstallationActionsSource);
       ResoDriveVersion=$(ResoDriveVersion);
       ResoDriveAllowSameVersionUpgrades=$(ResoDriveAllowSameVersionUpgrades);
       ResoDriveUpgradeCode=$(ResoDriveUpgradeCode);
@@ -28,6 +29,7 @@
 
   <Target Name="ValidateResoDriveInstallerProperties" BeforeTargets="Build">
     <Error Condition="'$(PackageSource)' == ''" Text="PackageSource must point to the staged ResoDrive release directory." />
+    <Error Condition="'$(InstallationActionsSource)' == ''" Text="InstallationActionsSource must point to the native installer actions DLL." />
     <Error Condition="'$(ResoDriveVersion)' == ''" Text="ResoDriveVersion is required." />
     <Error Condition="'$(ResoDriveRuntime)' == ''" Text="ResoDriveRuntime is required." />
     <Error Condition="'$(ResoDriveUpgradeCode)' == ''" Text="ResoDriveUpgradeCode is required." />

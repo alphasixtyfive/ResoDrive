@@ -15,6 +15,8 @@
       Condition="WixBundleCommandLineAction &lt;&gt; 4"
       Message="To remove ResoDrive, open Windows Settings &gt; Apps &gt; Installed apps and choose Uninstall."
     />
+    <bal:Condition Condition="ResoDriveDisableCet = &quot;&quot; OR ResoDriveDisableCet = &quot;0&quot; OR ResoDriveDisableCet = &quot;1&quot;"
+      Message="ResoDriveDisableCet must be 0 or 1." />
     <BootstrapperApplication>
       <bal:WixStandardBootstrapperApplication
         Theme="hyperlinkLicense" ThemeFile="SetupTheme.xml"
@@ -33,6 +35,8 @@
     />
 
     <Variable Name="ResoDriveDataRoot" Type="string" Value="" bal:Overridable="yes" />
+    <!-- Unspecified preserves the installed choice; fresh installs keep CET. -->
+    <Variable Name="ResoDriveDisableCet" Type="string" Value="" bal:Overridable="yes" />
     <Chain>
       <ExePackage
         Id="DotNetDesktopRuntime"
@@ -55,6 +59,7 @@
       <MsiPackage SourceFile="$(var.MsiSource)" Compressed="yes" Vital="yes" Permanent="yes" Visible="yes">
         <MsiProperty Name="RDRIVE_FROM_SETUP" Value="1" />
         <MsiProperty Name="RDRIVE_DATA_ROOT" Value="[ResoDriveDataRoot]" Condition="ResoDriveDataRoot" />
+        <MsiProperty Name="RDRIVE_DISABLE_CET" Value="[ResoDriveDisableCet]" Condition="ResoDriveDisableCet &lt;&gt; &quot;&quot;" />
       </MsiPackage>
     </Chain>
   </Bundle>

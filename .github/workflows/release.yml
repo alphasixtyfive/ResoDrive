@@ -58,6 +58,12 @@ jobs:
       - name: Build and verify release
         shell: pwsh
         run: .\build.ps1 -Configuration Release -BuildMsi $true
+      - name: Verify native CET helpers and policy transactions
+        shell: pwsh
+        run: |
+          ./native/ResoDrive.InstallerActions/test.ps1 -ApplicationPath artifacts/win-x64/resodrive/resodrive.exe -OutputDirectory "$env:RUNNER_TEMP/resodrive-cet-native"
+          powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./tests/CetPolicyTests.ps1 -Native
+          if ($LASTEXITCODE -ne 0) { throw 'CET policy acceptance failed.' }
       - name: Verify installed application lifecycle
         shell: pwsh
         env:
@@ -105,6 +111,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./tests/setup-update-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName -AppPath artifacts/win-x64/resodrive/resodrive.exe
+      - name: Verify hidden CET choice through repair and an in-app version upgrade
+        shell: pwsh
+        run: ./tests/cet-upgrade-acceptance.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName -AppPath artifacts/win-x64/resodrive/resodrive.exe
       - name: Preserve installer diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -120,6 +129,8 @@ jobs:
             ${{ runner.temp }}/resodrive-setup-update-smoke/*.json
             ${{ runner.temp }}/resodrive-migration-recovery-smoke/*.log
             ${{ runner.temp }}/resodrive-migration-recovery-smoke/*.json
+            ${{ runner.temp }}/resodrive-cet-update-smoke/*.log
+            ${{ runner.temp }}/resodrive-cet-update-smoke/*.json
           if-no-files-found: ignore
       - name: Prepare package downloads
         shell: pwsh
