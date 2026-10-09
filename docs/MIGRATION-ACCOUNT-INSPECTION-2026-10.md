@@ -31,22 +31,23 @@ of whether elevation or security software imposed it on the reported PC.
 The preliminary reader now retains a query-only handle through account and
 image inspection. `QueryFullProcessImageNameW` replaces module-memory reads,
 which required unnecessary VM-read access and could encounter unloading modules.
-Matching UI candidates still require synchronization and termination rights,
+Matching processes retain that same query-only handle for account and stopped
+checks. Only UI closure requests synchronization and termination rights,
 the expected account, installation, session and exact UI command line. The
 retained native handles pin the process identities and supply exit checks.
 
-If account inspection or acquiring a matched process's operational handle fails,
-the code allows up to one second for that exact retained process to terminate.
-It polls its exit status and honors cancellation. An unverified live process
-still blocks; a confirmed different account retains its existing handling.
-There is no token-read retry, host/rclone termination, permission grant or
-unauthenticated shutdown fallback. Existing upload and ownership checks remain.
+An inspection failure is ignored only if that exact retained process has already
+exited. An unverified live process still blocks. The existing 42-second wait for
+a confirmed different-account process polls its retained query handle and honors
+cancellation; it never stops that process. There is no token-read retry,
+host/rclone termination, permission grant or unauthenticated shutdown fallback.
+Existing upload and ownership checks remain.
 
-The token-error/exit boundary is exercised deterministically using a real child
-that exits after inspection starts and a supplied account-read failure. A
-separate ordinary graceful-exit probe ran 1,100 children without observing token
-failure on the development Windows build. That experiment does not reproduce
-the original Windows 10 error or prove an exit-time token failure caused it.
+A separate ordinary graceful-exit probe ran 1,100 children without observing
+token failure on the development Windows build. The unproven one-second grace
+period and its production test callback were removed after independent review.
+That experiment does not reproduce the original Windows 10 error or prove an
+exit-time token failure caused it.
 
 ## Failure diagnostics
 
@@ -62,22 +63,23 @@ in an outer exception and a native error in its inner exception.
 
 ## Validation of candidate 0.3.43
 
-- Complete local Windows build, locked restores, MSI validation and Setup build:
-  1,184 tests passed; three optional integrations skipped; zero warnings/errors.
+- Complete final local Windows build, locked restores, MSI validation and Setup
+  build: 1,181 tests passed; three optional integrations skipped; zero
+  warnings/errors. Independent review removed three artificial token-race tests
+  and kept the three actual native permission regressions.
 - All 344 application tests passed with `DOTNET_PROCESSOR_COUNT=1`.
 - Compiled process smoke passed populated rendering, concurrent startup,
   tray/show acknowledgement, host recovery and relaunch with disposable data.
-- Desktop elevation smoke launched the exact public 0.3.42 host unelevated from
+- Before the final simplification, desktop elevation smoke launched the exact public 0.3.42 host unelevated from
   an isolated copy, ran the new helper elevated under the same account, received
   exit code 0, verified old-host exit and preserved disposable settings/cache
   hashes. The production installation and its data were not upgraded.
 - New native permission fixtures confirm a readable unrelated process is left
-  alone, and a matched UI lacking termination rights still blocks while preserving
-  a cache marker. Denial of even minimum identity access still produces the
-  account error with its native code and leaves the process alive.
-  Account-error exit and cancellation cases leave live children
-  alone. Existing active-rclone, unknown-role, upload rejection and corrupt
-  ownership checks continue to pass.
+  alone. A matching query-only process passes both account checks, reports busy
+  during stopped verification, and blocks UI termination while preserving a cache
+  marker. Denial of even minimum identity access still produces the account error
+  with its native code and leaves the process alive. Existing active-rclone,
+  unknown-role, upload rejection and corrupt ownership checks remain mandatory.
 
 Local artifacts were built from the working changes, with the pre-commit revision
 in their version metadata; they are development acceptance assets, not published
@@ -95,5 +97,10 @@ disposable process DACL. The ordinary local reader correctly observed the denial
 The fixtures now use a private same-account impersonation token with only its
 debug privilege disabled; the original runner token and production code are
 unchanged. Native access assertions remain mandatory, with no elevated skip.
+The corrected fixture run at commit `50a32fc` passed
+[hosted CI](https://github.com/alphasixtyfive/ResoDrive/actions/runs/37912507974),
+including native installation, upgrade/removal, different-account preparation,
+directory migration/rollback, incomplete-migration recovery and branded Setup
+updater checks. The final simplification requires its own hosted run.
 An additional local elevated fixture run was cancelled at UAC; it does not
 invalidate the separate successful prior-version-host/elevated-helper check.

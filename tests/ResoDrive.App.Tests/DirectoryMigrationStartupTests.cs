@@ -16,7 +16,7 @@ public sealed class DirectoryMigrationStartupTests
         {
             var failure = new IOException("Account inspection failed; token=private-value.",
                 new Win32Exception(5, "Process 1234: OpenProcessToken failed with Windows error 5."));
-            DirectoryMigrationStartup.RecordHandoffFailure(failure, directory);
+            var displayedMessage = DirectoryMigrationStartup.RecordHandoffFailure(failure, directory);
             var log = File.ReadAllText(Path.Combine(directory, "resodrive-migration.log"));
             Assert.Contains("migration.handoff_failed", log, StringComparison.Ordinal);
             Assert.Contains("Process 1234", log, StringComparison.Ordinal);
@@ -25,6 +25,7 @@ public sealed class DirectoryMigrationStartupTests
             using var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "completion.json")));
             Assert.False(result.RootElement.GetProperty("Succeeded").GetBoolean());
             var message = result.RootElement.GetProperty("Message").GetString()!;
+            Assert.Equal(displayedMessage, message);
             Assert.Contains("Error ID:", message, StringComparison.Ordinal);
             Assert.DoesNotContain("private-value", message, StringComparison.Ordinal);
             Assert.Contains(message.Split("Error ID: ")[1], log, StringComparison.Ordinal);

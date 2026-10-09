@@ -61,7 +61,7 @@ internal static partial class InstallerProcessInspection
             child.SessionId != Process.GetCurrentProcess().SessionId)
             return false;
         var childStart = child.StartTime.ToUniversalTime();
-        if (!SameExecutable(child.MainModule?.FileName, executable))
+        if (!SameExecutable(ReadExecutablePath(childHandle), executable))
             return false;
         var childFacts = ReadProcessFacts(child.Id);
         if (childFacts is null || childFacts.ParentProcessId <= 0 ||
@@ -75,14 +75,13 @@ internal static partial class InstallerProcessInspection
         using var parent = Process.GetProcessById(childFacts.ParentProcessId);
         using var parentHandle = OpenProcess(0x1000, false, parent.Id);
         if (parentHandle.IsInvalid || !IsCurrentAccount(parentHandle) ||
-            HasConfirmedExit(parent) || parent.SessionId != child.SessionId)
+            HasConfirmedExit(parentHandle) || parent.SessionId != child.SessionId)
             return false;
         var parentStart = parent.StartTime.ToUniversalTime();
         if (parentStart > childStart)
             return false; // Parent PID was recycled after the rclone process started.
-        var parentExecutable = parent.MainModule?.FileName;
-        if (parentExecutable is null ||
-            !string.Equals(Path.GetFileName(parentExecutable), "resodrive.exe", StringComparison.OrdinalIgnoreCase) ||
+        var parentExecutable = ReadExecutablePath(parentHandle);
+        if (!string.Equals(Path.GetFileName(parentExecutable), "resodrive.exe", StringComparison.OrdinalIgnoreCase) ||
             !HasNoReparseComponents(parentExecutable) ||
             SameExecutable(parentExecutable, targetExecutable) ||
             SamePhysicalFile(parentExecutable, targetExecutable))
@@ -102,7 +101,7 @@ internal static partial class InstallerProcessInspection
             otherPaths, TimeSpan.FromSeconds(2), token).GetAwaiter().GetResult();
         return MatchesAuthenticatedHostEvidence(childFacts.ParentProcessId, childStart,
                 parent.Id, parentStart, parentDirectory, response) &&
-            !HasConfirmedExit(parent) && !HasConfirmedExit(child) &&
+            !HasConfirmedExit(parentHandle) && !HasConfirmedExit(childHandle) &&
             parent.StartTime.ToUniversalTime() == parentStart &&
             child.StartTime.ToUniversalTime() == childStart;
     }

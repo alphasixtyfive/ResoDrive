@@ -16,42 +16,29 @@ internal static partial class InstallerProcessInspection
     // The retained handle prevents PID reuse. An account-read failure never means
     // "foreign account" or "safe to stop": only exit of this exact process can
     // make the failed inspection irrelevant. A still-live process fails closed.
-    internal static bool VerifyAccountOrExited(Process process, SafeProcessHandle handle, CancellationToken token,
-        Action<SafeProcessHandle>? inspectAccount = null)
+    private static bool VerifyAccountOrExited(Process process, SafeProcessHandle handle, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         if (HasConfirmedExit(handle)) return false;
         try
         {
-            (inspectAccount ?? VerifySameAccount)(handle);
+            VerifySameAccount(handle);
             return !HasConfirmedExit(handle);
         }
         catch (OtherAccountException) { throw; }
         catch (IOException exception)
         {
-            if (WaitForConfirmedExit(handle, token)) return false;
+            if (HasConfirmedExit(handle)) return false;
             throw new IOException(AccountUnknownMessage,
                 new IOException($"Account inspection failed for process {process.Id} ({process.ProcessName}).", exception));
         }
     }
 
-    private static bool WaitForConfirmedExit(SafeProcessHandle handle, CancellationToken token)
-    {
-        var deadline = Stopwatch.GetTimestamp() + Stopwatch.Frequency;
-        do
-        {
-            token.ThrowIfCancellationRequested();
-            if (HasConfirmedExit(handle)) return true;
-            if (Stopwatch.GetTimestamp() >= deadline) return false;
-            // Query-only handles deliberately have no SYNCHRONIZE permission.
-            // Poll the exact handle's exit code, without reopening by PID.
-            if (token.WaitHandle.WaitOne(25)) token.ThrowIfCancellationRequested();
-        } while (true);
-    }
-
     private static bool HasConfirmedExit(SafeProcessHandle handle) =>
         !handle.IsInvalid && GetExitCodeProcess(handle, out var code) &&
-        (code != 259 || WaitForSingleObject(handle, 0) == 0); // STILL_ACTIVE can also be a real exit code.
+        // Exit code 259 is ambiguous. A query-only handle fails closed here;
+        // a synchronized UI handle can also confirm exit by waiting.
+        (code != 259 || WaitForSingleObject(handle, 0) == 0);
 
     private static IOException InspectionFailure(Process process, string stage, int error, string message) =>
         new(message, new Win32Exception(error,

@@ -81,7 +81,7 @@ internal static partial class InstallerProcessInspection
 
     private static void WaitForOtherAccountProcessesExit(string directory, bool currentUserOnly, CancellationToken token)
     {
-        var candidates = GetInstalledProcesses(directory, token, requireTermination: false, currentUserOnly);
+        var candidates = GetInstalledProcesses(directory, token, currentUserOnly: currentUserOnly);
         try
         {
             var deadline = Stopwatch.GetTimestamp() + TimeSpan.FromSeconds(42).Ticks *
@@ -107,13 +107,12 @@ internal static partial class InstallerProcessInspection
                     while (true)
                     {
                         token.ThrowIfCancellationRequested();
-                        var wait = WaitForSingleObject(candidate.Handle, 200);
-                        if (wait == 0) break; // This exact process exited.
-                        if (wait != 0x00000102)
-                            throw InspectionFailure(candidate.Process, "WaitForSingleObject",
-                                Marshal.GetLastPInvokeError(), AccountUnknownMessage);
+                        if (HasConfirmedExit(candidate.Handle)) break;
                         if (Stopwatch.GetTimestamp() >= deadline)
                             throw new OtherAccountException();
+                        // Read-only account inspection requires no SYNCHRONIZE.
+                        // Poll the pinned process, retaining the existing deadline.
+                        if (token.WaitHandle.WaitOne(200)) token.ThrowIfCancellationRequested();
                     }
                 }
             }
@@ -126,7 +125,7 @@ internal static partial class InstallerProcessInspection
 
     private static void EnsureInstalledProcessAccounts(string directory, bool currentUserOnly, CancellationToken token)
     {
-        var candidates = GetInstalledProcesses(directory, token, requireTermination: false, currentUserOnly);
+        var candidates = GetInstalledProcesses(directory, token, currentUserOnly: currentUserOnly);
         try
         {
             foreach (var candidate in candidates)
@@ -143,7 +142,7 @@ internal static partial class InstallerProcessInspection
 
     private static void StopVerifiedUi(string directory, int? hostProcessId, bool currentUserOnly, CancellationToken token)
     {
-        var candidates = GetInstalledProcesses(directory, token, currentUserOnly: currentUserOnly);
+        var candidates = GetInstalledProcesses(directory, token, requireTermination: true, currentUserOnly: currentUserOnly);
         try
         {
             // Verify the entire set before closing any window. A newly started host,
@@ -171,8 +170,9 @@ internal static partial class InstallerProcessInspection
                     // reopen by PID and could target a different process after PID reuse.
                     if (!TerminateProcess(candidate.Handle, -1))
                     {
+                        var error = Marshal.GetLastPInvokeError();
                         if (HasConfirmedExit(candidate.Handle)) continue;
-                        throw new Win32Exception(Marshal.GetLastPInvokeError());
+                        throw InspectionFailure(process, "TerminateProcess", error, BusyMessage);
                     }
                     while (!process.WaitForExit(200))
                         token.ThrowIfCancellationRequested();
@@ -235,7 +235,7 @@ internal static partial class InstallerProcessInspection
     }
 
     private static List<Candidate> GetInstalledProcesses(string directory, CancellationToken token,
-        bool requireTermination = true, bool currentUserOnly = false)
+        bool requireTermination = false, bool currentUserOnly = false)
     {
         var executable = Path.GetFullPath(Path.Combine(directory, "resodrive.exe"));
         var processes = Process.GetProcessesByName("resodrive");
@@ -250,42 +250,47 @@ internal static partial class InstallerProcessInspection
                 // Pin the PID and use only the rights needed to read account/image
                 // identity. Synchronization and termination belong to matched UIs,
                 // not to the preliminary filter over every same-name process.
-                using var inspection = OpenProcess(0x1000, false, process.Id);
-                if (inspection.IsInvalid)
+                SafeProcessHandle? handle = OpenProcess(0x1000, false, process.Id);
+                try
                 {
-                    var error = Marshal.GetLastPInvokeError();
-                    if (HasConfirmedExit(process)) continue;
-                    throw InspectionFailure(process, "OpenProcess(query)", error, AccountUnknownMessage);
+                    if (handle.IsInvalid)
+                    {
+                        var error = Marshal.GetLastPInvokeError();
+                        if (HasConfirmedExit(process)) continue;
+                        throw InspectionFailure(process, "OpenProcess(query)", error, AccountUnknownMessage);
+                    }
+                    if (currentUserOnly && BelongsToOtherAccount(process, handle, token)) continue;
+                    string path;
+                    try { path = ReadExecutablePath(handle); }
+                    catch (Win32Exception exception)
+                    {
+                        if (HasConfirmedExit(handle)) continue;
+                        // An opaque same-name process may be a different-account installed host.
+                        throw InspectionFailure(process, "QueryFullProcessImageName", exception.NativeErrorCode, BusyMessage);
+                    }
+                    if (!Path.GetFullPath(path).Equals(executable, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (process.SessionId != Process.GetCurrentProcess().SessionId)
+                        throw new IOException("ResoDrive is running in another Windows session. Sign out of that session and retry the installation.");
+                    if (requireTermination)
+                    {
+                        // Keep the query handle until the operational handle is acquired,
+                        // so Windows cannot recycle the PID between the two opens.
+                        var operational = OpenProcess(0x00101001, false, process.Id); // QUERY_LIMITED | TERMINATE | SYNCHRONIZE
+                        if (operational.IsInvalid)
+                        {
+                            var error = Marshal.GetLastPInvokeError();
+                            operational.Dispose();
+                            if (HasConfirmedExit(handle)) continue;
+                            throw InspectionFailure(process, "OpenProcess(matched installation)", error, BusyMessage);
+                        }
+                        handle.Dispose();
+                        handle = operational;
+                    }
+                    matches.Add(new Candidate(process, handle, process.StartTime.ToUniversalTime()));
+                    handle = null; // The candidate owns the pinned handle.
                 }
-                if (currentUserOnly && BelongsToOtherAccount(process, inspection, token)) continue;
-                string? path;
-                try { path = ReadExecutablePath(inspection); }
-                catch (Win32Exception exception)
-                {
-                    if (HasConfirmedExit(inspection)) continue;
-                    // An opaque same-name process may be a different-account installed host.
-                    throw InspectionFailure(process, "QueryFullProcessImageName", exception.NativeErrorCode, BusyMessage);
-                }
-                if (path is null)
-                    throw new IOException(BusyMessage);
-                if (!Path.GetFullPath(path).Equals(executable, StringComparison.OrdinalIgnoreCase))
-                    continue;
-                if (process.SessionId != Process.GetCurrentProcess().SessionId)
-                    throw new IOException("ResoDrive is running in another Windows session. Sign out of that session and retry the installation.");
-                // Keep this process object alive until the decision and termination.
-                // Windows cannot recycle its PID while this kernel handle remains open.
-                var access = requireTermination ? 0x00101001u : 0x00101000u;
-                var handle = OpenProcess(access, false, process.Id); // QUERY_LIMITED | [TERMINATE] | SYNCHRONIZE
-                if (handle.IsInvalid)
-                {
-                    var error = Marshal.GetLastPInvokeError();
-                    handle.Dispose();
-                    if (WaitForConfirmedExit(inspection, token)) continue;
-                    throw InspectionFailure(process, "OpenProcess(matched installation)", error,
-                        requireTermination ? BusyMessage : AccountUnknownMessage);
-                }
-                try { matches.Add(new Candidate(process, handle, process.StartTime.ToUniversalTime())); }
-                catch { handle.Dispose(); throw; }
+                finally { handle?.Dispose(); }
             }
             return matches;
         }
