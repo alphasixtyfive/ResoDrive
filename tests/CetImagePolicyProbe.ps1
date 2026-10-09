@@ -83,6 +83,44 @@ function Read-WindowsPolicy([string]$Path) {
     if ($exact.Count -ne 1) { throw 'Windows did not return exactly one fixture path policy.' }
     return $exact[0]
 }
+$ifeoRoot = 'SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\'
+function Assert-FreshFixturePolicy([string]$Name) {
+    if ($Name -notmatch '^resodrive-image-(policy-probe|inheritance)-[0-9a-f]{32}\.exe$') { throw 'Unexpected fixture policy name.' }
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+    try {
+        $existing = $base.OpenSubKey($ifeoRoot + $Name)
+        if ($null -ne $existing) { $existing.Dispose(); throw 'Fixture policy already exists; refusing to mutate or remove it.' }
+    } finally { $base.Dispose() }
+}
+function Remove-FixturePolicy([string]$Name) {
+    if ($Name -notmatch '^resodrive-image-(policy-probe|inheritance)-[0-9a-f]{32}\.exe$') { throw 'Unexpected fixture cleanup name.' }
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+    try {
+        # Documented RegistryKey API; this newly created unique fixture key and
+        # its path filters are removed wholesale, without packed-value edits.
+        $base.DeleteSubKeyTree($ifeoRoot + $Name, $false)
+        $remaining = $base.OpenSubKey($ifeoRoot + $Name)
+        if ($null -ne $remaining) { $remaining.Dispose(); throw 'Fixture policy cleanup left a key behind.' }
+    } finally { $base.Dispose() }
+}
+function Assert-CfgEqual($Expected, $Actual, [string]$Stage) {
+    if ($Expected.ControlFlowGuard -ne $Actual.ControlFlowGuard -or $Expected.StrictControlFlowGuard -ne $Actual.StrictControlFlowGuard) {
+        throw "$Stage changed CFG native fields."
+    }
+}
+function Show-Policy([string]$Stage, [string]$Path) {
+    $raw = [CetImagePolicyProbe]::ReadCfg($Path)
+    Write-Host ('{0}: CFG={1:X16}; StrictCFG={2:X16}' -f $Stage,$raw.ControlFlowGuard,$raw.StrictControlFlowGuard)
+    Get-ProcessMitigation -Name $Path -ErrorAction Stop -WarningAction Stop | ForEach-Object {
+        Write-Host ('Windows {0}: Name={1}; CFG={2}; CET={3}' -f $Stage,$_.ProcessName,$_.CFG.Enable,$_.UserShadowStack.UserShadowStack)
+    }
+}
+$policyErrors = $null
+$policyAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../installer/CetPolicy.ps1'), [ref]$null, [ref]$policyErrors)
+if ($policyErrors) { throw 'Production policy script failed to parse.' }
+$guard = @($policyAst.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-NoBasenamePolicy' }, $true))
+if ($guard.Count -ne 1) { throw 'Production basename conflict guard was not found.' }
+Invoke-Expression $guard[0].Extent.Text
 $application = (Resolve-Path -LiteralPath $ApplicationPath).Path
 $fixtureDirectory = Join-Path $env:RUNNER_TEMP ('CetImagePolicyProbe-' + [guid]::NewGuid().ToString('N'))
 $fixtureDirectory = [IO.Path]::GetFullPath($fixtureDirectory)
@@ -97,7 +135,10 @@ Copy-Item -LiteralPath $application -Destination $fixture
 $original = $null
 $beforeSiblingSeed = $null
 $cfgOriginal = $null
+$fixtureOwned = $false
 try {
+    Assert-FreshFixturePolicy ([IO.Path]::GetFileName($fixture))
+    $fixtureOwned = $true
     $cfgOriginal = [CetImagePolicyProbe]::ReadCfg($fixture)
     Set-ProcessMitigation -Name $fixture -Enable CFG -ErrorAction Stop -WarningAction Stop
     $beforeSiblingSeed = [CetImagePolicyProbe]::Read($fixture, $false)
@@ -140,6 +181,7 @@ try {
     }
     if ($null -ne $beforeSiblingSeed) { [CetImagePolicyProbe]::Write($fixture, $beforeSiblingSeed) }
     if ($null -ne $cfgOriginal) { [CetImagePolicyProbe]::WriteCfg($fixture, $cfgOriginal) }
+    if ($fixtureOwned) { Remove-FixturePolicy ([IO.Path]::GetFileName($fixture)) }
     Remove-Item -LiteralPath $fixture
     Remove-Item -LiteralPath $fixtureDirectory
 }
@@ -158,7 +200,10 @@ Copy-Item -LiteralPath $application -Destination $inheritPath
 Copy-Item -LiteralPath $application -Destination $otherPath
 $baseCfg = $null
 $inheritShadow = $null
+$inheritOwned = $false
 try {
+    Assert-FreshFixturePolicy $inheritName
+    $inheritOwned = $true
     $baseCfg = [CetImagePolicyProbe]::ReadCfg($inheritName)
     Set-ProcessMitigation -Name $inheritName -Enable CFG -ErrorAction Stop -WarningAction Stop
     $baseOn = [CetImagePolicyProbe]::ReadCfg($inheritName)
@@ -169,29 +214,58 @@ try {
     $inheritShadow = [CetImagePolicyProbe]::Read($inheritPath, $false)
     $otherShadow = [CetImagePolicyProbe]::Read($otherPath, $false)
     $inheritAudit = [CetImagePolicyProbe]::Read($inheritPath, $true)
+    foreach ($scope in @(@('before basename',$inheritName), @('before exact path',$inheritPath), @('before other path',$otherPath))) {
+        Show-Policy $scope[0] $scope[1]
+    }
+    $script:registry = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+    try {
+        $rejected = $false
+        try { Assert-NoBasenamePolicy $inheritPath }
+        catch {
+            if ($_.Exception.Message -notmatch 'administrator has configured') { throw }
+            $rejected = $true
+            Write-Host ('Production guard rejected before mutation: ' + $_.Exception.Message)
+        }
+        if (!$rejected) { throw 'Production guard accepted conflicting basename policy.' }
+    } finally { $script:registry.Dispose(); $script:registry = $null }
+    Assert-CfgEqual $baseOn ([CetImagePolicyProbe]::ReadCfg($inheritName)) 'Guard baseline'
+    Assert-CfgEqual $pathBefore ([CetImagePolicyProbe]::ReadCfg($inheritPath)) 'Guard exact path'
+    Assert-CfgEqual $otherBefore ([CetImagePolicyProbe]::ReadCfg($otherPath)) 'Guard other path'
+    Assert-ShadowEqual $inheritShadow ([CetImagePolicyProbe]::Read($inheritPath,$false)) 'Guard exact CET'
+    Assert-ShadowEqual $inheritAudit ([CetImagePolicyProbe]::Read($inheritPath,$true)) 'Guard exact audit'
+    Assert-ShadowEqual $otherShadow ([CetImagePolicyProbe]::Read($otherPath,$false)) 'Guard other CET'
+    Write-Host 'Production basename guard passed: every fixture setting unchanged after rejection.'
+    # Deliberately bypass the production guard on this sole disposable fixture
+    # to observe why that guard exists. The supported exact-path case above must
+    # retain all settings; this conflicting configuration is rejected in production.
     [CetImagePolicyProbe]::Write($inheritPath, [CetImagePolicyProbe]::WithState($inheritShadow, 2))
     $pathAfter = [CetImagePolicyProbe]::ReadCfg($inheritPath)
     $baseAfter = [CetImagePolicyProbe]::ReadCfg($inheritName)
     $otherAfter = [CetImagePolicyProbe]::ReadCfg($otherPath)
-    foreach ($pair in @(@($pathBefore,$pathAfter), @($baseOn,$baseAfter), @($otherBefore,$otherAfter))) {
-        if ($pair[0].ControlFlowGuard -ne $pair[1].ControlFlowGuard -or $pair[0].StrictControlFlowGuard -ne $pair[1].StrictControlFlowGuard) {
-            throw 'Creating an exact-path CET filter changed effective basename CFG inheritance or another path.'
-        }
+    foreach ($scope in @(@('after bypass basename',$inheritName), @('after bypass exact path',$inheritPath), @('after bypass other path',$otherPath))) {
+        Show-Policy $scope[0] $scope[1]
     }
+    Assert-CfgEqual $baseOn $baseAfter 'Bypass basename'
+    Assert-CfgEqual $otherBefore $otherAfter 'Bypass other path'
     $windowsPath = Read-WindowsPolicy $inheritPath
-    if ($windowsPath.CFG.Enable.ToString() -ne 'ON' -or $windowsPath.UserShadowStack.UserShadowStack.ToString() -ne 'OFF') {
-        throw 'Windows exact-path view lost basename CFG ON after CET OFF.'
+    if ($windowsPath.UserShadowStack.UserShadowStack.ToString() -ne 'OFF') { throw 'Bypass failed to set fixture CET OFF.' }
+    if ($pathBefore.ControlFlowGuard -ne $pathAfter.ControlFlowGuard -or $pathBefore.StrictControlFlowGuard -ne $pathAfter.StrictControlFlowGuard) {
+        Write-Host 'Expected inheritance hazard observed: only the newly filtered exact path lost basename CFG; production guard prevents this mutation.'
+    } else {
+        Write-Host 'This Windows version retained basename CFG; conservative production conflict guard remains required.'
     }
     Assert-ShadowEqual $otherShadow ([CetImagePolicyProbe]::Read($otherPath, $false)) 'Other path CET'
     Assert-ShadowEqual $inheritAudit ([CetImagePolicyProbe]::Read($inheritPath, $true)) 'Inherited CET audit'
-    Write-Host 'Native image inheritance probe passed: basename CFG ON and another path unchanged by exact-path CET OFF.'
+    Write-Host 'Native image conflict probe passed: guard rejected unchanged; bypass scope recorded; basename and other path preserved.'
 } finally {
     if ($null -ne $inheritShadow) {
         [CetImagePolicyProbe]::Write($inheritPath, [CetImagePolicyProbe]::WithOriginalFirst([CetImagePolicyProbe]::Read($inheritPath, $false), $inheritShadow))
     }
     if ($null -ne $baseCfg) { [CetImagePolicyProbe]::WriteCfg($inheritName, $baseCfg) }
+    if ($inheritOwned) { Remove-FixturePolicy $inheritName }
     Remove-Item -LiteralPath $inheritPath
     Remove-Item -LiteralPath $otherPath
     Remove-Item -LiteralPath $otherDirectory
     Remove-Item -LiteralPath $inheritDirectory
 }
+

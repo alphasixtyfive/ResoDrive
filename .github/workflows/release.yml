@@ -111,6 +111,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./tests/setup-update-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName -AppPath artifacts/win-x64/resodrive/resodrive.exe
+      - name: Verify the actual previous public updater
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./tests/setup-update-smoke.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName -AppPath artifacts/win-x64/resodrive/resodrive.exe -UsePreviousUpdater
       - name: Verify hidden CET choice through repair and an in-app version upgrade
         shell: pwsh
         run: ./tests/cet-upgrade-acceptance.ps1 -SetupPath (Get-ChildItem artifacts/win-x64/*-setup.exe).FullName -AppPath artifacts/win-x64/resodrive/resodrive.exe
@@ -125,8 +130,8 @@ jobs:
             ${{ runner.temp }}/resodrive-cross-account-smoke/*
             ${{ runner.temp }}/resodrive-directory-migration-smoke/*.log
             ${{ runner.temp }}/resodrive-directory-migration-smoke/*.json
-            ${{ runner.temp }}/resodrive-setup-update-smoke/*.log
-            ${{ runner.temp }}/resodrive-setup-update-smoke/*.json
+            ${{ runner.temp }}/resodrive-setup-update-smoke/**/*.log
+            ${{ runner.temp }}/resodrive-setup-update-smoke/**/*.json
             ${{ runner.temp }}/resodrive-migration-recovery-smoke/*.log
             ${{ runner.temp }}/resodrive-migration-recovery-smoke/*.json
             ${{ runner.temp }}/resodrive-cet-update-smoke/*.log
