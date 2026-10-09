@@ -69,8 +69,7 @@ public partial class App : System.Windows.Application
                 InvalidOperationException or System.ComponentModel.Win32Exception or TimeoutException or
                 OperationCanceledException or System.Text.Json.JsonException)
             {
-                DirectoryMigrationStartup.RecordHandoffFailure(exception);
-                migration.ShowFailure(ResoDrive.Windows.RecoveryToolsService.Sanitize(exception.Message));
+                migration.ShowFailure(DirectoryMigrationStartup.RecordHandoffFailure(exception));
                 migration.Closed += (_, _) => Shutdown(1);
                 return;
             }

@@ -1,11 +1,37 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Text.Json;
 
 namespace ResoDrive.App.Tests;
 
 public sealed class DirectoryMigrationStartupTests
 {
+    [Fact]
+    public void HandoffFailureKeepsSanitizedNativeDetailsOutsideTheDataFolders()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "resodrive-migration-diagnostics-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var failure = new IOException("Account inspection failed; token=private-value.",
+                new Win32Exception(5, "Process 1234: OpenProcessToken failed with Windows error 5."));
+            DirectoryMigrationStartup.RecordHandoffFailure(failure, directory);
+            var log = File.ReadAllText(Path.Combine(directory, "resodrive-migration.log"));
+            Assert.Contains("migration.handoff_failed", log, StringComparison.Ordinal);
+            Assert.Contains("Process 1234", log, StringComparison.Ordinal);
+            Assert.Contains("Windows error 5", log, StringComparison.Ordinal);
+            Assert.DoesNotContain("private-value", log, StringComparison.Ordinal);
+            using var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "completion.json")));
+            Assert.False(result.RootElement.GetProperty("Succeeded").GetBoolean());
+            var message = result.RootElement.GetProperty("Message").GetString()!;
+            Assert.Contains("Error ID:", message, StringComparison.Ordinal);
+            Assert.DoesNotContain("private-value", message, StringComparison.Ordinal);
+            Assert.Contains(message.Split("Error ID: ")[1], log, StringComparison.Ordinal);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
     [Fact]
     public void FreshlyDiscoveredHelperSkipsOtherSessionsAndVerifiesItsRealImageAndAccount()
     {

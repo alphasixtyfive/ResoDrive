@@ -1,4 +1,8 @@
 using System.Diagnostics;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+using Microsoft.Win32.SafeHandles;
 
 namespace ResoDrive.Windows.Tests;
 
@@ -9,8 +13,110 @@ public sealed class InstallerProcessIsolationGroup
 }
 
 [Collection(InstallerProcessIsolationGroup.Name)]
-public sealed class InstallerProcessInspectionTests
+public sealed partial class InstallerProcessInspectionTests
 {
+    [Fact]
+    public async Task QueryableUnrelatedProcessWithoutSynchronizationRightsDoesNotBlockMigration()
+    {
+        using var fixture = new Fixture();
+        using var unrelated = fixture.StartProcess(Path.Combine("..", "other-install", "resodrive.exe"));
+        using var identity = WindowsIdentity.GetCurrent();
+        // Change only this disposable child's process DACL. Its original start
+        // handle retains the rights needed for guaranteed fixture cleanup.
+        Assert.True(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            $"D:P(A;;0x1000;;;{identity.User!.Value})", 1, out var descriptor, out _));
+        try
+        {
+            Assert.True(SetKernelObjectSecurity(unrelated.SafeHandle, 4, descriptor)); // DACL_SECURITY_INFORMATION
+            using var sync = OpenProcess(0x00101000, false, unrelated.Id);
+            Assert.True(sync.IsInvalid); // This is the old account filter's false failure.
+            Assert.Equal(5, Marshal.GetLastPInvokeError());
+            using var query = OpenProcess(0x1000, false, unrelated.Id);
+            Assert.False(query.IsInvalid);
+            Assert.True(InstallerProcessInspection.VerifyAccountOrExited(unrelated, query, CancellationToken.None));
+
+            await InstallerProcessInspection.WaitForOtherAccountProcessesExitAsync(fixture.Binaries,
+                CancellationToken.None, currentUserOnly: true);
+            await InstallerProcessInspection.VerifyStoppedAsync(fixture.Binaries,
+                CancellationToken.None, currentUserOnly: true);
+            Assert.False(unrelated.HasExited);
+        }
+        finally { _ = LocalFree(descriptor); }
+    }
+
+    [Fact]
+    public async Task QueryableMatchedProcessWithoutTerminationRightsStillBlocksAndKeepsData()
+    {
+        using var fixture = new Fixture();
+        using var ui = fixture.StartProcess("resodrive.exe");
+        var marker = Path.Combine(fixture.Data, "cache-marker");
+        await File.WriteAllTextAsync(marker, "unsent changes");
+        using var identity = WindowsIdentity.GetCurrent();
+        Assert.True(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            $"D:P(A;;0x1000;;;{identity.User!.Value})", 1, out var descriptor, out _));
+        try
+        {
+            Assert.True(SetKernelObjectSecurity(ui.SafeHandle, 4, descriptor));
+            var failure = await Assert.ThrowsAsync<IOException>(() => InstallerProcessInspection.StopVerifiedUiAsync(
+                fixture.Binaries, null, CancellationToken.None, currentUserOnly: true));
+            Assert.Contains("Windows error 5", failure.InnerException!.Message, StringComparison.Ordinal);
+            Assert.Contains("matched installation", failure.InnerException.Message, StringComparison.Ordinal);
+            Assert.False(ui.HasExited);
+            Assert.Equal("unsent changes", await File.ReadAllTextAsync(marker));
+        }
+        finally { _ = LocalFree(descriptor); }
+    }
+
+    [Fact]
+    public void AccountInspectionFailureCanProceedOnlyAfterTheRetainedProcessReallyExits()
+    {
+        using var fixture = new Fixture();
+        using var child = fixture.StartProcess("resodrive.exe");
+        using var inspection = OpenProcess(0x1000, false, child.Id);
+        Assert.False(inspection.IsInvalid);
+        Assert.False(InstallerProcessInspection.VerifyAccountOrExited(child, inspection, CancellationToken.None, handle =>
+        {
+            Assert.Same(inspection, handle);
+            Assert.False(child.HasExited);
+            child.StandardInput.WriteLine("exit");
+            child.StandardInput.Flush();
+            // Drive the token-error boundary while the exit is in flight.
+            throw new IOException("Token query failed.", new Win32Exception(5));
+        }));
+        Assert.True(child.WaitForExit(5000));
+    }
+
+    [Fact]
+    public void UnreadableLiveAccountStillBlocksAndPreservesTheNativeFailure()
+    {
+        using var fixture = new Fixture();
+        using var child = fixture.StartProcess("resodrive.exe");
+        using var inspection = OpenProcess(0x1000, false, child.Id);
+        var failure = new IOException("Token query failed.", new Win32Exception(5));
+        var observed = Assert.Throws<IOException>(() => InstallerProcessInspection.VerifyAccountOrExited(
+            child, inspection, CancellationToken.None, _ => throw failure));
+        Assert.Contains("could not verify which Windows account", observed.Message, StringComparison.Ordinal);
+        Assert.Contains($"process {child.Id}", observed.InnerException!.Message, StringComparison.Ordinal);
+        Assert.Same(failure, observed.InnerException.InnerException);
+        Assert.False(child.HasExited);
+    }
+
+    [Fact]
+    public void AccountFailureExitWaitHonorsCancellationAndLeavesLiveProcessAlone()
+    {
+        using var fixture = new Fixture();
+        using var child = fixture.StartProcess("resodrive.exe");
+        using var inspection = OpenProcess(0x1000, false, child.Id);
+        using var cancellation = new CancellationTokenSource();
+        Assert.ThrowsAny<OperationCanceledException>(() => InstallerProcessInspection.VerifyAccountOrExited(
+            child, inspection, cancellation.Token, _ =>
+            {
+                cancellation.Cancel();
+                throw new IOException("Token query failed.");
+            }));
+        Assert.False(child.HasExited);
+    }
+
     [Fact]
     public async Task AbsentHostSkipsThePipeConnectionTimeout()
     {
@@ -334,4 +440,20 @@ public sealed class InstallerProcessInspectionTests
             }
         }
     }
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial SafeProcessHandle OpenProcess(uint access,
+        [MarshalAs(UnmanagedType.Bool)] bool inherit, int processId);
+
+    [LibraryImport("advapi32.dll", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        string descriptor, uint revision, out IntPtr securityDescriptor, out uint size);
+
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetKernelObjectSecurity(SafeProcessHandle handle, uint information, IntPtr descriptor);
+
+    [LibraryImport("kernel32.dll")]
+    private static partial IntPtr LocalFree(IntPtr memory);
 }

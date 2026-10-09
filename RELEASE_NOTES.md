@@ -1,10 +1,7 @@
-This update removes unnecessary waits when preparing ResoDrive for an update.
+This candidate improves recovery when an update has installed but ResoDrive cannot finish moving its data folder.
 
-It replaces the previous download with faster update preparation and a fix for interrupted migration.
+- Account checks request only the Windows permissions needed to read process identity, avoiding unnecessary access failures.
+- Processes closing during inspection can finish exiting without being mistaken for a live process with an unknown account. Live background work and pending uploads remain protected.
+- Migration failures retain sanitized diagnostic details and an error ID for support.
 
-- Setup checks each installation once, even when Windows supplies the same folder in different forms.
-- Preparation continues promptly when the background host has already stopped. Account verification and protection for pending uploads remain in place.
-- Existing installations can finish moving app data when the previous updater exits during the handoff.
-- In-app updates from 0.3.39 onward use the branded ResoDrive Setup window.
-
-Older installed updaters can still display Windows Installer progress or take longer to close. To open branded Setup directly for this update, download **ResoDrive-Setup.exe** below and run it manually. Let uploads finish and close documents opened from ResoDrive first. Your accounts, settings and files are preserved.
+This candidate has not been published. The reported Windows 10 installation recovered before diagnostics were collected, so its original failing process is not established.

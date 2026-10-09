@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.43] - 2026-10-09 (unpublished candidate)
+
+- Inspect process account and executable identity with query-only rights and a retained process handle, avoiding false account-verification failures from unnecessary synchronization or module-memory access.
+- Allow a process that exits during failed inspection to finish closing for up to one second; a live or unverifiable process still blocks migration and installation.
+- Preserve sanitized migration failure details, including native errors and a matching error ID, outside the data folders being moved.
+
 ## [0.3.42] - 2026-10-09
 
 - Check each installation directory once, including paths supplied by Windows Installer with a trailing dot.

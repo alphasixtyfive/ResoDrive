@@ -65,14 +65,23 @@ internal static partial class DirectoryMigrationStartup
         WriteResult(true, "Both application and user-data locations have migrated.");
     }
 
-    internal static void RecordHandoffFailure(Exception exception)
+    internal static string RecordHandoffFailure(Exception exception, string? diagnosticDirectory = null)
     {
+        var message = RecoveryToolsService.Sanitize(exception.Message);
         try
         {
-            _ = UserDataDirectoryMigration.PrepareHelperDirectory();
-            WriteResult(false, RecoveryToolsService.Sanitize(exception.Message));
+            var directory = diagnosticDirectory ?? UserDataDirectoryMigration.PrepareHelperDirectory();
+            // Keep diagnostics outside both roots being moved. The normal UI logger
+            // is intentionally disabled during handoff, and Message alone loses
+            // the failing native call, process ID, Windows error and stack.
+            var log = new ProcessDiagnosticLog(Path.Combine(directory, "resodrive-migration.log"));
+            log.StartSession();
+            var errorId = log.Exception("migration.handoff_failed", exception);
+            message += $" Error ID: {errorId}";
+            WriteResult(false, message, directory);
         }
         catch (Exception failure) when (failure is IOException or UnauthorizedAccessException) { }
+        return message;
     }
 
     private static async Task MigrateAsync(CancellationToken token)
@@ -117,8 +126,8 @@ internal static partial class DirectoryMigrationStartup
     // Compatibility entry point for an already copied older migration helper.
     internal static Task<int> CompleteAsync() => MigrateWithoutLaunchingAsync();
 
-    private static void WriteResult(bool succeeded, string message) => File.WriteAllText(
-        Path.Combine(StateDirectory, "completion.json"), JsonSerializer.Serialize(new { Succeeded = succeeded, Message = message, RecordedAtUtc = DateTimeOffset.UtcNow }));
+    private static void WriteResult(bool succeeded, string message, string? directory = null) => File.WriteAllText(
+        Path.Combine(directory ?? StateDirectory, "completion.json"), JsonSerializer.Serialize(new { Succeeded = succeeded, Message = message, RecordedAtUtc = DateTimeOffset.UtcNow }));
 
     internal static ProcessLease FindLegacyHelpers()
     {

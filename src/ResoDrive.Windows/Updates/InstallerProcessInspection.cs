@@ -89,13 +89,13 @@ internal static partial class InstallerProcessInspection
             foreach (var candidate in candidates)
             {
                 token.ThrowIfCancellationRequested();
-                if (HasConfirmedExit(candidate.Process))
+                if (HasConfirmedExit(candidate.Handle))
                     continue;
                 try
                 {
-                    VerifySameAccount(candidate);
+                    if (!VerifyAccountOrExited(candidate.Process, candidate.Handle, token)) continue;
                 }
-                catch (IOException) when (HasConfirmedExit(candidate.Process))
+                catch (IOException) when (HasConfirmedExit(candidate.Handle))
                 {
                     // The process closed between enumeration and token inspection.
                     continue;
@@ -110,8 +110,8 @@ internal static partial class InstallerProcessInspection
                         var wait = WaitForSingleObject(candidate.Handle, 200);
                         if (wait == 0) break; // This exact process exited.
                         if (wait != 0x00000102)
-                            throw new IOException(AccountUnknownMessage,
-                                new Win32Exception(Marshal.GetLastPInvokeError()));
+                            throw InspectionFailure(candidate.Process, "WaitForSingleObject",
+                                Marshal.GetLastPInvokeError(), AccountUnknownMessage);
                         if (Stopwatch.GetTimestamp() >= deadline)
                             throw new OtherAccountException();
                     }
@@ -132,9 +132,7 @@ internal static partial class InstallerProcessInspection
             foreach (var candidate in candidates)
             {
                 token.ThrowIfCancellationRequested();
-                if (HasConfirmedExit(candidate.Process)) continue;
-                try { VerifySameAccount(candidate); }
-                catch (IOException) when (HasConfirmedExit(candidate.Process)) { }
+                _ = VerifyAccountOrExited(candidate.Process, candidate.Handle, token);
             }
         }
         finally
@@ -154,32 +152,32 @@ internal static partial class InstallerProcessInspection
             {
                 var process = candidate.Process;
                 token.ThrowIfCancellationRequested();
-                if (process.Id == hostProcessId || HasConfirmedExit(process))
+                if (process.Id == hostProcessId || HasConfirmedExit(candidate.Handle))
                     continue;
-                VerifyUiCandidate(candidate, directory);
+                VerifyUiCandidate(candidate, directory, token);
             }
 
             foreach (var candidate in candidates)
             {
                 var process = candidate.Process;
                 token.ThrowIfCancellationRequested();
-                if (process.Id == hostProcessId || HasConfirmedExit(process))
+                if (process.Id == hostProcessId || HasConfirmedExit(candidate.Handle))
                     continue;
-                VerifyUiCandidate(candidate, directory);
+                VerifyUiCandidate(candidate, directory, token);
                 try
                 {
-                    if (process.HasExited) continue;
+                    if (HasConfirmedExit(candidate.Handle)) continue;
                     // Terminate the handle opened during inspection. Process.Kill would
                     // reopen by PID and could target a different process after PID reuse.
                     if (!TerminateProcess(candidate.Handle, -1))
                     {
-                        if (HasConfirmedExit(process)) continue;
+                        if (HasConfirmedExit(candidate.Handle)) continue;
                         throw new Win32Exception(Marshal.GetLastPInvokeError());
                     }
                     while (!process.WaitForExit(200))
                         token.ThrowIfCancellationRequested();
                 }
-                catch (InvalidOperationException) when (HasConfirmedExit(process))
+                catch (InvalidOperationException) when (HasConfirmedExit(candidate.Handle))
                 {
                     // The UI exited after inspection.
                 }
@@ -191,23 +189,30 @@ internal static partial class InstallerProcessInspection
         }
     }
 
-    private static void VerifyUiCandidate(Candidate candidate, string directory)
+    private static void VerifyUiCandidate(Candidate candidate, string directory, CancellationToken token)
     {
         var process = candidate.Process;
-        if (HasConfirmedExit(process)) return;
-        try { VerifySameAccount(candidate); }
-        catch (IOException) when (HasConfirmedExit(process)) { return; }
-        if (!IsVerifiedUi(process) || HasConfirmedExit(process))
-            throw new IOException(BusyMessage);
+        if (!VerifyAccountOrExited(process, candidate.Handle, token)) return;
         try
         {
+            if (!IsVerifiedUi(candidate))
+            {
+                if (HasConfirmedExit(candidate.Handle)) return;
+                throw new IOException(BusyMessage);
+            }
+            if (HasConfirmedExit(candidate.Handle)) return;
             if (process.StartTime.ToUniversalTime() != candidate.StartTimeUtc ||
-                !Path.GetFullPath(process.MainModule?.FileName ?? string.Empty).Equals(
+                !Path.GetFullPath(ReadExecutablePath(candidate.Handle)).Equals(
                     Path.GetFullPath(Path.Combine(directory, "resodrive.exe")), StringComparison.OrdinalIgnoreCase))
                 throw new IOException(BusyMessage);
         }
+        catch (IOException) when (HasConfirmedExit(candidate.Handle))
+        {
+            // A WMI/command-line read can finish after this exact UI exited.
+        }
         catch (Exception exception) when (exception is Win32Exception or InvalidOperationException)
         {
+            if (HasConfirmedExit(candidate.Handle)) return;
             throw new IOException(BusyMessage, exception);
         }
     }
@@ -219,7 +224,7 @@ internal static partial class InstallerProcessInspection
         {
             foreach (var candidate in candidates)
             {
-                if (!HasConfirmedExit(candidate.Process))
+                if (!HasConfirmedExit(candidate.Handle))
                     throw new IOException(BusyMessage);
             }
         }
@@ -242,14 +247,24 @@ internal static partial class InstallerProcessInspection
                 token.ThrowIfCancellationRequested();
                 if (process.Id == Environment.ProcessId || HasConfirmedExit(process))
                     continue;
-                if (currentUserOnly && BelongsToOtherAccount(process)) continue;
+                // Pin the PID and use only the rights needed to read account/image
+                // identity. Synchronization and termination belong to matched UIs,
+                // not to the preliminary filter over every same-name process.
+                using var inspection = OpenProcess(0x1000, false, process.Id);
+                if (inspection.IsInvalid)
+                {
+                    var error = Marshal.GetLastPInvokeError();
+                    if (HasConfirmedExit(process)) continue;
+                    throw InspectionFailure(process, "OpenProcess(query)", error, AccountUnknownMessage);
+                }
+                if (currentUserOnly && BelongsToOtherAccount(process, inspection, token)) continue;
                 string? path;
-                try { path = process.MainModule?.FileName; }
-                catch (InvalidOperationException) when (HasConfirmedExit(process)) { continue; }
+                try { path = ReadExecutablePath(inspection); }
                 catch (Win32Exception exception)
                 {
+                    if (HasConfirmedExit(inspection)) continue;
                     // An opaque same-name process may be a different-account installed host.
-                    throw new IOException(BusyMessage, exception);
+                    throw InspectionFailure(process, "QueryFullProcessImageName", exception.NativeErrorCode, BusyMessage);
                 }
                 if (path is null)
                     throw new IOException(BusyMessage);
@@ -265,8 +280,9 @@ internal static partial class InstallerProcessInspection
                 {
                     var error = Marshal.GetLastPInvokeError();
                     handle.Dispose();
-                    throw new IOException(requireTermination ? BusyMessage : AccountUnknownMessage,
-                        new Win32Exception(error));
+                    if (WaitForConfirmedExit(inspection, token)) continue;
+                    throw InspectionFailure(process, "OpenProcess(matched installation)", error,
+                        requireTermination ? BusyMessage : AccountUnknownMessage);
                 }
                 try { matches.Add(new Candidate(process, handle, process.StartTime.ToUniversalTime())); }
                 catch { handle.Dispose(); throw; }
@@ -285,34 +301,17 @@ internal static partial class InstallerProcessInspection
         }
     }
 
-    private static void VerifySameAccount(Candidate candidate)
-    {
-        VerifySameAccount(candidate.Handle);
-    }
-
-    private static bool BelongsToOtherAccount(Process process)
-    {
-        // Authenticate before excluding a foreign process, including one whose image
-        // cannot be read. No termination rights are requested for this inspection.
-        using var handle = OpenProcess(0x00101000, false, process.Id);
-        if (handle.IsInvalid)
-        {
-            if (HasConfirmedExit(process)) return true;
-            throw new IOException(AccountUnknownMessage, new Win32Exception(Marshal.GetLastPInvokeError()));
-        }
-        try { VerifySameAccount(handle); return false; }
-        catch (OtherAccountException) { return true; }
-        catch (IOException) when (HasConfirmedExit(process)) { return true; }
-    }
-
     private static void VerifySameAccount(SafeProcessHandle processHandle)
     {
-        using var current = WindowsIdentity.GetCurrent();
+        using var current = WindowsIdentity.GetCurrent(TokenAccessLevels.Query);
         if (current.User is not { } currentSid)
             throw new IOException(AccountUnknownMessage);
         if (!OpenProcessToken(processHandle, 0x0008, out var token)) // TOKEN_QUERY
+        {
+            var error = Marshal.GetLastPInvokeError();
             throw new IOException(AccountUnknownMessage,
-                new Win32Exception(Marshal.GetLastPInvokeError()));
+                new Win32Exception(error, $"OpenProcessToken failed with Windows error {error}."));
+        }
         using (token)
         {
             try
@@ -331,8 +330,9 @@ internal static partial class InstallerProcessInspection
         }
     }
 
-    private static bool IsVerifiedUi(Process process)
+    private static bool IsVerifiedUi(Candidate candidate)
     {
+        var process = candidate.Process;
         string? commandLine = null;
         try
         {
@@ -355,14 +355,14 @@ internal static partial class InstallerProcessInspection
         }
         if (string.IsNullOrWhiteSpace(commandLine))
         {
-            if (HasConfirmedExit(process)) return false;
+            if (HasConfirmedExit(candidate.Handle)) return false;
             throw new IOException(BusyMessage);
         }
 
         var arguments = ParseCommandLine(commandLine);
         if (arguments.Length is < 1 or > 2 ||
             !Path.IsPathFullyQualified(arguments[0]) ||
-            !Path.GetFullPath(arguments[0]).Equals(Path.GetFullPath(process.MainModule?.FileName ?? string.Empty),
+            !Path.GetFullPath(arguments[0]).Equals(Path.GetFullPath(ReadExecutablePath(candidate.Handle)),
                 StringComparison.OrdinalIgnoreCase))
             throw new IOException(BusyMessage);
         return arguments.Length == 1 || arguments[1].Equals("--background", StringComparison.OrdinalIgnoreCase) ||
@@ -423,10 +423,17 @@ internal static partial class InstallerProcessInspection
             {
                 token.ThrowIfCancellationRequested();
                 if (HasConfirmedExit(process)) continue;
-                if (currentUserOnly && BelongsToOtherAccount(process)) continue;
+                using var inspection = OpenProcess(0x1000, false, process.Id);
+                if (inspection.IsInvalid)
+                {
+                    var error = Marshal.GetLastPInvokeError();
+                    if (HasConfirmedExit(process)) continue;
+                    throw InspectionFailure(process, "OpenProcess(rclone query)", error, AccountUnknownMessage);
+                }
+                if (currentUserOnly && BelongsToOtherAccount(process, inspection, token)) continue;
                 try
                 {
-                    var path = process.MainModule?.FileName ?? throw new IOException(BusyMessage);
+                    var path = ReadExecutablePath(inspection);
                     var canonical = RemoteWipeWorkStopper.CanonicalExecutablePath(path);
                     var configured = RemoteWipeWorkStopper.CanonicalExecutablePath(paths.RcloneExecutable);
                     var runtimeDirectory = Path.GetDirectoryName(canonical);
@@ -442,7 +449,7 @@ internal static partial class InstallerProcessInspection
                 }
                 catch (Exception exception) when (exception is Win32Exception or InvalidOperationException)
                 {
-                    if (!HasConfirmedExit(process)) throw new IOException(BusyMessage, exception);
+                    if (!HasConfirmedExit(inspection)) throw new IOException(BusyMessage, exception);
                 }
             }
         }
