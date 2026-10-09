@@ -48,6 +48,42 @@ internal static class ApplicationUpdateHandoff
     private const int ErrorCancelled = 1223;
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
+    internal static Process? OpenHostForShutdown(HostResponse uploads)
+    {
+        if (!uploads.Succeeded) return null;
+        if (uploads.HostProcessId is not int processId || processId <= 0)
+            throw new InvalidOperationException("The background host could not be identified.");
+        Process? process = null;
+        try
+        {
+            process = Process.GetProcessById(processId);
+            _ = process.SafeHandle; // Retain the host before requesting shutdown; do not reopen a recycled PID.
+            return process;
+        }
+        catch (ArgumentException) { process?.Dispose(); return null; }
+        catch { process?.Dispose(); throw; }
+    }
+
+    internal static async Task WaitForHostShutdownAsync(Process? host, HostResponse shutdown, CancellationToken cancellationToken)
+    {
+        // Keep the UI and its stopping progress visible until the authenticated
+        // host exits. Otherwise the copied helper can find its mutex while its
+        // pipe is already closed and spend 15 seconds trying another shutdown.
+        if (!shutdown.Succeeded || host is null || shutdown.HostProcessId != host.Id)
+            throw new InvalidOperationException("The background host did not acknowledge a verifiable shutdown.");
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(60));
+        try
+        {
+            await host.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException("ResoDrive is still stopping background work. Let it finish and try the update again.");
+        }
+    }
+
     internal static void Start(
         string version,
         string installerPath,

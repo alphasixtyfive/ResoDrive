@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.44] - 2026-10-09
+
+- Keep update progress visible while background work stops, avoiding an unnecessary 15-second pause before Setup opens.
+- Preserve upload checks, settings, cached files, and the saved CET compatibility choice during the handoff.
+
 ## [0.3.43] - 2026-10-09
 
 - Fixed updates that could stop at "Setup could not verify which Windows account owns a running ResoDrive process" even when the app was running under the same account.

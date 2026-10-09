@@ -361,6 +361,7 @@ public partial class MainWindow
                 SetLiveText(ApplicationUpdateStatusText, uploads.ErrorMessage ?? "Could not check uploads. Try again.");
                 return;
             }
+            using var stoppingHost = ApplicationUpdateHandoff.OpenHostForShutdown(uploads);
             SetLiveText(ApplicationUpdateStatusText, "Stopping mounted drives and sync jobs…");
             var shutdown = await HostClient.SendAsync(
                 new HostRequest("shutdown", Confirmed: true),
@@ -374,6 +375,8 @@ public partial class MainWindow
                     shutdown.ErrorMessage ?? "ResoDrive could not safely stop its background work. Close open documents and try again.");
                 return;
             }
+            if (shutdown.Succeeded)
+                await ApplicationUpdateHandoff.WaitForHostShutdownAsync(stoppingHost, shutdown, _lifetimeCancellation.Token);
             SetLiveText(ApplicationUpdateStatusText, "Preparing Windows Installer…");
             if (IsClosing || _exitRequested) return;
             ApplicationUpdateHandoff.Start(
@@ -397,7 +400,7 @@ public partial class MainWindow
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or InvalidOperationException or
-                System.ComponentModel.Win32Exception)
+                System.ComponentModel.Win32Exception or TimeoutException)
         {
             StatusVisuals.Apply(ApplicationUpdateStatusIcon, success: false, error: true);
             SetLiveText(ApplicationUpdateStatusText, "The update installer was not started.");
