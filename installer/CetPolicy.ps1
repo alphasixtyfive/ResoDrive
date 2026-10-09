@@ -207,6 +207,7 @@ function Read-Policy([bool] $forOptOut = $false) {
 function Off-Policy([string] $original) { return [ResoDrive.CetImagePolicy]::Off($original) }
 
 function Write-Policy([string] $value, [string] $expected) {
+    if ($null -eq (Find-Filter)) { Assert-NoBasenamePolicy $script:installedPath }
     [ResoDrive.CetImagePolicy]::WriteFirst($script:installedPath, $value, $expected)
 }
 function Invoke-CetAction([string] $Action, [string] $DisableCet) {

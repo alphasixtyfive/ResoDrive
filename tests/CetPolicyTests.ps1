@@ -31,6 +31,7 @@ function Reset-Fixture([string] $policy) {
     $script:conflictingOptions = $false
     $script:filterExists = $false
     $script:filterHasAdminSettings = $false
+    $script:basenamePolicy = $false
 }
 function Read-State([string] $name) { return $script:state[$name] }
 function Write-State([string] $name, [string] $value) { $script:state[$name] = $value; $script:writes++ }
@@ -51,6 +52,7 @@ function Find-Filter { if ($script:filterExists) { return 'fixture-filter' } }
 function Remove-OwnedEmptyFilter { if (-not $script:filterHasAdminSettings) { $script:filterExists = $false } }
 function Write-Policy([string] $value, [string] $expected) {
     Assert ($script:state.ContainsKey('Pending')) 'Policy changed without a durable undo record.'
+    if (-not $script:filterExists -and $script:basenamePolicy) { throw 'A basename policy prevents recreating the filter.' }
     if ($script:policy -ne $expected) { throw 'Administrator changed the setting before the native write.' }
     $script:policy = $value
     $script:filterExists = $true
@@ -178,6 +180,19 @@ Assert ($script:filterExists -and $script:policy -eq '0000000000000002') 'Rollba
 Invoke-CetAction 'Remove' '0'
 Invoke-CetAction 'Commit' '0'
 Assert (-not $script:filterExists) 'Committed uninstall retained our empty filter.'
+
+Reset-Fixture '0000000000000000'
+Invoke-CetAction 'Apply' '1'
+Invoke-CetAction 'Commit' '0'
+Invoke-CetAction 'Remove' '0'
+$beforeBlockedRollback = $script:state.Pending
+$script:basenamePolicy = $true
+Expect-Failure { Invoke-CetAction 'Rollback' '0' }
+Assert (-not $script:filterExists -and $script:policy -eq '0000000000000000' -and
+    $script:state.Pending -eq $beforeBlockedRollback) 'Blocked rollback changed inheritance or lost its undo record.'
+$script:basenamePolicy = $false
+Invoke-CetAction 'Rollback' '0'
+Assert ($script:filterExists -and $script:policy -eq '0000000000000002') 'Rollback could not recover after the basename conflict was resolved.'
 
 foreach ($preexisting in @($true, $false)) {
     Reset-Fixture '0000000000000000'
@@ -374,17 +389,29 @@ public static class CetPolicyFixture {
         Invoke-NativeAction 'Rollback'
         Assert ((Native-FilterExists) -and ([CetPolicyFixture]::Read($fixtureExecutable, $false)).UserShadowStack -eq 2) 'Rollback did not restore the previous fresh opt-out.'
         Invoke-NativeAction 'Remove'
-        Invoke-NativeAction 'Commit'
         Assert (-not (Native-FilterExists)) 'Uninstall retained the owned empty filter.'
         $basenameRule = New-Object CetPolicyFixture+Cfg
         $basenameRule.ControlFlowGuard = 1
         [CetPolicyFixture]::WriteCfg('resodrive.exe', $basenameRule)
         Assert (([CetPolicyFixture]::ReadCfg($fixtureExecutable)).ControlFlowGuard -eq 1 -and
             ([CetPolicyFixture]::ReadCfg($otherExecutable)).ControlFlowGuard -eq 1) 'Removed opt-out filter still shadowed a future administrator basename policy.'
+        $pendingKey = $nativeRegistry.OpenSubKey($nativeStatePath)
+        try { $pendingBefore = $pendingKey.GetValue('Pending') } finally { $pendingKey.Dispose() }
+        Expect-Failure { Invoke-NativeAction 'Rollback' }
+        $pendingKey = $nativeRegistry.OpenSubKey($nativeStatePath)
+        try { Assert ($pendingKey.GetValue('Pending') -eq $pendingBefore) 'Blocked rollback lost its durable undo record.' }
+        finally { $pendingKey.Dispose() }
+        Assert (-not (Native-FilterExists) -and ([CetPolicyFixture]::ReadCfg($fixtureExecutable)).ControlFlowGuard -eq 1 -and
+            ([CetPolicyFixture]::ReadCfg($otherExecutable)).ControlFlowGuard -eq 1) 'Blocked rollback recreated a filter or changed administrator inheritance.'
         $emptyRoot = $nativeRegistry.OpenSubKey($fixtureIfeoPath)
         try { Assert ($emptyRoot.SubKeyCount -eq 0) 'The fresh fixture unexpectedly retained an IFEO filter.' }
         finally { $emptyRoot.Dispose() }
         $nativeRegistry.DeleteSubKey($fixtureIfeoPath, $false) # Only the fixture's just-created basename CFG rule.
+        Invoke-NativeAction 'Rollback'
+        Assert ((Native-FilterExists) -and ([CetPolicyFixture]::Read($fixtureExecutable, $false)).UserShadowStack -eq 2) 'Rollback did not recover after resolving the basename conflict.'
+        Invoke-NativeAction 'Remove'
+        Invoke-NativeAction 'Commit'
+        Assert (-not (Native-FilterExists)) 'Final uninstall retained the recovered owned filter.'
         # Audit ON requires shadow stacks ON, so it cannot be combined with the
         # requested OFF fixture. Preserve its original NOTSET value and CFG ON.
         $null = ProcessMitigations\Set-ProcessMitigation -Name $fixtureExecutable -Enable CFG -ErrorAction Stop

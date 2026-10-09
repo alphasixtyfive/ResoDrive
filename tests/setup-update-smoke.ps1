@@ -14,9 +14,13 @@ $setup = (Resolve-Path -LiteralPath $SetupPath).Path
 $candidate = (Resolve-Path -LiteralPath $AppPath).Path
 $version = ((Get-Item $candidate).VersionInfo.ProductVersion -split '\+', 2)[0]
 if ($UsePreviousUpdater -and -not $PSBoundParameters.ContainsKey('BaselineVersion')) {
-    $baselineTag = gh release view --json tagName --jq .tagName
+    $releaseJson = gh release list --exclude-drafts --exclude-pre-releases --limit 100 --json tagName
     if ($LASTEXITCODE -ne 0) { throw 'Could not determine the latest public updater baseline.' }
-    $BaselineVersion = ([string]$baselineTag).Trim() -replace '^v', ''
+    $previousVersions = @($releaseJson | ConvertFrom-Json | ForEach-Object {
+        if ($_.tagName -match '^v(\d+\.\d+\.\d+)$') { [version]$Matches[1] }
+    } | Where-Object { $_ -lt [version]$version } | Sort-Object -Descending)
+    if ($previousVersions.Count -eq 0) { throw 'No earlier public updater baseline is available.' }
+    $BaselineVersion = $previousVersions[0].ToString()
 }
 $parsedBaseline = $null
 if ($BaselineVersion -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$' -or
