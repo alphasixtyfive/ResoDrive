@@ -28,18 +28,22 @@ public sealed partial class InstallerProcessInspectionTests
         try
         {
             Assert.True(SetKernelObjectSecurity(unrelated.SafeHandle, 4, descriptor)); // DACL_SECURITY_INFORMATION
-            using var sync = OpenProcess(0x00101000, false, unrelated.Id);
-            Assert.True(sync.IsInvalid); // This is the old account filter's false failure.
-            Assert.Equal(5, Marshal.GetLastPInvokeError());
-            using var query = OpenProcess(0x1000, false, unrelated.Id);
-            Assert.False(query.IsInvalid);
-            Assert.True(InstallerProcessInspection.VerifyAccountOrExited(unrelated, query, CancellationToken.None));
+            using var reader = CreateReaderWithoutDebugPrivilege();
+            await WindowsIdentity.RunImpersonatedAsync(reader, async () =>
+            {
+                using var sync = OpenProcess(0x00101000, false, unrelated.Id);
+                Assert.True(sync.IsInvalid); // This is the old account filter's false failure.
+                Assert.Equal(5, Marshal.GetLastPInvokeError());
+                using var query = OpenProcess(0x1000, false, unrelated.Id);
+                Assert.False(query.IsInvalid);
+                Assert.True(InstallerProcessInspection.VerifyAccountOrExited(unrelated, query, CancellationToken.None));
 
-            await InstallerProcessInspection.WaitForOtherAccountProcessesExitAsync(fixture.Binaries,
-                CancellationToken.None, currentUserOnly: true);
-            await InstallerProcessInspection.VerifyStoppedAsync(fixture.Binaries,
-                CancellationToken.None, currentUserOnly: true);
-            Assert.False(unrelated.HasExited);
+                await InstallerProcessInspection.WaitForOtherAccountProcessesExitAsync(fixture.Binaries,
+                    CancellationToken.None, currentUserOnly: true);
+                await InstallerProcessInspection.VerifyStoppedAsync(fixture.Binaries,
+                    CancellationToken.None, currentUserOnly: true);
+                Assert.False(unrelated.HasExited);
+            });
         }
         finally { _ = LocalFree(descriptor); }
     }
@@ -57,12 +61,42 @@ public sealed partial class InstallerProcessInspectionTests
         try
         {
             Assert.True(SetKernelObjectSecurity(ui.SafeHandle, 4, descriptor));
-            var failure = await Assert.ThrowsAsync<IOException>(() => InstallerProcessInspection.StopVerifiedUiAsync(
-                fixture.Binaries, null, CancellationToken.None, currentUserOnly: true));
-            Assert.Contains("Windows error 5", failure.InnerException!.Message, StringComparison.Ordinal);
-            Assert.Contains("matched installation", failure.InnerException.Message, StringComparison.Ordinal);
-            Assert.False(ui.HasExited);
-            Assert.Equal("unsent changes", await File.ReadAllTextAsync(marker));
+            using var reader = CreateReaderWithoutDebugPrivilege();
+            await WindowsIdentity.RunImpersonatedAsync(reader, async () =>
+            {
+                var failure = await Assert.ThrowsAsync<IOException>(() => InstallerProcessInspection.StopVerifiedUiAsync(
+                    fixture.Binaries, null, CancellationToken.None, currentUserOnly: true));
+                Assert.Contains("Windows error 5", failure.InnerException!.Message, StringComparison.Ordinal);
+                Assert.Contains("matched installation", failure.InnerException.Message, StringComparison.Ordinal);
+                Assert.False(ui.HasExited);
+                Assert.Equal("unsent changes", await File.ReadAllTextAsync(marker));
+            });
+        }
+        finally { _ = LocalFree(descriptor); }
+    }
+
+    [Fact]
+    public async Task ProcessWhoseMinimumIdentityAccessIsDeniedStillBlocksWithItsNativeError()
+    {
+        using var fixture = new Fixture();
+        using var ui = fixture.StartProcess("resodrive.exe");
+        using var identity = WindowsIdentity.GetCurrent();
+        Assert.True(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            $"D:P(A;;0x100000;;;{identity.User!.Value})", 1, out var descriptor, out _));
+        try
+        {
+            Assert.True(SetKernelObjectSecurity(ui.SafeHandle, 4, descriptor));
+            using var reader = CreateReaderWithoutDebugPrivilege();
+            await WindowsIdentity.RunImpersonatedAsync(reader, async () =>
+            {
+                var failure = await Assert.ThrowsAsync<IOException>(() =>
+                    InstallerProcessInspection.WaitForOtherAccountProcessesExitAsync(
+                        fixture.Binaries, CancellationToken.None, currentUserOnly: true));
+                Assert.Contains("could not verify which Windows account", failure.Message, StringComparison.Ordinal);
+                Assert.Contains("OpenProcess(query)", failure.InnerException!.Message, StringComparison.Ordinal);
+                Assert.Equal(5, Assert.IsType<Win32Exception>(failure.InnerException).NativeErrorCode);
+                Assert.False(ui.HasExited);
+            });
         }
         finally { _ = LocalFree(descriptor); }
     }
@@ -440,6 +474,54 @@ public sealed partial class InstallerProcessInspectionTests
             }
         }
     }
+
+    private static SafeAccessTokenHandle CreateReaderWithoutDebugPrivilege()
+    {
+        // Hosted runners can have SeDebugPrivilege enabled, bypassing process
+        // DACLs. Restrict a private impersonation token, never the runner's token.
+        using var identity = WindowsIdentity.GetCurrent(TokenAccessLevels.Query | TokenAccessLevels.Duplicate);
+        Assert.True(DuplicateTokenEx(identity.AccessToken, 0x002C, IntPtr.Zero, 2, 2, out var reader));
+        try
+        {
+            Assert.True(LookupPrivilegeValueW(null, "SeDebugPrivilege", out var privilege));
+            var privileges = new TokenPrivileges { Count = 1, Privilege = privilege, Attributes = 0 };
+            Assert.True(AdjustTokenPrivileges(reader, false, ref privileges, 0, IntPtr.Zero, IntPtr.Zero));
+            var error = Marshal.GetLastPInvokeError();
+            Assert.True(error is 0 or 1300); // ERROR_NOT_ALL_ASSIGNED: absent is already disabled.
+            return reader;
+        }
+        catch { reader.Dispose(); throw; }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Luid
+    {
+        public uint Low;
+        public int High;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TokenPrivileges
+    {
+        public uint Count;
+        public Luid Privilege;
+        public uint Attributes;
+    }
+
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool DuplicateTokenEx(SafeAccessTokenHandle source, uint access, IntPtr attributes,
+        uint impersonationLevel, uint tokenType, out SafeAccessTokenHandle token);
+
+    [LibraryImport("advapi32.dll", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool LookupPrivilegeValueW(string? system, string name, out Luid privilege);
+
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool AdjustTokenPrivileges(SafeAccessTokenHandle token,
+        [MarshalAs(UnmanagedType.Bool)] bool disableAll, ref TokenPrivileges privileges, uint length,
+        IntPtr previous, IntPtr returnLength);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     private static partial SafeProcessHandle OpenProcess(uint access,

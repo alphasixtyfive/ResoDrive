@@ -63,7 +63,7 @@ in an outer exception and a native error in its inner exception.
 ## Validation of candidate 0.3.43
 
 - Complete local Windows build, locked restores, MSI validation and Setup build:
-  1,183 tests passed; three optional integrations skipped; zero warnings/errors.
+  1,184 tests passed; three optional integrations skipped; zero warnings/errors.
 - All 344 application tests passed with `DOTNET_PROCESSOR_COUNT=1`.
 - Compiled process smoke passed populated rendering, concurrent startup,
   tray/show acknowledgement, host recovery and relaunch with disposable data.
@@ -73,7 +73,9 @@ in an outer exception and a native error in its inner exception.
   hashes. The production installation and its data were not upgraded.
 - New native permission fixtures confirm a readable unrelated process is left
   alone, and a matched UI lacking termination rights still blocks while preserving
-  a cache marker. Account-error exit and cancellation cases leave live children
+  a cache marker. Denial of even minimum identity access still produces the
+  account error with its native code and leaves the process alive.
+  Account-error exit and cancellation cases leave live children
   alone. Existing active-rclone, unknown-role, upload rejection and corrupt
   ownership checks continue to pass.
 
@@ -86,3 +88,12 @@ The corrected source still needs exact-commit hosted native installer/migration
 acceptance, and any public release must follow `RELEASING.md` with immutable
 accepted assets. No Windows 10 machine or actual affected user's update was
 used in local acceptance. The post-recovery diagnostic cannot fill that gap.
+
+The first hosted run of commit `9b66d65` exposed an assumption in the two new
+permission fixtures: the hosted reader's enabled debug privilege bypassed the
+disposable process DACL. The ordinary local reader correctly observed the denial.
+The fixtures now use a private same-account impersonation token with only its
+debug privilege disabled; the original runner token and production code are
+unchanged. Native access assertions remain mandatory, with no elevated skip.
+An additional local elevated fixture run was cancelled at UAC; it does not
+invalidate the separate successful prior-version-host/elevated-helper check.
