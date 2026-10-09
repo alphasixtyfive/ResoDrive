@@ -70,8 +70,10 @@ public sealed partial class InstallerProcessInspectionTests
         });
     }
 
-    [Fact]
-    public async Task ProcessWhoseMinimumIdentityAccessIsDeniedStillBlocksWithItsNativeError()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProcessWhoseMinimumIdentityAccessIsDeniedStillBlocksWithItsNativeError(bool currentUserOnly)
     {
         using var fixture = new Fixture();
         using var ui = fixture.StartProcess("resodrive.exe");
@@ -82,12 +84,84 @@ public sealed partial class InstallerProcessInspectionTests
         {
             var failure = await Assert.ThrowsAsync<IOException>(() =>
                 InstallerProcessInspection.WaitForOtherAccountProcessesExitAsync(
-                    fixture.Binaries, CancellationToken.None, currentUserOnly: true));
+                    fixture.Binaries, CancellationToken.None, currentUserOnly: currentUserOnly));
             Assert.Contains("could not verify which Windows account", failure.Message, StringComparison.Ordinal);
             Assert.Contains("OpenProcess(query)", failure.InnerException!.Message, StringComparison.Ordinal);
             Assert.Equal(5, Assert.IsType<Win32Exception>(failure.InnerException).NativeErrorCode);
             Assert.False(ui.HasExited);
         });
+    }
+
+    [Fact]
+    public async Task MigrationWaitsForNaturallyExitingProcessWhoseIdentityQueryIsDenied()
+    {
+        using var fixture = new Fixture();
+        using var helper = fixture.StartProcess("resodrive.exe");
+        var marker = Path.Combine(fixture.Data, "cache-marker");
+        await File.WriteAllTextAsync(marker, "unsent changes");
+        using var identity = WindowsIdentity.GetCurrent();
+        SetProcessAccess(helper, identity.User!.Value, 0x100000);
+        using var reader = CreateReaderWithoutDebugPrivilege();
+        var inspection = WindowsIdentity.RunImpersonatedAsync(reader, async () =>
+        {
+            using var query = OpenProcess(0x1000, false, helper.Id);
+            Assert.True(query.IsInvalid);
+            Assert.Equal(5, Marshal.GetLastPInvokeError());
+            await InstallerProcessInspection.WaitForOtherAccountProcessesExitAsync(
+                fixture.Binaries, CancellationToken.None, currentUserOnly: true);
+        });
+        await Task.Delay(250);
+        Assert.False(inspection.IsCompleted);
+        Assert.False(helper.HasExited);
+        await helper.StandardInput.WriteLineAsync("exit");
+        await helper.StandardInput.FlushAsync();
+        await inspection.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(helper.HasExited);
+        Assert.Equal(0, helper.ExitCode);
+        Assert.Equal("unsent changes", await File.ReadAllTextAsync(marker));
+    }
+
+    [Fact]
+    public async Task MigrationStillBlocksWhenIdentityAndExitWaitAccessAreBothDenied()
+    {
+        using var fixture = new Fixture();
+        using var helper = fixture.StartProcess("resodrive.exe");
+        using var identity = WindowsIdentity.GetCurrent();
+        SetProcessAccess(helper, identity.User!.Value, 0x20000); // READ_CONTROL only
+        using var reader = CreateReaderWithoutDebugPrivilege();
+        await WindowsIdentity.RunImpersonatedAsync(reader, async () =>
+        {
+            using var wait = OpenProcess(0x100000, false, helper.Id);
+            Assert.True(wait.IsInvalid);
+            Assert.Equal(5, Marshal.GetLastPInvokeError());
+            var failure = await Assert.ThrowsAsync<IOException>(() =>
+                InstallerProcessInspection.WaitForOtherAccountProcessesExitAsync(
+                    fixture.Binaries, CancellationToken.None, currentUserOnly: true));
+            Assert.Equal(5, Assert.IsType<Win32Exception>(failure.InnerException).NativeErrorCode);
+        });
+        Assert.False(helper.HasExited);
+    }
+
+    [Fact]
+    public async Task MigrationCancellationDuringUnreadableProcessWaitPreservesTheProcessAndData()
+    {
+        using var fixture = new Fixture();
+        using var helper = fixture.StartProcess("resodrive.exe");
+        var marker = Path.Combine(fixture.Data, "cache-marker");
+        await File.WriteAllTextAsync(marker, "unsent changes");
+        using var identity = WindowsIdentity.GetCurrent();
+        SetProcessAccess(helper, identity.User!.Value, 0x100000);
+        using var reader = CreateReaderWithoutDebugPrivilege();
+        using var canceled = new CancellationTokenSource();
+        await WindowsIdentity.RunImpersonatedAsync(reader, async () =>
+        {
+            canceled.CancelAfter(TimeSpan.FromMilliseconds(250));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                InstallerProcessInspection.WaitForOtherAccountProcessesExitAsync(
+                    fixture.Binaries, canceled.Token, currentUserOnly: true));
+        });
+        Assert.False(helper.HasExited);
+        Assert.Equal("unsent changes", await File.ReadAllTextAsync(marker));
     }
 
     [Fact]

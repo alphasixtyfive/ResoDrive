@@ -1,5 +1,37 @@
 # September 2026: immediate update failure (1603 / 1722)
 
+## October 2026: automatic relaunch blocked after a successful legacy upgrade
+
+An affected desktop upgraded from 0.3.18 to 0.3.44 through Settings. Its MSI
+completed successfully with exit code 0 at 13:26:19 UTC. The automatic relaunch
+then recorded `migration.handoff_failed` at 13:26:21 UTC: Windows denied
+`OpenProcess(query)` with error 5 for another `resodrive` process. The logs did
+not capture that process's account, executable path or role, so they do not
+establish that it was the elevated installation cleanup helper.
+
+Manual startup completed the user-data move at 13:38:53 UTC. The migration
+completion receipt and journal both recorded success. This was a post-install
+startup failure, not MSI error 1603 or a failed data move.
+
+User-data migration now gives a query-denied process up to five seconds to exit
+naturally, using only a retained SYNCHRONIZE handle. Confirmed kernel exit is
+required before disregarding the failed account inspection. A still-live process,
+denied wait handle, failed wait or cancellation cannot authorize migration. Normal
+installation preparation keeps its existing immediate query-denied rejection.
+This wait never terminates a process, changes an ACL or bypasses upload checks.
+
+Regression tests exercise actual Windows process ACLs without debug privilege,
+including natural exit, persistent denial, unavailable wait access and cancellation
+with disposable cache data. These checks do not establish acceptance on the
+affected desktop; a future public installer still needs the release gates below.
+
+Local verification passed 1,209 tests with three optional integrations skipped,
+and all 357 application tests also passed with one available CPU. An isolated
+desktop UAC check passed: the new helper ran elevated against an unelevated copy
+of the installed prior host, stopped it safely and preserved disposable settings
+and cache hashes. This verifies the preparation regression boundary, not a new
+MSI release or another actual 0.3.18 in-app upgrade on the affected laptop.
+
 ## October 2026: duplicate Windows app entries
 
 Desktop acceptance found that the public MSI updater could upgrade an app

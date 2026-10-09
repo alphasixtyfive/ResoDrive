@@ -257,6 +257,8 @@ internal static partial class InstallerProcessInspection
                     {
                         var error = Marshal.GetLastPInvokeError();
                         if (HasConfirmedExit(process)) continue;
+                        if (currentUserOnly && error == 5 &&
+                            WaitForUninspectableProcessExit(process, token)) continue;
                         throw InspectionFailure(process, "OpenProcess(query)", error, AccountUnknownMessage);
                     }
                     if (currentUserOnly && BelongsToOtherAccount(process, handle, token)) continue;
@@ -464,6 +466,24 @@ internal static partial class InstallerProcessInspection
     {
         try { return process.HasExited; }
         catch (Exception exception) when (exception is Win32Exception or InvalidOperationException) { return false; }
+    }
+
+    private static bool WaitForUninspectableProcessExit(Process process, CancellationToken token)
+    {
+        // The post-install cleanup can briefly overlap the original user's
+        // migration. Its elevated process may deny account/image queries.
+        // Pin only a wait handle: never guess its role, change its ACL, or stop it.
+        // Only confirmed kernel exit makes the failed identity check irrelevant.
+        using var waitHandle = OpenProcess(0x00100000, false, process.Id); // SYNCHRONIZE
+        if (waitHandle.IsInvalid) return false;
+        var deadline = Stopwatch.GetTimestamp() + 5 * Stopwatch.Frequency;
+        while (true)
+        {
+            token.ThrowIfCancellationRequested();
+            var result = WaitForSingleObject(waitHandle, 100);
+            if (result == 0) return true;
+            if (result != 258 || Stopwatch.GetTimestamp() >= deadline) return false;
+        }
     }
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
