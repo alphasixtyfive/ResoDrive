@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.46] - 2026-10-09
+
+- Recover automatic startup after legacy upgrades when another process remains inaccessible longer than five seconds or Windows denies wait access.
+- Recheck the complete process set before moving user data; preserve upload checks, account verification, cancellation, settings, and cached files.
+
 ## [0.3.45] - 2026-10-09
 
 - Fix automatic startup after a legacy upgrade when a briefly inaccessible ResoDrive process is still exiting.

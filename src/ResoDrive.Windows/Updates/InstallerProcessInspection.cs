@@ -237,6 +237,35 @@ internal static partial class InstallerProcessInspection
     private static List<Candidate> GetInstalledProcesses(string directory, CancellationToken token,
         bool requireTermination = false, bool currentUserOnly = false)
     {
+        // Match the existing other-account exit allowance, within preparation's
+        // 60-second overall deadline. Five seconds was insufficient on legacy upgrades.
+        var deadline = Stopwatch.GetTimestamp() + 42 * Stopwatch.Frequency;
+        while (true)
+        {
+            token.ThrowIfCancellationRequested();
+            var identityQueryDenied = false;
+            try
+            {
+                return GetInstalledProcessesOnce(directory, requireTermination, currentUserOnly,
+                    out identityQueryDenied, token);
+            }
+            catch (IOException) when (currentUserOnly && identityQueryDenied &&
+                Stopwatch.GetTimestamp() < deadline)
+            {
+                // An elevated process can deny both query and SYNCHRONIZE access.
+                // Discard the failed snapshot and verify the complete fresh set.
+                // Never skip an opaque PID, infer its role, or close it: migration
+                // can proceed only after a full inspection succeeds. Fresh scans
+                // also inspect replacements and processes started during the wait.
+                if (token.WaitHandle.WaitOne(100)) token.ThrowIfCancellationRequested();
+            }
+        }
+    }
+
+    private static List<Candidate> GetInstalledProcessesOnce(string directory, bool requireTermination,
+        bool currentUserOnly, out bool identityQueryDenied, CancellationToken token)
+    {
+        identityQueryDenied = false;
         var executable = Path.GetFullPath(Path.Combine(directory, "resodrive.exe"));
         var processes = Process.GetProcessesByName("resodrive");
         var matches = new List<Candidate>();
@@ -257,8 +286,7 @@ internal static partial class InstallerProcessInspection
                     {
                         var error = Marshal.GetLastPInvokeError();
                         if (HasConfirmedExit(process)) continue;
-                        if (currentUserOnly && error == 5 &&
-                            WaitForUninspectableProcessExit(process, token)) continue;
+                        identityQueryDenied = error == 5;
                         throw InspectionFailure(process, "OpenProcess(query)", error, AccountUnknownMessage);
                     }
                     if (currentUserOnly && BelongsToOtherAccount(process, handle, token)) continue;
@@ -466,24 +494,6 @@ internal static partial class InstallerProcessInspection
     {
         try { return process.HasExited; }
         catch (Exception exception) when (exception is Win32Exception or InvalidOperationException) { return false; }
-    }
-
-    private static bool WaitForUninspectableProcessExit(Process process, CancellationToken token)
-    {
-        // The post-install cleanup can briefly overlap the original user's
-        // migration. Its elevated process may deny account/image queries.
-        // Pin only a wait handle: never guess its role, change its ACL, or stop it.
-        // Only confirmed kernel exit makes the failed identity check irrelevant.
-        using var waitHandle = OpenProcess(0x00100000, false, process.Id); // SYNCHRONIZE
-        if (waitHandle.IsInvalid) return false;
-        var deadline = Stopwatch.GetTimestamp() + 5 * Stopwatch.Frequency;
-        while (true)
-        {
-            token.ThrowIfCancellationRequested();
-            var result = WaitForSingleObject(waitHandle, 100);
-            if (result == 0) return true;
-            if (result != 258 || Stopwatch.GetTimestamp() >= deadline) return false;
-        }
     }
 
     [LibraryImport("kernel32.dll", SetLastError = true)]

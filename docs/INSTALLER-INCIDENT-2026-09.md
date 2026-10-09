@@ -13,7 +13,7 @@ Manual startup completed the user-data move at 13:38:53 UTC. The migration
 completion receipt and journal both recorded success. This was a post-install
 startup failure, not MSI error 1603 or a failed data move.
 
-User-data migration now gives a query-denied process up to five seconds to exit
+ResoDrive 0.3.45 gave a query-denied process up to five seconds to exit
 naturally, using only a retained SYNCHRONIZE handle. Confirmed kernel exit is
 required before disregarding the failed account inspection. A still-live process,
 denied wait handle, failed wait or cancellation cannot authorize migration. Normal
@@ -31,6 +31,44 @@ desktop UAC check passed: the new helper ran elevated against an unelevated copy
 of the installed prior host, stopped it safely and preserved disposable settings
 and cache hashes. This verifies the preparation regression boundary, not a new
 MSI release or another actual 0.3.18 in-app upgrade on the affected laptop.
+
+## October 2026: remaining access-denied failure in 0.3.45
+
+A second desktop's automatic startup recorded `migration.handoff_failed`,
+reference `D41BAD16`, at 14:29:24 UTC on 9 October. The published executable was
+`0.3.45+28c7e425dbde9fde5330a040dfb4756a7932ba22`. Windows denied
+`OpenProcess(query)` for process 10208 with error 5. Manual startup completed
+migration at 14:29:43 UTC, and the completion journal recorded `Complete`.
+The following UI and host sessions reached their ready states.
+
+The process's account, path and role remain unknown. The migration logger's
+`process.started` entry is emitted when recording the failure; it cannot measure
+the failed startup's duration. These logs cannot distinguish an unavailable wait
+handle from the five-second wait expiring. Do not infer a cleanup-helper identity
+or a specific wait outcome from this receipt.
+
+Migration now retries the complete process enumeration and identity inspection
+after a query access denial, for up to 42 seconds within preparation's 60-second
+deadline. This matches the existing other-account exit allowance and requires no
+SYNCHRONIZE access to an opaque process. Each failed snapshot releases all its
+handles; each retry verifies the full fresh set, including new or replacement
+processes. No failed candidate or remembered PID is exempted from inspection.
+A live unreadable process still blocks migration with its native error. Normal
+MSI preparation retains its immediate rejection. Upload checks and cancellation
+remain mandatory, and no process is killed or granted additional access.
+
+Real Windows ACL tests exercise successful migration after natural exit with
+both query and wait access denied, and after exit later than the old five-second
+bound. They verify unchanged disposable settings/cache, persistent denial,
+cancellation, and a newly started matching process that must still block the
+operation. These cases cover both remaining inspection paths; they do not identify
+process 10208 or establish a second upgrade on the affected desktop.
+
+Local release-build verification passed 1,212 tests with three optional
+integrations skipped. The process fixture now waits for a child readiness signal
+and retains separate cleanup handles before changing the disposable child's ACL.
+An initial full run exposed cleanup failures after callers disposed their Process
+objects; that failure run was retained, and the corrected full build passed.
 
 ## October 2026: duplicate Windows app entries
 

@@ -70,10 +70,8 @@ public sealed partial class InstallerProcessInspectionTests
         });
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ProcessWhoseMinimumIdentityAccessIsDeniedStillBlocksWithItsNativeError(bool currentUserOnly)
+    [Fact]
+    public async Task InstallerStillRejectsAnIdentityQueryDenialWithoutMigrationRetries()
     {
         using var fixture = new Fixture();
         using var ui = fixture.StartProcess("resodrive.exe");
@@ -84,7 +82,7 @@ public sealed partial class InstallerProcessInspectionTests
         {
             var failure = await Assert.ThrowsAsync<IOException>(() =>
                 InstallerProcessInspection.WaitForOtherAccountProcessesExitAsync(
-                    fixture.Binaries, CancellationToken.None, currentUserOnly: currentUserOnly));
+                    fixture.Binaries, CancellationToken.None));
             Assert.Contains("could not verify which Windows account", failure.Message, StringComparison.Ordinal);
             Assert.Contains("OpenProcess(query)", failure.InnerException!.Message, StringComparison.Ordinal);
             Assert.Equal(5, Assert.IsType<Win32Exception>(failure.InnerException).NativeErrorCode);
@@ -92,33 +90,71 @@ public sealed partial class InstallerProcessInspectionTests
         });
     }
 
-    [Fact]
-    public async Task MigrationWaitsForNaturallyExitingProcessWhoseIdentityQueryIsDenied()
+    [Theory]
+    [InlineData(0x100000u, 250)] // SYNCHRONIZE available, identity query denied
+    [InlineData(0x100000u, 6000)] // Natural exit later than the old five-second bound
+    [InlineData(0x20000u, 250)] // Both identity query and SYNCHRONIZE denied
+    public async Task MigrationWaitsForNaturallyExitingProcessWhoseIdentityQueryIsDenied(uint access, int exitDelayMilliseconds)
     {
         using var fixture = new Fixture();
         using var helper = fixture.StartProcess("resodrive.exe");
         var marker = Path.Combine(fixture.Data, "cache-marker");
         await File.WriteAllTextAsync(marker, "unsent changes");
+        await File.WriteAllTextAsync(Path.Combine(fixture.Data, "settings.json"), "{\"revision\":17}");
+        var destination = fixture.Data + "-migrated";
         using var identity = WindowsIdentity.GetCurrent();
-        SetProcessAccess(helper, identity.User!.Value, 0x100000);
+        SetProcessAccess(helper, identity.User!.Value, access);
         using var reader = CreateReaderWithoutDebugPrivilege();
         var inspection = WindowsIdentity.RunImpersonatedAsync(reader, async () =>
         {
             using var query = OpenProcess(0x1000, false, helper.Id);
             Assert.True(query.IsInvalid);
             Assert.Equal(5, Marshal.GetLastPInvokeError());
-            await InstallerProcessInspection.WaitForOtherAccountProcessesExitAsync(
-                fixture.Binaries, CancellationToken.None, currentUserOnly: true);
+            if (access == 0x20000u)
+            {
+                using var wait = OpenProcess(0x100000, false, helper.Id);
+                Assert.True(wait.IsInvalid);
+                Assert.Equal(5, Marshal.GetLastPInvokeError());
+            }
+            await new UserDataDirectoryMigration(fixture.Data, destination).MigrateAsync(token =>
+                InstallationPreparationService.ForUserDataMigration().PrepareAsync(
+                    fixture.Binaries, cancellationToken: token));
         });
-        await Task.Delay(250);
+        await Task.Delay(exitDelayMilliseconds);
         Assert.False(inspection.IsCompleted);
         Assert.False(helper.HasExited);
+        Assert.True(Directory.Exists(fixture.Data));
+        Assert.False(Directory.Exists(destination));
+        Assert.Equal("unsent changes", await File.ReadAllTextAsync(marker));
         await helper.StandardInput.WriteLineAsync("exit");
         await helper.StandardInput.FlushAsync();
         await inspection.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.True(helper.HasExited);
         Assert.Equal(0, helper.ExitCode);
-        Assert.Equal("unsent changes", await File.ReadAllTextAsync(marker));
+        Assert.False(Directory.Exists(fixture.Data));
+        Assert.Equal("unsent changes", await File.ReadAllTextAsync(Path.Combine(destination, "cache-marker")));
+        Assert.Equal("{\"revision\":17}", await File.ReadAllTextAsync(Path.Combine(destination, "settings.json")));
+    }
+
+    [Fact]
+    public async Task MigrationRechecksMatchingProcessesStartedWhileAnOpaqueProcessExits()
+    {
+        using var fixture = new Fixture();
+        using var helper = fixture.StartProcess(Path.Combine("..", "other-install", "resodrive.exe"));
+        using var identity = WindowsIdentity.GetCurrent();
+        SetProcessAccess(helper, identity.User!.Value, 0x20000);
+        using var reader = CreateReaderWithoutDebugPrivilege();
+        var inspection = WindowsIdentity.RunImpersonatedAsync(reader, () =>
+            InstallerProcessInspection.VerifyStoppedAsync(fixture.Binaries, CancellationToken.None,
+                currentUserOnly: true));
+        await Task.Delay(250);
+        Assert.False(inspection.IsCompleted);
+        using var newUi = fixture.StartProcess("resodrive.exe");
+        await helper.StandardInput.WriteLineAsync("exit");
+        await helper.StandardInput.FlushAsync();
+        var error = await Assert.ThrowsAsync<IOException>(() => inspection.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Contains("background work is still running", error.Message, StringComparison.Ordinal);
+        Assert.False(newUi.HasExited);
     }
 
     [Fact]
@@ -126,6 +162,8 @@ public sealed partial class InstallerProcessInspectionTests
     {
         using var fixture = new Fixture();
         using var helper = fixture.StartProcess("resodrive.exe");
+        var marker = Path.Combine(fixture.Data, "cache-marker");
+        await File.WriteAllTextAsync(marker, "unsent changes");
         using var identity = WindowsIdentity.GetCurrent();
         SetProcessAccess(helper, identity.User!.Value, 0x20000); // READ_CONTROL only
         using var reader = CreateReaderWithoutDebugPrivilege();
@@ -136,21 +174,24 @@ public sealed partial class InstallerProcessInspectionTests
             Assert.Equal(5, Marshal.GetLastPInvokeError());
             var failure = await Assert.ThrowsAsync<IOException>(() =>
                 InstallerProcessInspection.WaitForOtherAccountProcessesExitAsync(
-                    fixture.Binaries, CancellationToken.None, currentUserOnly: true));
+                    fixture.Binaries, CancellationToken.None, currentUserOnly: true).WaitAsync(TimeSpan.FromSeconds(55)));
             Assert.Equal(5, Assert.IsType<Win32Exception>(failure.InnerException).NativeErrorCode);
         });
         Assert.False(helper.HasExited);
+        Assert.Equal("unsent changes", await File.ReadAllTextAsync(marker));
     }
 
-    [Fact]
-    public async Task MigrationCancellationDuringUnreadableProcessWaitPreservesTheProcessAndData()
+    [Theory]
+    [InlineData(0x100000u)]
+    [InlineData(0x20000u)]
+    public async Task MigrationCancellationDuringUnreadableProcessWaitPreservesTheProcessAndData(uint access)
     {
         using var fixture = new Fixture();
         using var helper = fixture.StartProcess("resodrive.exe");
         var marker = Path.Combine(fixture.Data, "cache-marker");
         await File.WriteAllTextAsync(marker, "unsent changes");
         using var identity = WindowsIdentity.GetCurrent();
-        SetProcessAccess(helper, identity.User!.Value, 0x100000);
+        SetProcessAccess(helper, identity.User!.Value, access);
         using var reader = CreateReaderWithoutDebugPrivilege();
         using var canceled = new CancellationTokenSource();
         await WindowsIdentity.RunImpersonatedAsync(reader, async () =>
@@ -420,7 +461,7 @@ public sealed partial class InstallerProcessInspectionTests
 
     private sealed class Fixture : IDisposable
     {
-        private readonly List<Process> _processes = [];
+        private readonly List<(Process Process, SafeProcessHandle Handle)> _processes = [];
         private readonly string? _oldRoot = Environment.GetEnvironmentVariable("RDRIVE_DATA_DIR");
         private readonly string _root = Path.Combine(Path.GetTempPath(), "resodrive-installer-tests-" + Guid.NewGuid().ToString("N"));
 
@@ -450,26 +491,39 @@ public sealed partial class InstallerProcessInspectionTests
                 RedirectStandardOutput = true,
             };
             var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Fixture process failed to start.");
-            _processes.Add(process);
-            Thread.Sleep(300);
+            // The caller disposes its Process before this fixture. Retain separate
+            // cleanup rights now, before tests restrict the disposable child's ACL.
+            var retained = OpenProcess(0x00101001, false, process.Id);
+            Assert.False(retained.IsInvalid);
+            _processes.Add((process, retained));
+            var ready = "resodrive-inspection-ready-" + Guid.NewGuid().ToString("N");
+            process.StandardInput.WriteLine("echo " + ready);
+            process.StandardInput.Flush();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var signaled = false;
+            while (process.StandardOutput.ReadLineAsync(timeout.Token).AsTask().GetAwaiter().GetResult() is { } line)
+                if (line.Trim() == ready) { signaled = true; break; }
+            timeout.Token.ThrowIfCancellationRequested();
+            Assert.True(signaled, "The disposable child did not signal readiness.");
             Assert.False(process.HasExited);
             return process;
         }
 
         public void Dispose()
         {
-            foreach (var process in _processes)
+            foreach (var (process, handle) in _processes)
             {
                 try
                 {
-                    if (!process.HasExited)
+                    // Only this fixture's copied cmd.exe children are terminated
+                    // during cleanup, using handles retained before identity tests.
+                    if (WaitForSingleObject(handle, 0) == 258)
                     {
-                        process.Kill();
-                        process.WaitForExit(5000);
+                        Assert.True(TerminateProcess(handle, 1));
+                        Assert.Equal(0u, WaitForSingleObject(handle, 5000));
                     }
                 }
-                catch (InvalidOperationException) { }
-                process.Dispose();
+                finally { handle.Dispose(); process.Dispose(); }
             }
             Environment.SetEnvironmentVariable("RDRIVE_DATA_DIR", _oldRoot);
             var temporaryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath()));
@@ -549,6 +603,13 @@ public sealed partial class InstallerProcessInspectionTests
     [LibraryImport("kernel32.dll", SetLastError = true)]
     private static partial SafeProcessHandle OpenProcess(uint access,
         [MarshalAs(UnmanagedType.Bool)] bool inherit, int processId);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial uint WaitForSingleObject(SafeProcessHandle handle, uint milliseconds);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool TerminateProcess(SafeProcessHandle handle, uint exitCode);
 
     [LibraryImport("advapi32.dll", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

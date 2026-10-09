@@ -1,6 +1,6 @@
-This update fixes automatic startup after upgrading an older ResoDrive installation when another ResoDrive process is briefly inaccessible while exiting.
+This update fixes another automatic-startup failure after upgrading an older ResoDrive installation, covering processes that take longer to exit or cannot be waited on directly.
 
-- ResoDrive waits briefly for confirmed process exit before completing user-data migration and opening the app.
+- ResoDrive gives exiting processes more time and repeats the complete safety check before completing user-data migration and opening the app.
 - A process that remains running or cannot be safely verified still blocks migration. Account checks, upload protection, settings, and cached files remain protected.
 - The optional CET compatibility setting is retained through repairs and future in-app updates.
 
@@ -14,4 +14,6 @@ For machines that require CET compatibility mode, run:
 
 The choice is saved for repairs and future in-app updates. A fresh installation without this option keeps CET enabled. If this version is already installed, add `/repair /passive` to change the option. To restore the previous Windows setting later, run `ResoDrive-Setup.exe /repair /passive /norestart ResoDriveDisableCet=0`.
 
-An older installer's cached helper is outside the CET option's control. See [the compatibility notes](https://github.com/alphasixtyfive/ResoDrive/blob/v0.3.45/docs/CET-COMPATIBILITY.md).
+An older installer's cached helper is outside the CET option's control. See [the compatibility notes](https://github.com/alphasixtyfive/ResoDrive/blob/v0.3.46/docs/CET-COMPATIBILITY.md).
+
+The previous 0.3.45 downloads have been withdrawn because some legacy upgrades still required a manual launch to complete migration. Published tags are retained.
