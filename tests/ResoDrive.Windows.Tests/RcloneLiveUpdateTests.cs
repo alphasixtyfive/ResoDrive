@@ -19,12 +19,13 @@ public sealed class RcloneLiveUpdateTests
         var cached = Path.Combine(paths.Cache, "pending-disposable-file");
         await File.WriteAllTextAsync(cached, "Pending upload must survive runtime replacement.");
         var cacheHash = Hash(cached);
-        using var process = Process.Start(new ProcessStartInfo(paths.RcloneExecutable)
+        var process = Process.Start(new ProcessStartInfo(paths.RcloneExecutable)
         {
             UseShellExecute = false, CreateNoWindow = true,
             ArgumentList = { "127.0.0.1", "-n", "120" },
             RedirectStandardOutput = true, RedirectStandardError = true,
         })!;
+        var processDisposed = false;
         try
         {
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -39,9 +40,11 @@ public sealed class RcloneLiveUpdateTests
             Assert.Equal(!rejectInstalled, result.Succeeded);
             Assert.False(process.HasExited);
             Assert.Equal(cacheHash, Hash(cached));
-            using var verified = MountOwnershipStore.TryOpenVerified(owned);
-            Assert.NotNull(verified);
-            Assert.Equal(process.Id, verified.Id);
+            using (var verified = MountOwnershipStore.TryOpenVerified(owned))
+            {
+                Assert.NotNull(verified);
+                Assert.Equal(process.Id, verified.Id);
+            }
             Assert.Equal(Hash(rejectInstalled ? oldImage : newImage), Hash(paths.RcloneExecutable));
             if (rejectInstalled)
                 Assert.Equal("rclone.update_rolled_back", result.Error!.Code);
@@ -55,15 +58,52 @@ public sealed class RcloneLiveUpdateTests
                 await next.WaitForExitAsync(deadline.Token);
                 Assert.Equal(0, next.ExitCode);
             }
-            process.Kill();
-            await process.WaitForExitAsync(deadline.Token);
-            await service.CheckAsync(deadline.Token);
-            Assert.Empty(Directory.EnumerateFiles(paths.Rclone, ".rclone-*.exe"));
+            // A retained image may remain locked after the process exits. Exercise
+            // that case deterministically instead of relying on Windows lock timing.
+            var retainedBackup = rejectInstalled ? null : result.Value!.CleanupPath;
+            using (var backupLock = retainedBackup is null ? null : new FileStream(retainedBackup,
+                FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                process.Kill();
+                await process.WaitForExitAsync(deadline.Token);
+                process.Dispose();
+                processDisposed = true;
+                if (backupLock is not null)
+                {
+                    var whileLocked = await service.CheckAsync(deadline.Token);
+                    Assert.True(whileLocked.Succeeded, whileLocked.Error?.Code);
+                    Assert.True(File.Exists(retainedBackup));
+                    Assert.Equal(Hash(oldImage), Hash(retainedBackup!));
+                    Assert.Equal(cacheHash, Hash(cached));
+                }
+            }
+
+            try
+            {
+                while (true)
+                {
+                    var check = await service.CheckAsync(deadline.Token);
+                    Assert.True(check.Succeeded, check.Error?.Code);
+                    if (!Directory.EnumerateFiles(paths.Rclone, ".rclone-*.exe").Any()) break;
+                    await Task.Delay(50, deadline.Token);
+                }
+            }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+            {
+                // Report the remaining filenames rather than an opaque timeout.
+            }
+            var remaining = Directory.GetFiles(paths.Rclone, ".rclone-*.exe");
+            Assert.True(remaining.Length == 0,
+                $"Deferred runtime cleanup did not finish before the deadline: {string.Join(", ", remaining.Select(Path.GetFileName))}");
+            Assert.Equal(cacheHash, Hash(cached));
         }
         finally
         {
-            if (!process.HasExited) { process.Kill(); await process.WaitForExitAsync(); }
-            process.Dispose();
+            if (!processDisposed)
+            {
+                if (!process.HasExited) { process.Kill(); await process.WaitForExitAsync(); }
+                process.Dispose();
+            }
             for (var attempt = 0; ; attempt++)
             {
                 try { Directory.Delete(paths.Root, true); break; }

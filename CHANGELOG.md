@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.47] - 2026-10-30
+## [0.3.48] - 2026-10-30
 
 - Retry drives automatically when their server becomes reachable, including after a VPN connects, and fix starts that could stay queued.
 - Keep upload progress visible during brief status checks and reduce repeated connection warnings.
@@ -9,6 +9,10 @@
 - Open the main window a little taller so the normal Settings page fits without scrolling.
 - Include transfer and recovery details, recent runtime history and useful error references in diagnostic reports.
 - Fix error reporting that could hide the original crash, and apply the same SFTP host-key checks throughout setup.
+
+## [0.3.47] - 2026-10-30 (unpublished verification build)
+
+- Held for a correction to the updater cleanup test before release.
 
 ## [0.3.46] - 2026-10-09
 

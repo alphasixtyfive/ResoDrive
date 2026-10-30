@@ -99,8 +99,8 @@ queue-capacity or upload-protection drift from the pre-refactor working tree.
 Pre-release local evidence: working-tree changes on base commit
 `76ad96632e07ad600b67a3747ccecd79d86f154e`; the base commit alone does not identify
 those then-uncommitted changes. The measurements and hashes below describe the
-local 0.3.46 review build, before the 0.3.47 release version was assigned. Public
-0.3.47 packages are rebuilt from their annotated release tag and separately
+local 0.3.46 review build, before release versions were assigned. Public
+0.3.48 packages are rebuilt from their annotated release tag and separately
 verified through the release workflow and exact-asset acceptance checks.
 
 - Executable SHA-256: `d44343c9bba6a61243bc997c05e11bd37c4c75b420b6cc75e977f34bee9a9675`

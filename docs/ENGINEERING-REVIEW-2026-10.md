@@ -160,3 +160,23 @@ fixtures, not claims about total CPU, startup wall time, or a speedup percentage
 the unavailable older machine. Numeric artifacts are retained under the workspace's
 `output/performance-review/measurements` directory. Full-suite and constrained-CPU
 results remain recorded in the transfer review.
+
+## Release-gate cleanup test correction
+
+The v0.3.47 tagged run (41052066148) passed its initial build and installer,
+migration, recovery and previous-public-updater checks. Its final gate builds a
+synthetic next version from the same source; that second full test run caught an
+immediate-cleanup assertion in the live-image updater regression. Live replacement,
+process ownership, cache preservation and launching the replacement had already
+passed. No GitHub release was published from that run, and its tag is retained.
+
+The test kept verified/original process handles alive and required all updater
+artifacts to disappear immediately after WaitForExit. Production cleanup is
+deliberately best effort while another handle holds a file. The corrected test
+releases its process handles, deliberately holds the retained backup without
+delete sharing, and verifies that an update check succeeds while preserving that
+backup and the cache. After releasing the file lock, subsequent successful checks
+must remove every updater artifact within the original ten-second deadline.
+Remaining filenames are reported if cleanup fails. All live-image and rollback
+assertions remain; there is no longer timeout, skipped test, production cleanup
+change or forced tag replacement. The final release candidate is v0.3.48.
