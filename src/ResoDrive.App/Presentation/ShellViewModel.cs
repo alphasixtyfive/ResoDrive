@@ -142,11 +142,12 @@ public sealed partial class ShellViewModel : NotifyBase
         else
         {
             var transientCount = Mounts.Count(mount => mount.IsTransient);
-            MountSummary = $"{Mounts.Count} {(Mounts.Count == 1 ? "drive" : "drives")} · {Mounts.Count(mount => mount.IsMounted)} mounted";
+            var summary = $"{Mounts.Count} {(Mounts.Count == 1 ? "drive" : "drives")} · {Mounts.Count(mount => mount.IsMounted)} mounted";
             if (transientCount > 0)
             {
-                MountSummary += $" · {transientCount} in progress";
+                summary += $" · {transientCount} in progress";
             }
+            MountSummary = summary;
         }
         JobSummary = $"{Jobs.Count(job => job.Enabled)} enabled · {Jobs.Count} total";
     }

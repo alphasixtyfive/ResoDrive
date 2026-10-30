@@ -14,6 +14,7 @@ public sealed class MountRow : NotifyBase
     private bool _hasStatus;
     private bool _hasRecognizedStatus;
     private bool _hostUnavailable;
+    private bool _hasRecentUploadProgress;
     private string _statusLine = string.Empty;
     private MediaBrush _statusLineBrush = StatusPalette.Muted;
 
@@ -38,10 +39,12 @@ public sealed class MountRow : NotifyBase
         get
         {
             if (UploadStatus?.UploadRecoveryRequired == true) return "Cache recovery required";
+            if (IsWaitingForConnection) return UploadPresentation.Errors(UploadStatus) > 0
+                ? JoinStatus("Waiting for connection", UploadAttentionText) : "Waiting for connection";
             if (!ShouldStop) return HasPendingUploads ? UploadAttentionText : string.Empty;
             var activity = UploadPresentation.Activity(UploadStatus);
             if (UploadStatus?.UploadStatusChecking == true || UploadStatus?.UploadStatusStale == true)
-                return UploadPresentation.Errors(UploadStatus) > 0
+                return UploadPresentation.Errors(UploadStatus) > 0 && !UploadPresentation.HasRecentProgress(UploadStatus, DateTimeOffset.UtcNow)
                     ? JoinStatus(UploadAttentionText, activity) : activity;
             return activity.Length > 0 ? "↑ " + activity : HasPendingUploads ? "Uploads pending" : string.Empty;
         }
@@ -71,12 +74,13 @@ public sealed class MountRow : NotifyBase
             ? $"{DriveDisplay}  {ConnectionHostDisplay}"
             : $"{DriveDisplay}  {ConnectionHostDisplay}  ·  {ConnectionTypeDisplay}";
     public bool IsMounted => _lifecycle == MountLifecycle.Mounted;
+    public bool IsWaitingForConnection => !_hostUnavailable && _lifecycle == MountLifecycle.WaitingForConnection;
     public bool IsTransient =>
         (Enabled && IsAutomaticMount && !_hasStatus && !_hostUnavailable) ||
         _lifecycle is MountLifecycle.Starting or MountLifecycle.Stopping or MountLifecycle.WaitingToRestart;
     public bool NeedsHostRecovery => Enabled && !_hasStatus && _hostUnavailable;
     public bool ShouldStop =>
-        IsMounted || _lifecycle is MountLifecycle.Starting or MountLifecycle.Degraded or MountLifecycle.WaitingToRestart;
+        IsMounted || _lifecycle is MountLifecycle.Starting or MountLifecycle.Degraded or MountLifecycle.WaitingToRestart or MountLifecycle.WaitingForConnection;
     public string StatusText => _status;
     public string StatusLine => _statusLine;
     public MediaBrush StatusLineBrush => _statusLineBrush;
@@ -99,6 +103,7 @@ public sealed class MountRow : NotifyBase
         {
             MountLifecycle.Mounted => StatusPalette.Success,
             MountLifecycle.Starting or MountLifecycle.Stopping => StatusPalette.Info,
+            MountLifecycle.WaitingForConnection => HasUploadWarning ? StatusPalette.Warning : StatusPalette.Muted,
             MountLifecycle.WaitingToRestart or MountLifecycle.Degraded => StatusPalette.Warning,
             MountLifecycle.Failed => StatusPalette.Error,
             _ => StatusPalette.Disabled,
@@ -113,7 +118,7 @@ public sealed class MountRow : NotifyBase
                 MountLifecycle.Mounted => "Unmount",
                 MountLifecycle.Starting => "Starting…",
                 MountLifecycle.Stopping => "Stopping…",
-                MountLifecycle.Degraded or MountLifecycle.WaitingToRestart => "Stop",
+                MountLifecycle.Degraded or MountLifecycle.WaitingToRestart or MountLifecycle.WaitingForConnection => "Stop",
                 MountLifecycle.Failed => "Retry",
                 _ => "Mount",
             };
@@ -126,7 +131,7 @@ public sealed class MountRow : NotifyBase
             {
                 MountLifecycle.Mounted => "\uE8CD", // DisconnectDrive
                 MountLifecycle.Starting or MountLifecycle.Stopping => "\uE71A", // Stop
-                MountLifecycle.Degraded or MountLifecycle.WaitingToRestart => "\uE71A",
+                MountLifecycle.Degraded or MountLifecycle.WaitingToRestart or MountLifecycle.WaitingForConnection => "\uE71A",
                 MountLifecycle.Failed => "\uE72C", // Refresh
                 _ => "\uE8CE", // MapDrive
             };
@@ -144,9 +149,12 @@ public sealed class MountRow : NotifyBase
 
     public void ApplyStatus(HostMountStatus? status)
     {
-        var uploadChanged = (UploadStatus is null ? null : UploadStatus with { RemoteWipeStatus = null }) !=
-            (status is null ? null : status with { RemoteWipeStatus = null });
+        var hasRecentProgress = UploadPresentation.HasRecentProgress(status, DateTimeOffset.UtcNow);
+        var uploadChanged = !HasSameUploadState(UploadStatus, status) ||
+            _hasRecentUploadProgress != hasRecentProgress;
+        // Keep each observation for transfer details and safety decisions, even when the card is unchanged.
         UploadStatus = status;
+        _hasRecentUploadProgress = hasRecentProgress;
         var hadStatus = _hasStatus;
         var hostWasUnavailable = _hostUnavailable;
         _hasStatus = status is not null;
@@ -173,6 +181,32 @@ public sealed class MountRow : NotifyBase
         _status = nextStatus;
         _errorDetail = nextErrorDetail;
         ChangedState();
+    }
+
+    private static bool HasSameUploadState(HostMountStatus? previous, HostMountStatus? current)
+    {
+        if (ReferenceEquals(previous, current)) return true;
+        if (previous is null || current is null) return false;
+
+        // Wire deserialization creates new lists on every poll. Compare their contents, and
+        // ignore enrollment and observation times; recent-progress transitions are checked separately.
+        return previous.MountId == current.MountId &&
+            previous.Lifecycle == current.Lifecycle &&
+            previous.Status == current.Status &&
+            previous.UploadsQueued == current.UploadsQueued &&
+            previous.UploadsInProgress == current.UploadsInProgress &&
+            previous.UploadsDirty == current.UploadsDirty &&
+            previous.UploadErrors == current.UploadErrors &&
+            previous.UploadBytesRemaining == current.UploadBytesRemaining &&
+            Nullable.Equals(previous.UploadSpeedBytesPerSecond, current.UploadSpeedBytesPerSecond) &&
+            Nullable.Equals(previous.UploadEtaSeconds, current.UploadEtaSeconds) &&
+            previous.UploadStatusStale == current.UploadStatusStale &&
+            previous.UploadStatusChecking == current.UploadStatusChecking &&
+            previous.UploadRecoveryRequired == current.UploadRecoveryRequired &&
+            previous.UploadDetailsTruncated == current.UploadDetailsTruncated &&
+            (ReferenceEquals(previous.Uploads, current.Uploads) ||
+                (previous.Uploads is not null && current.Uploads is not null &&
+                 previous.Uploads.SequenceEqual(current.Uploads)));
     }
 
     public void MarkHostUnavailable()
@@ -208,6 +242,7 @@ public sealed class MountRow : NotifyBase
         Changed(nameof(CanOpen));
         Changed(nameof(CanAct));
         Changed(nameof(IsMounted));
+        Changed(nameof(IsWaitingForConnection));
         Changed(nameof(IsTransient));
         Changed(nameof(NeedsHostRecovery));
         Changed(nameof(ActionAccessibleName));
@@ -218,6 +253,8 @@ public sealed class MountRow : NotifyBase
         : UploadPresentation.Errors(UploadStatus) is > 0 and var errors
             ? UploadPresentation.ErrorCount(errors)
             : HasPendingUploads ? "Uploads pending" : string.Empty;
+
+    private bool HasUploadWarning => UploadStatus?.UploadRecoveryRequired == true || UploadPresentation.Errors(UploadStatus) > 0;
 
     private bool HostOutageAffectsDrive => _hostUnavailable &&
         (ShouldStop || IsTransient || NeedsHostRecovery || HasPendingUploads ||
@@ -239,6 +276,8 @@ public sealed class MountRow : NotifyBase
             return (string.Empty, StatusPalette.Muted);
         if (!_hasRecognizedStatus)
             return (JoinStatus("Unknown mount state", UploadAttentionText), StatusPalette.Warning);
+        if (IsWaitingForConnection)
+            return (JoinStatus("Waiting for connection", UploadAttentionText), HasUploadWarning ? StatusPalette.Warning : StatusPalette.Muted);
         if (_lifecycle == MountLifecycle.Degraded)
         {
             var reason = StatusText.Split('·', 2)[0].Trim();

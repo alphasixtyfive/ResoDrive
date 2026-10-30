@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Runtime.CompilerServices;
 
 namespace ResoDrive.Windows;
 
@@ -21,6 +22,7 @@ public sealed partial class ProcessDiagnosticLog
     private readonly bool _localDestination;
     private readonly AccountDataGuard? _accountData;
     private readonly long _maximumBytes;
+    internal Func<Exception, string>? StackMetadataFormatter { get; init; }
 
     public ProcessDiagnosticLog(ApplicationPaths paths, string processRole,
         long maximumBytes = DefaultMaximumBytes)
@@ -85,32 +87,55 @@ public sealed partial class ProcessDiagnosticLog
     {
         ArgumentNullException.ThrowIfNull(exception);
         var errorId = NewErrorId();
+        // Keep the reporting boundary free of optional stack-trace types. A loader
+        // failure while JIT-compiling a method happens before that method's own catch.
+#pragma warning disable CA1031 // Reporting a failure must not replace the original failure.
+        try { WriteException(eventName, exception, errorId); }
+        catch (Exception) { }
+#pragma warning restore CA1031
+        return errorId;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void WriteException(string eventName, Exception exception, string errorId)
+    {
         // Exception.ToString can be overridden by third-party exceptions. Reporting must
         // not replace the original failure if that implementation itself throws.
         string detail;
 #pragma warning disable CA1031 // A diagnostic formatter must never mask the original exception.
         try { detail = exception.ToString(); }
-        catch (Exception) { detail = "Exception details could not be formatted."; }
+        catch (Exception)
+        {
+            try { detail = exception.Message; }
+            catch (Exception) { detail = "Exception details could not be formatted."; }
+        }
 #pragma warning restore CA1031
         // Preserve CLR type/method identities separately: free-text host-name redaction
         // would otherwise mistake System.SomeException and namespace names for DNS.
-        try
-        {
-            var metadata = $"exceptionType={Identifier(exception.GetType().FullName)} hresult=0x{exception.HResult:X8}";
-            var frames = new StackTrace(exception, fNeedFileInfo: false).GetFrames();
-            foreach (var frame in frames.Take(32))
-            {
-                var method = frame.GetMethod();
-                if (method is null) continue;
-                metadata += $" frame={Identifier(method.DeclaringType?.FullName)}.{Identifier(method.Name)}+IL{frame.GetILOffset()}";
-            }
-            var bounded = detail.Length > 16 * 1024 ? detail[..(16 * 1024)] : detail;
-            WriteCore("ERROR", eventName, metadata + " message=" + RecoveryToolsService.Sanitize(bounded), errorId, sanitize: false);
-        }
-#pragma warning disable CA1031 // Reflection/redaction failure must not mask the exception being recorded.
-        catch (Exception) { WriteCore("ERROR", eventName, "Exception details could not be collected.", errorId, sanitize: false); }
+        var metadata = $"exceptionType={Identifier(exception.GetType().FullName)} hresult=0x{exception.HResult:X8}";
+        string frames;
+#pragma warning disable CA1031 // Stack metadata is optional when runtime components are unavailable.
+        try { frames = StackMetadataFormatter is { } formatter ? formatter(exception) : CollectStackMetadata(exception); }
+        catch (Exception) { frames = " stack=unavailable"; }
 #pragma warning restore CA1031
-        return errorId;
+        var bounded = detail.Length > 16 * 1024 ? detail[..(16 * 1024)] : detail;
+        WriteCore("ERROR", eventName, metadata + " message=" + RecoveryToolsService.Sanitize(bounded) + frames, errorId, sanitize: false);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static string CollectStackMetadata(Exception exception)
+    {
+        // This helper is the only reporting method that references StackTrace.
+        // NoInlining keeps its assembly resolution inside the caller's guarded call.
+        var metadata = new StringBuilder();
+        foreach (var frame in new StackTrace(exception, fNeedFileInfo: false).GetFrames().Take(32))
+        {
+            var method = frame.GetMethod();
+            if (method is null) continue;
+            metadata.Append(CultureInfo.InvariantCulture,
+                $" frame={Identifier(method.DeclaringType?.FullName)}.{Identifier(method.Name)}+IL{frame.GetILOffset()}");
+        }
+        return metadata.ToString();
     }
 
     public bool Write(string level, string eventName, string? detail = null, string? errorId = null)
@@ -215,7 +240,7 @@ public sealed partial class ProcessDiagnosticLog
         exception is IOException or UnauthorizedAccessException or ArgumentException or
             NotSupportedException or OperationCanceledException or System.Security.SecurityException;
 
-    private static bool IsLocalDiagnosticPath(string path)
+    internal static bool IsLocalDiagnosticPath(string path)
     {
         // Only ordinary absolute drive-letter paths. This rejects UNC, extended
         // UNC and device namespaces before any native drive or filesystem query.

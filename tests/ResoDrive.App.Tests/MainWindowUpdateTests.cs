@@ -41,16 +41,20 @@ internal static class MainWindowUpdateTests
 
             Method("SelectPage").Invoke(window, ["Settings"]);
             Assert.IsType<TextBlock>(window.FindName("ApplicationUpdateStatusText")).Text = "Version 0.3.36 is available";
+            var defaultSize = new Size(window.Width, window.Height);
             window.Show();
             foreach (var scale in new[] { 1d, 1.5d, 2d })
             {
                 VisualTreeHelper.SetRootDpi(window, new DpiScale(scale, scale));
-                foreach (var size in new[] { new Size(920, 610), new Size(640, 440) })
+                foreach (var size in new[] { defaultSize, new Size(640, 440) })
                 {
                     window.Width = size.Width;
                     window.Height = size.Height;
                     window.UpdateLayout();
                     var scroll = Assert.IsType<ScrollViewer>(window.FindName("SettingsScrollViewer"));
+                    if (size == defaultSize)
+                        Assert.True(scroll.ScrollableHeight < 1,
+                            $"Normal Settings should fit without scrolling (overflow: {scroll.ScrollableHeight:0.0}).");
                     scroll.ScrollToBottom();
                     check.BringIntoView();
                     window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);

@@ -8,6 +8,7 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using ResoDrive.Core.Results;
 using ResoDrive.Core.Setup;
+using ResoDrive.Core.Validation;
 
 namespace ResoDrive.Windows;
 
@@ -64,10 +65,6 @@ public sealed class RcloneConfigMutationService : IRcloneConfigMutationService
     private static readonly Regex VendorPattern = new(
         "^[a-z0-9][a-z0-9_-]{0,63}$",
         RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
-    private static readonly HashSet<string> SftpHostKeyAlgorithms = new(StringComparer.Ordinal)
-    {
-        "ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521"
-    };
     private readonly IRcloneRcSessionFactory _sessions;
 
     public RcloneConfigMutationService() : this(new RcloneRcSessionFactory()) { }
@@ -295,12 +292,8 @@ public sealed class RcloneConfigMutationService : IRcloneConfigMutationService
             return Result.Failure("rclone.sftp_host", "The SFTP host is invalid.");
         if (connection.Port is < 1 or > 65_535)
             return Result.Failure("rclone.sftp_port", "The SFTP port is invalid.");
-        if (!string.IsNullOrEmpty(connection.KnownHost))
-        {
-            var hostKey = connection.KnownHost.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            if (hostKey.Length != 2 || !SftpHostKeyAlgorithms.Contains(hostKey[0]) || !ValidSftpPublicKey(hostKey[1]))
-                return Result.Failure("rclone.sftp_host_key", "The pinned SFTP server host key is invalid.");
-        }
+        if (!string.IsNullOrEmpty(connection.KnownHost) && !SftpHostKeyValidator.IsValid(connection.KnownHost))
+            return Result.Failure("rclone.sftp_host_key", "The pinned SFTP server host key is invalid.");
         return Result.Success();
     }
 
@@ -337,13 +330,6 @@ public sealed class RcloneConfigMutationService : IRcloneConfigMutationService
         if (username is null || password is null || !ValidText(username, 1024) || !ValidText(password, 2048))
             return Result.Failure("rclone.remote_credentials", "The remote credentials are invalid.");
         return Result.Success();
-    }
-
-    private static bool ValidSftpPublicKey(string value)
-    {
-        if (value.Length is < 40 or > 24_000) return false;
-        try { return Convert.FromBase64String(value).Length is >= 32 and <= 16_384; }
-        catch (FormatException) { return false; }
     }
 
     internal static string CreateStagingPath(string configPath) =>

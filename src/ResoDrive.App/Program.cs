@@ -148,7 +148,7 @@ public static class Program
         }
         catch (Exception exception)
         {
-            var errorId = UiDiagnosticLog.Current.Exception("startup.fatal", exception);
+            var errorId = UiDiagnosticLog.ReportException("startup.fatal", exception);
             try
             {
                 System.Windows.MessageBox.Show(
@@ -159,7 +159,7 @@ public static class Program
             }
             catch (Exception dialogException)
             {
-                UiDiagnosticLog.Current.Exception("startup.error_dialog_failed", dialogException);
+                UiDiagnosticLog.ReportException("startup.error_dialog_failed", dialogException);
             }
             return 1;
         }

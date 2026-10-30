@@ -51,6 +51,8 @@ internal sealed class TransferRow(string key) : NotifyBase
 
 internal sealed class TransfersViewModel : NotifyBase
 {
+    private readonly TimeProvider _clock;
+    internal TransfersViewModel(TimeProvider? clock = null) => _clock = clock ?? TimeProvider.System;
     private string _summary = "No transfers detected.";
     public string Summary { get => _summary; private set => Set(ref _summary, value); }
     public ObservableCollection<TransferRow> Transfers { get; } = [];
@@ -59,48 +61,79 @@ internal sealed class TransfersViewModel : NotifyBase
         IReadOnlyList<SyncRow>? syncJobs = null, int activeSyncJobs = 0,
         bool powerProtectionUnavailable = false, bool syncStatusAvailable = true)
     {
-        var rows = new List<TransferRowContent>();
-        var unknown = hostUnavailable || !syncStatusAvailable;
-        var needsAttention = false;
-        var pending = false;
-        var observing = false;
+        var content = new TransferListContent(hostUnavailable || !syncStatusAvailable);
         foreach (var mount in mounts)
+            AddUploadRows(content, mount, hostUnavailable);
+        AddSyncRows(content, syncJobs ?? [], activeSyncJobs, syncStatusAvailable);
+        if (powerProtectionUnavailable)
+            content.Rows.Add(new("power:unavailable", "Windows power protection",
+                "Windows could not apply all power protection. Check transfers before shutting down."));
+
+        ReconcileRows(content.Rows);
+        Summary = SummaryFor(content, powerProtectionUnavailable);
+    }
+
+    private void AddUploadRows(TransferListContent content, MountRow mount, bool hostUnavailable)
+    {
+        var rows = content.Rows;
+        var status = mount.UploadStatus;
+        var changingMount = mount.IsTransient;
+        var waitingForConnection = mount.IsWaitingForConnection;
+        if (!mount.ShouldStop && status?.UploadRecoveryRequired != true && !changingMount) return;
+
+        var checking = status?.UploadStatusChecking == true || changingMount;
+        content.Observing |= checking;
+        content.StatusUnavailable |= !waitingForConnection && !checking && (status is null || status.UploadStatusStale);
+        content.Pending |= waitingForConnection;
+        content.NeedsAttention |= UploadPresentation.Errors(status) > 0 || status?.UploadRecoveryRequired == true;
+        if (status?.UploadRecoveryRequired == true)
+            rows.Add(new($"{mount.Id}:status", mount.Name,
+                "Cached files need recovery. Restore this drive to finish uploading."));
+        else if (waitingForConnection)
+            rows.Add(new($"{mount.Id}:status", mount.Name,
+                "Waiting for connection. Retrying automatically."));
+        else if (!checking && (status is null || status.UploadStatusStale))
+            rows.Add(new($"{mount.Id}:status", mount.Name,
+                "Waiting for upload status. Checking again automatically."));
+        if (status is null) return;
+
+        content.Pending |= UploadPresentation.HasPending(status);
+        var files = status.Uploads ?? [];
+        var visibleFiles = files.OrderBy(file => file.State == MountUploadState.Uploading ? 0 : 1).Take(5).ToArray();
+        var fileStatusUnavailable = hostUnavailable || status.UploadStatusStale || status.UploadStatusChecking ||
+            status.UploadRecoveryRequired || changingMount || waitingForConnection;
+        var retainProgress = !hostUnavailable && !changingMount && !waitingForConnection && !status.UploadRecoveryRequired &&
+            UploadPresentation.HasRecentProgress(status, _clock.GetUtcNow());
+        if (!waitingForConnection && files.Count == 0 &&
+            (status.UploadsQueued > 0 || status.UploadsInProgress > 0 || status.UploadsDirty > 0))
+            rows.Add(new($"{mount.Id}:activity", mount.Name, fileStatusUnavailable
+                ? "Uploads pending. Waiting for upload status." : UploadPresentation.Activity(status)));
+        foreach (var file in visibleFiles)
         {
-            var status = mount.UploadStatus;
-            var changingMount = mount.IsTransient;
-            if (!mount.ShouldStop && status?.UploadRecoveryRequired != true && !changingMount) continue;
-            var checking = status?.UploadStatusChecking == true || changingMount;
-            observing |= checking;
-            unknown |= !checking && (status is null || status.UploadStatusStale);
-            needsAttention |= UploadPresentation.Errors(status) > 0 || status?.UploadRecoveryRequired == true;
-            if (status?.UploadRecoveryRequired == true)
-                rows.Add(new($"{mount.Id}:status", mount.Name,
-                    "Cached files need recovery. Restore this drive to finish uploading."));
-            else if (!checking && (status is null || status.UploadStatusStale))
-                rows.Add(new($"{mount.Id}:status", mount.Name,
-                    "Upload status unavailable. Keep ResoDrive running until it reconnects."));
-            if (status is null) continue;
-            pending |= UploadPresentation.HasPending(status);
-            var files = status.Uploads ?? [];
-            var visibleFiles = files.OrderBy(file => file.State == MountUploadState.Uploading ? 0 : 1).Take(5).ToArray();
-            var fileStatusUnavailable = hostUnavailable || status.UploadStatusStale || status.UploadStatusChecking ||
-                status.UploadRecoveryRequired || changingMount;
-            if (files.Count == 0 &&
-                (status.UploadsQueued > 0 || status.UploadsInProgress > 0 || status.UploadsDirty > 0))
-                rows.Add(new($"{mount.Id}:activity", mount.Name, fileStatusUnavailable
-                    ? "Uploads pending. Waiting for upload status." : UploadPresentation.Activity(status)));
-            foreach (var file in visibleFiles)
-                rows.Add(new($"file:{mount.Id}:{file.RelativePath}", $"{mount.Name} · {file.RelativePath}",
-                    fileStatusUnavailable ? "Waiting for upload status" : UploadPresentation.FileState(file),
-                    file.BytesTransferred, file.TotalBytes, fileStatusUnavailable ? null : file.SpeedBytesPerSecond,
-                    !fileStatusUnavailable && file.State == MountUploadState.Uploading));
-            if (status.UploadDetailsTruncated || files.Count > visibleFiles.Length)
-                rows.Add(new($"{mount.Id}:more", mount.Name, "More files pending"));
-            var errors = UploadPresentation.Errors(status);
-            if (errors > 0 && !visibleFiles.Any(file => file.State == MountUploadState.Retrying))
-                rows.Add(new($"{mount.Id}:errors", mount.Name, $"{UploadPresentation.ErrorCount(errors)}. Keep the cached files and check the connection."));
+            var detail = UploadPresentation.FileState(file);
+            if (retainProgress && file.State == MountUploadState.Uploading)
+                detail += " · updating status";
+            else if (waitingForConnection)
+                detail = "Waiting for connection";
+            else if (fileStatusUnavailable)
+                detail = "Waiting for upload status";
+            var showProgress = (!fileStatusUnavailable || retainProgress) && file.State == MountUploadState.Uploading;
+            rows.Add(new($"file:{mount.Id}:{file.RelativePath}", $"{mount.Name} · {file.RelativePath}", detail,
+                file.BytesTransferred, file.TotalBytes, fileStatusUnavailable ? null : file.SpeedBytesPerSecond, showProgress));
         }
-        var jobs = syncJobs ?? [];
+
+        if (status.UploadDetailsTruncated || files.Count > visibleFiles.Length)
+            rows.Add(new($"{mount.Id}:more", mount.Name, "More files pending"));
+        var errors = UploadPresentation.Errors(status);
+        if (errors > 0 && !visibleFiles.Any(file => file.State == MountUploadState.Retrying))
+            rows.Add(new($"{mount.Id}:errors", mount.Name,
+                $"{UploadPresentation.ErrorCount(errors)}. Keep the cached files and check the connection."));
+    }
+
+    private static void AddSyncRows(TransferListContent content, IReadOnlyList<SyncRow> jobs,
+        int activeSyncJobs, bool syncStatusAvailable)
+    {
+        var rows = content.Rows;
         var freshActive = jobs.Count(job => job.IsBusy && !job.StatusUnavailable);
         var retainUnavailable = !syncStatusAvailable || activeSyncJobs > freshActive;
         var representedSyncs = 0;
@@ -111,17 +144,17 @@ internal sealed class TransfersViewModel : NotifyBase
             if (!job.IsBusy && (status is null || recognized)) continue;
             if (job.StatusUnavailable && !retainUnavailable) continue;
             var unavailable = !syncStatusAvailable || job.StatusUnavailable || !recognized;
-            unknown |= unavailable;
-            pending = true;
+            content.StatusUnavailable |= unavailable;
+            content.Pending = true;
             representedSyncs++;
             var key = $"sync:{job.MountId}:{job.Id}";
             var name = $"{job.MountName} · {job.Name}";
             if (unavailable || status is null)
             {
-                rows.Add(new(key, name, "Sync status unavailable. Keep ResoDrive running until it reconnects."));
+                rows.Add(new(key, name, "Waiting for sync status. Checking again automatically."));
                 continue;
             }
-            status = SanitizeProgress(status);
+            status = SyncProgressPresentation.Normalize(status);
             var hasMode = Enum.TryParse<SyncMode>(job.Settings.Mode, true, out var parsedMode) && parsedMode.IsSupported();
             // Active status formatting is independent of direction. An invalid
             // edited mode must not hide work still running with its old settings.
@@ -129,13 +162,13 @@ internal sealed class TransfersViewModel : NotifyBase
                 enabled: true, busy: true, lifecycle, status with
                 {
                     BytesTransferred = null, SpeedBytesPerSecond = null, EtaSeconds = null,
-                }, recognized: true);
+                }, recognized: true, transferStarted: job.HasTransferred);
             var detail = $"{(hasMode ? job.ModeLabel : "Sync")} · {text.Primary}";
             var hasFileCounts = status.TotalTransfers > 0 || status.TotalChecks > 0;
             if (hasFileCounts) detail += $" · {text.Secondary}";
             if (status.Errors > 0)
             {
-                needsAttention = true;
+                content.NeedsAttention = true;
                 detail += $" · {status.Errors} transfer {(status.Errors == 1 ? "error" : "errors")}";
             }
             var progress = SyncProgressText(status);
@@ -148,13 +181,15 @@ internal sealed class TransfersViewModel : NotifyBase
         var missingSyncs = Math.Max(0, activeSyncJobs) - representedSyncs;
         if (missingSyncs > 0)
         {
-            pending = true;
-            unknown = true;
+            content.Pending = true;
+            content.StatusUnavailable = true;
             rows.Add(new("sync:unrepresented", "Sync jobs",
                 $"{missingSyncs} active sync {(missingSyncs == 1 ? "job" : "jobs")}. Waiting for transfer details."));
         }
-        if (powerProtectionUnavailable)
-            rows.Add(new("power:unavailable", "Windows power protection", "Windows could not apply all power protection. Check transfers before shutting down."));
+    }
+
+    private void ReconcileRows(List<TransferRowContent> rows)
+    {
         var keys = rows.Select(row => row.Key).ToHashSet(StringComparer.Ordinal);
         for (var index = Transfers.Count - 1; index >= 0; index--)
             if (!keys.Contains(Transfers[index].Key)) Transfers.RemoveAt(index);
@@ -171,28 +206,26 @@ internal sealed class TransfersViewModel : NotifyBase
                 Transfers.Move(Transfers.IndexOf(target), index);
             target.Update(row);
         }
-        Summary = powerProtectionUnavailable ? "Windows power protection needs attention."
-            : needsAttention ? "Some transfers need attention."
-            : unknown ? "Transfer status unavailable."
-            : pending ? string.Empty
-            : rows.Count > 0 ? "Some transfers need attention."
-            : observing ? "No transfers detected."
-            : "No active transfers.";
     }
 
-    private static HostSyncStatus SanitizeProgress(HostSyncStatus status) => status with
+    private static string SummaryFor(TransferListContent content, bool powerProtectionUnavailable)
     {
-        BytesTransferred = Nonnegative(status.BytesTransferred),
-        TotalBytes = status.TotalBytes is > 0 ? status.TotalBytes : null,
-        ProgressPercent = Nonnegative(status.ProgressPercent),
-        ChecksCompleted = Nonnegative(status.ChecksCompleted),
-        TotalChecks = status.TotalChecks is > 0 ? status.TotalChecks : null,
-        TransfersCompleted = Nonnegative(status.TransfersCompleted),
-        TotalTransfers = status.TotalTransfers is > 0 ? status.TotalTransfers : null,
-        Errors = Nonnegative(status.Errors),
-        SpeedBytesPerSecond = Nonnegative(status.SpeedBytesPerSecond),
-        EtaSeconds = Nonnegative(status.EtaSeconds),
-    };
+        if (powerProtectionUnavailable) return "Windows power protection needs attention.";
+        if (content.NeedsAttention) return "Some transfers need attention.";
+        if (content.StatusUnavailable) return "Transfer status unavailable.";
+        if (content.Pending) return string.Empty;
+        if (content.Rows.Count > 0) return "Some transfers need attention.";
+        return content.Observing ? "No transfers detected." : "No active transfers.";
+    }
+
+    private sealed class TransferListContent(bool statusUnavailable)
+    {
+        public List<TransferRowContent> Rows { get; } = [];
+        public bool StatusUnavailable { get; set; } = statusUnavailable;
+        public bool NeedsAttention { get; set; }
+        public bool Pending { get; set; }
+        public bool Observing { get; set; }
+    }
 
     private static string SyncProgressText(HostSyncStatus status)
     {
@@ -206,6 +239,4 @@ internal sealed class TransfersViewModel : NotifyBase
         return progress;
     }
 
-    private static long? Nonnegative(long? value) => value is >= 0 ? value : null;
-    private static double? Nonnegative(double? value) => value is >= 0 && double.IsFinite(value.Value) ? value : null;
 }

@@ -71,6 +71,27 @@ public sealed class MountUploadRecoveryTests : IDisposable
     }
 
     [Fact]
+    public async Task UnchangedObservationsDoNotCopyArgumentsOrRewriteTheJournal()
+    {
+        var arguments = new CountingArguments(["--vfs-cache-mode=full"]);
+        var definition = Definition() with { Arguments = arguments };
+        using var store = new MountRecoveryStore(_paths);
+        await store.RecordAsync(definition, Metadata, CancellationToken.None, "fingerprint");
+        var original = store.Find(definition.Id);
+        arguments.Enumerations = 0;
+        // A rewrite would fail while this record is exclusively held. Ordinary
+        // observations must only compare their identity, without copying arguments.
+        await using var held = new FileStream(Path.Combine(_paths.Root, "mount-upload-recovery.json"),
+            FileMode.Open, FileAccess.Read, FileShare.None);
+        for (var index = 0; index < 20; index++)
+            await store.RecordAsync(definition, null, CancellationToken.None);
+
+        Assert.Same(original, store.Find(definition.Id));
+        Assert.InRange(arguments.Enumerations, 0, 20);
+        Assert.False(File.Exists(Path.Combine(_paths.Root, "mount-upload-recovery.json.bak")));
+    }
+
+    [Fact]
     public async Task NeverMountWithDirtyCacheAttemptsRecoveryRatherThanDiscardingItsWork()
     {
         var definition = Definition();
@@ -313,6 +334,19 @@ public sealed class MountUploadRecoveryTests : IDisposable
     {
         if (Directory.Exists(_paths.Root)) Directory.Delete(_paths.Root, true);
     }
+    private sealed class CountingArguments(string[] values) : IReadOnlyList<string>
+    {
+        internal int Enumerations { get; set; }
+        public int Count => values.Length;
+        public string this[int index] => values[index];
+        public IEnumerator<string> GetEnumerator()
+        {
+            Enumerations++;
+            return ((IEnumerable<string>)values).GetEnumerator();
+        }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
     private sealed class EmptyInventory : IMountTargetInventory
     {
         public Task<OperationResult<IReadOnlySet<char>>> GetOccupiedDriveLettersAsync(CancellationToken cancellationToken = default) =>

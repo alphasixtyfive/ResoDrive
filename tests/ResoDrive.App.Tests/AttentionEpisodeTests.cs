@@ -5,6 +5,7 @@ internal sealed class ObservationClock : TimeProvider
     private long _ticks;
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
     public override long GetTimestamp() => _ticks;
+    public override DateTimeOffset GetUtcNow() => new DateTimeOffset(2026, 10, 30, 12, 0, 0, TimeSpan.Zero).AddTicks(_ticks);
     internal void Advance(TimeSpan duration) => _ticks += duration.Ticks;
 }
 

@@ -5,10 +5,11 @@ using Forms = System.Windows.Forms;
 
 namespace ResoDrive.App;
 
-internal sealed record TrayActionResult(bool Succeeded, string Title, string Message, bool Notify = true)
+internal sealed record TrayActionResult(bool Succeeded, string Title, string Message, bool Notify = true, bool IsWarning = false)
 {
     public static TrayActionResult Success(string title, string message) => new(true, title, message);
     public static TrayActionResult Failure(string title, string message) => new(false, title, message);
+    public static TrayActionResult Warning(string title, string message) => new(false, title, message, IsWarning: true);
     public static TrayActionResult SilentSuccess() => new(true, string.Empty, string.Empty, false);
 }
 
@@ -33,7 +34,7 @@ internal sealed partial class TrayController : IDisposable
     private readonly System.Drawing.Icon[] _uploadIcons;
     private readonly System.Drawing.Icon _warningIcon;
     private int _animationFrame;
-    private readonly AttentionEpisode _uploadAttention = new(TimeProvider.System);
+    private readonly UploadAttentionNotifications _uploadAttention = new(TimeProvider.System);
     private readonly Func<IReadOnlyList<SyncRow>> _syncProvider;
     private readonly Func<SyncRow, Task<TrayActionResult>> _syncAction;
     private bool _disposed;
@@ -77,12 +78,12 @@ internal sealed partial class TrayController : IDisposable
     }
 
     internal void UpdateStatus(int mountedCount, int runningSyncCount, long pendingUploads = 0, bool uploadWarning = false,
-        bool attentionStatusConfirmed = true)
+        bool attentionStatusConfirmed = true, bool immediateAttention = false)
     {
         if (_disposed) return;
         if (!_dispatcher.CheckAccess())
         {
-            Dispatch(() => UpdateStatus(mountedCount, runningSyncCount, pendingUploads, uploadWarning, attentionStatusConfirmed));
+            Dispatch(() => UpdateStatus(mountedCount, runningSyncCount, pendingUploads, uploadWarning, attentionStatusConfirmed, immediateAttention));
             return;
         }
         var uploading = pendingUploads > 0;
@@ -101,8 +102,9 @@ internal sealed partial class TrayController : IDisposable
             _animation.Stop();
             _notifyIcon.Icon = _icon;
         }
-        if (_uploadAttention.Observe(uploadWarning, attentionStatusConfirmed) == AttentionTransition.Began)
-            ShowResult(TrayActionResult.Failure("Uploads need attention", "Keep ResoDrive running. Open Transfers to check pending files and connection status."), _showTransfers);
+        if (_uploadAttention.Observe(uploadWarning, immediateAttention, attentionStatusConfirmed))
+            ShowResult(TrayActionResult.Warning("Transfers need attention",
+                "Open Transfers to review pending files. ResoDrive keeps checking and retries uploads automatically."), _showTransfers);
     }
 
     internal void ShowMountResult(MountRow mount, TrayActionResult result) =>
@@ -124,7 +126,7 @@ internal sealed partial class TrayController : IDisposable
             result.Succeeded ? 3000 : 5000,
             Truncate(result.Title, 63),
             Truncate(result.Message, 255),
-            result.Succeeded ? Forms.ToolTipIcon.Info : Forms.ToolTipIcon.Error);
+            result.Succeeded ? Forms.ToolTipIcon.Info : result.IsWarning ? Forms.ToolTipIcon.Warning : Forms.ToolTipIcon.Error);
     }
 
     public void Dispose()
@@ -241,9 +243,9 @@ internal sealed partial class TrayController : IDisposable
         }
         catch (Exception reportingException)
         {
-            UiDiagnosticLog.Current.Exception("tray.error_reporting_failed", reportingException);
+            UiDiagnosticLog.ReportException("tray.error_reporting_failed", reportingException);
         }
-        UiDiagnosticLog.Current.Exception("tray.action_failed", exception);
+        UiDiagnosticLog.ReportException("tray.action_failed", exception);
     }
 
     private static string Truncate(string value, int maximumLength) => value.Length <= maximumLength

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.47] - 2026-10-30
+
+- Retry drives automatically when their server becomes reachable, including after a VPN connects, and fix starts that could stay queued.
+- Keep upload progress visible during brief status checks and reduce repeated connection warnings.
+- Allow normal rclone updates while drives and sync jobs keep running.
+- Reduce background allocations and repeated startup checks, and avoid rebuilding the transfer popup while it is hidden.
+- Open the main window a little taller so the normal Settings page fits without scrolling.
+- Include transfer and recovery details, recent runtime history and useful error references in diagnostic reports.
+- Fix error reporting that could hide the original crash, and apply the same SFTP host-key checks throughout setup.
+
 ## [0.3.46] - 2026-10-09
 
 - Recover automatic startup after legacy upgrades when another process remains inaccessible longer than five seconds or Windows denies wait access.

@@ -9,6 +9,7 @@ public sealed class SyncRow : NotifyBase
 {
     private readonly SyncMode? _mode;
     private bool _statusUnavailable;
+    private bool _hasUnknownStatus;
     private HostSyncStatus? _transferStatus;
     private SyncLifecycle _lifecycle = SyncLifecycle.Idle;
     private string _statusPrimary = string.Empty;
@@ -78,9 +79,9 @@ public sealed class SyncRow : NotifyBase
     public bool IsBusy => _lifecycle is SyncLifecycle.Queued or SyncLifecycle.Running;
     public HostSyncStatus? TransferStatus => _transferStatus;
     public bool StatusUnavailable => _statusUnavailable;
-    public bool CanAct => _mode is not null && (IsBusy || (Enabled && !_statusUnavailable));
-    public string ActionText => IsBusy ? "Stop" : _statusUnavailable ? "Waiting…" : Enabled ? "Run" : "Disabled";
-    public string ActionGlyph => IsBusy ? "\uE71A" : _statusUnavailable ? "\uE895" : Enabled ? "\uE768" : "\uE711";
+    public bool CanAct => _mode is not null && !_hasUnknownStatus && (IsBusy || (Enabled && !_statusUnavailable));
+    public string ActionText => IsBusy ? "Stop" : _statusUnavailable || _hasUnknownStatus ? "Waiting…" : Enabled ? "Run" : "Disabled";
+    public string ActionGlyph => IsBusy ? "\uE71A" : _statusUnavailable || _hasUnknownStatus ? "\uE895" : Enabled ? "\uE768" : "\uE711";
     public MediaBrush ResultBrush =>
         _lifecycle switch
         {
@@ -103,12 +104,17 @@ public sealed class SyncRow : NotifyBase
 
     public void ApplyStatus(HostSyncStatus? status)
     {
+        var running = string.Equals(status?.Lifecycle, nameof(SyncLifecycle.Running), StringComparison.OrdinalIgnoreCase);
+        if (!running) HasTransferred = false;
+        else HasTransferred |= status!.BytesTransferred > 0 || status.TransfersCompleted > 0;
         // Keep the raw counters current even when their formatted text has not changed.
         Set(ref _transferStatus, status, nameof(TransferStatus));
         var wasUnavailable = _statusUnavailable;
         _statusUnavailable = false;
         if (wasUnavailable) Changed(nameof(StatusUnavailable));
-        var recognized = Enum.TryParse(status?.Lifecycle, true, out SyncLifecycle lifecycle);
+        var hadUnknownStatus = _hasUnknownStatus;
+        var recognized = Enum.TryParse(status?.Lifecycle, true, out SyncLifecycle lifecycle) && Enum.IsDefined(lifecycle);
+        _hasUnknownStatus = status is not null && !recognized;
         var nextLifecycle = recognized ? lifecycle : SyncLifecycle.Idle;
         var presentation = SyncStatusPresentation.Create(
             _mode,
@@ -116,8 +122,8 @@ public sealed class SyncRow : NotifyBase
             nextLifecycle is SyncLifecycle.Queued or SyncLifecycle.Running,
             nextLifecycle,
             status,
-            recognized);
-        if (!wasUnavailable && _lifecycle == nextLifecycle &&
+            recognized, transferStarted: HasTransferred);
+        if (!wasUnavailable && hadUnknownStatus == _hasUnknownStatus && _lifecycle == nextLifecycle &&
             _statusPrimary == presentation.Primary &&
             _statusSecondary == presentation.Secondary)
         {
@@ -139,4 +145,6 @@ public sealed class SyncRow : NotifyBase
         Changed(nameof(ResultBrush));
         Changed(nameof(ActionAccessibleName));
     }
+
+    internal bool HasTransferred { get; private set; }
 }

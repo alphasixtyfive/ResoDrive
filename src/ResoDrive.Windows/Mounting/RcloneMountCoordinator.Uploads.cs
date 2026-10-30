@@ -54,6 +54,15 @@ public sealed partial class RcloneMountCoordinator
 
     private async Task RefreshHealthAsync(Session session, CancellationToken cancellationToken)
     {
+        // Idle cache trees need not be walked every second. A metadata watcher event
+        // immediately invalidates this shortcut; active or uncertain work still polls
+        // every tick. Five seconds stays inside the host's ten-second safety horizon.
+        if (_snapshots.TryGetValue(session.Definition.Id, out var recent) &&
+            recent is { Lifecycle: MountLifecycle.Mounted, UploadStatusStale: false, UploadStatusChecking: false,
+                UploadsQueued: 0, UploadsInProgress: 0, UploadsDirty: 0, UploadErrors: 0, UploadRecoveryRequired: false,
+                UploadObservedAt: { } observed } &&
+            DateTimeOffset.UtcNow >= observed && DateTimeOffset.UtcNow - observed < TimeSpan.FromSeconds(5))
+            return;
         var gate = OperationGate(session.Definition.Id);
         if (!await gate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
             return;
@@ -93,6 +102,7 @@ public sealed partial class RcloneMountCoordinator
         try
         {
             var generation = Volatile.Read(ref session.CacheGeneration);
+            var previousTransfers = session.LastTransfers;
             var current = session.Control is { } control && !ProcessTermination.HasExitedOrUnavailable(session.Process)
                 ? await VfsStatusReader.ReadAsync(control.Address, control.User, control.Password, _paths.Cache, cancellationToken).ConfigureAwait(false)
                 : null;
@@ -103,11 +113,17 @@ public sealed partial class RcloneMountCoordinator
                     !await RecoveryCacheIsCleanAsync(previous, cancellationToken).ConfigureAwait(false))
                     return new(null, session.LastTransfers) { Generation = generation };
                 await _recovery.RecordAsync(session.Definition, current.MetadataPath, cancellationToken).ConfigureAwait(false);
+                // A changing cache prevents a safe-stop verdict, but does not erase
+                // the transfer counters just measured from the local control API.
                 if (generation != Volatile.Read(ref session.CacheGeneration))
-                    return new(null, session.LastTransfers, Checking: true) { Generation = generation };
+                {
+                    var changed = new MountUploadObservation(current, previousTransfers) { Generation = generation }.DuringCacheChange();
+                    session.LastTransfers = changed.Current ?? changed.LastKnown;
+                    return changed;
+                }
                 session.LastTransfers = current;
             }
-            return new(current, session.LastTransfers) { Generation = generation };
+            return new(current, current is null ? session.LastTransfers : previousTransfers) { Generation = generation };
         }
         finally { session.TransferGate.Release(); }
     }
@@ -117,7 +133,10 @@ public sealed partial class RcloneMountCoordinator
         lock (session.StatusGate)
         {
             if (observation.Generation != Volatile.Read(ref session.CacheGeneration))
-                observation = new(null, session.LastTransfers, Checking: true);
+            {
+                observation = observation.DuringCacheChange();
+                session.LastTransfers = observation.Current ?? observation.LastKnown;
+            }
             Publish(snapshot.WithTransfers(observation));
         }
     }
@@ -128,12 +147,12 @@ public sealed partial class RcloneMountCoordinator
         if (args.FullPath.StartsWith(metadataRoot, StringComparison.OrdinalIgnoreCase) ||
             args.FullPath.Equals(Path.TrimEndingDirectorySeparator(metadataRoot), StringComparison.OrdinalIgnoreCase) ||
             args is RenamedEventArgs renamed && renamed.OldFullPath.StartsWith(metadataRoot, StringComparison.OrdinalIgnoreCase))
-            InvalidateUploadStatus();
+            InvalidateUploadStatus(args.FullPath, (args as RenamedEventArgs)?.OldFullPath);
     }
 
     private void CacheWatcherError(object sender, ErrorEventArgs args) => InvalidateUploadStatus();
 
-    private void InvalidateUploadStatus()
+    private void InvalidateUploadStatus(string? changedPath = null, string? oldPath = null)
     {
         var changed = false;
         foreach (var session in _sessions.Values)
@@ -141,6 +160,8 @@ public sealed partial class RcloneMountCoordinator
             if (session.Stopping) continue;
             lock (session.StatusGate)
             {
+                var metadata = session.LastTransfers?.MetadataPath ?? _recovery.Find(session.Definition.Id)?.MetadataPath;
+                if (!CacheChangeAffectsMount(metadata, changedPath, oldPath)) continue;
                 Interlocked.Increment(ref session.CacheGeneration);
                 if (_snapshots.TryGetValue(session.Definition.Id, out var snapshot))
                 {
@@ -150,6 +171,23 @@ public sealed partial class RcloneMountCoordinator
             }
         }
         if (changed) UploadStatusInvalidated?.Invoke(this, EventArgs.Empty);
+    }
+
+    internal static bool CacheChangeAffectsMount(string? metadata, string? changedPath, string? oldPath = null)
+    {
+        // Overflow, or a drive whose cache location is not yet known, requires
+        // checking every session. Directory changes also affect their descendants.
+        if (metadata is null || changedPath is null) return true;
+        return Overlaps(metadata, changedPath) || oldPath is not null && Overlaps(metadata, oldPath);
+
+        static bool Overlaps(string first, string second)
+        {
+            first = Path.TrimEndingDirectorySeparator(first);
+            second = Path.TrimEndingDirectorySeparator(second);
+            return first.Equals(second, StringComparison.OrdinalIgnoreCase) ||
+                first.StartsWith(second + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                second.StartsWith(first + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
 }

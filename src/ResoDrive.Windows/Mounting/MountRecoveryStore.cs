@@ -31,13 +31,15 @@ internal sealed class MountRecoveryStore : IDisposable
     public async Task RecordAsync(MountDefinition definition, string? metadataPath, CancellationToken token, string? configFingerprint = null)
     {
         var previousEntry = Find(definition.Id);
-        if (metadataPath is null && Find(definition.Id) is { } existing && Matches(existing, definition))
-            metadataPath = existing.MetadataPath;
         configFingerprint ??= previousEntry?.ConfigFingerprint;
+        if (previousEntry is not null && Matches(previousEntry, definition))
+        {
+            metadataPath ??= previousEntry.MetadataPath;
+            if (previousEntry.MetadataPath == metadataPath && previousEntry.DisplayName == definition.DisplayName &&
+                previousEntry.ConfigFingerprint == configFingerprint)
+                return;
+        }
         var entry = new MountRecoveryEntry(definition.Id.Value, Source(definition), definition.Arguments.ToArray(), definition.DisplayName, metadataPath, configFingerprint);
-        if (Find(definition.Id) is { } previous && Matches(previous, definition) &&
-            previous.MetadataPath == metadataPath && previous.DisplayName == definition.DisplayName && previous.ConfigFingerprint == configFingerprint)
-            return;
         await UpdateAsync(entry, definition.Id.Value, token).ConfigureAwait(false);
     }
     public Task RemoveAsync(MountId id, CancellationToken token) => UpdateAsync(null, id.Value, token);

@@ -31,6 +31,21 @@ interaction. Presentation types describe rows and status without owning process
 lifetimes. A partial file is an organizational boundary, not an independent
 service; related state still belongs to the window.
 
+The host follows the same convention. `Worker.cs` owns service lifetime and
+shared state; `Worker.Commands.cs` validates and dispatches commands under the
+reload gate; `Worker.Operations.cs` owns queue acceptance, capacity, cancellation
+and completion; `Worker.SessionProtection.cs` keeps upload/exit decisions
+explicit. Moving a method between these partials does not transfer ownership or
+introduce another synchronization boundary.
+
+Presentation consumes raw host observations without rewriting them.
+`SyncProgressPresentation` creates safe display copies for the main row and
+transfer popup. Mount cards compare observation values, including file-list
+contents, before notifying WPF; timestamp-only refreshes still retain the newest
+raw observation and refresh the screen when recent progress expires. Shared
+input rules such as pinned SFTP host-key validation belong in Core and run again
+at the Windows mutation boundary before side effects.
+
 ## Process model
 
 `resodrive.exe` runs either as the WPF management/tray process or in the internal
@@ -54,6 +69,15 @@ intents. Only an accepted manual start clears an explicit recovery pause; a
 cancelled or rejected preflight preserves it. Scheduler interval anchors track
 the initial baseline and later attempts, including failures, rather than claiming
 a completed sync.
+
+Before a new WebDAV/SFTP mount, bounded destination checks can publish
+`WaitingForConnection` without launching a process. Generation-bound retry
+candidates run in the existing mount queue; probes do not hold the shared launch
+gate or host reload gate. Stop retires the desired connection, including stale
+queued candidates, while a rejected upload guard preserves it. The host coalesces
+network-change and resume hints, with timed retries as a fallback. Clean no-process
+waits do not acquire upload/session protection; cached or unverified work still
+does. Live sessions keep the engine's ordinary transfer retry behaviour.
 
 ## Configuration model
 

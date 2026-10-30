@@ -19,8 +19,12 @@ public sealed partial class Worker : BackgroundService
     private readonly IHostApplicationLifetime _applicationLifetime;
     private readonly SemaphoreSlim _reloadGate = new(1, 1);
     private readonly SemaphoreSlim _scheduleStateGate = new(1, 1);
-    private readonly SemaphoreSlim _slots = new(2, 2);
+    // A long copy must never occupy the capacity needed to mount or disconnect a drive.
+    private readonly SemaphoreSlim _mountSlots = new(2, 2);
+    private readonly SemaphoreSlim _syncSlots = new(2, 2);
+    internal TimeSpan MountQueueTimeout { get; init; } = TimeSpan.FromMinutes(2);
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _operations = new();
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _connectionRetryOperations = new();
     private readonly ConcurrentDictionary<int, Task> _tasks = new();
     private readonly ConcurrentDictionary<SyncJobId, DateTimeOffset> _scheduleAnchors = new();
     private readonly RemoteWipeStore _remoteWipe;
@@ -128,14 +132,7 @@ public sealed partial class Worker : BackgroundService
     {
         foreach (var source in _operations.Values)
         {
-            try
-            {
-                source.Cancel();
-            }
-            catch (ObjectDisposedException)
-            {
-                // A completing operation can remove and dispose its source concurrently.
-            }
+            CancelOperation(source);
         }
 
         try
@@ -185,7 +182,8 @@ public sealed partial class Worker : BackgroundService
         sessionGuard?.Dispose();
         _reloadGate.Dispose();
         _scheduleStateGate.Dispose();
-        _slots.Dispose();
+        _mountSlots.Dispose();
+        _syncSlots.Dispose();
         foreach (var source in _operations.Values)
         {
             source.Dispose();
@@ -310,91 +308,8 @@ public sealed partial class Worker : BackgroundService
             if (command == "check-uploads")
                 return Response(await CheckPendingUploadsAsync(token).ConfigureAwait(false));
             if (command is "reload" or "activate-runtime")
-            {
-                if (command == "activate-runtime")
-                {
-                    var refreshed = await RefreshRuntimeUserAgentAsync(token).ConfigureAwait(false);
-                    if (!refreshed.Succeeded)
-                        return Response(refreshed);
-                }
-                var reloaded = await ReloadCoreAsync(token, request.Confirmed).ConfigureAwait(false);
-                if (!reloaded.Succeeded && Volatile.Read(ref _settings) is null)
-                    Volatile.Write(ref _initializationFailure, reloaded.Error);
-                if (!reloaded.Succeeded || command == "reload")
-                    return Response(reloaded);
-
-                QueueEligibleAutoMounts(token);
-                return Status();
-            }
-            if (_mounts is null)
-            {
-                return new(false, "host.not_ready", "The background host is not ready.");
-            }
-            var mountCoordinator = _mounts;
-            if (request.MountId is not Guid mountGuid || mountGuid == Guid.Empty)
-            {
-                return new(false, "host.mount_id", "A valid mount ID is required.");
-            }
-            var mountId = new MountId(mountGuid);
-            if (command is "run-sync" or "cancel-sync")
-            {
-                if (_syncs is null || request.SyncJobId is not Guid syncGuid || syncGuid == Guid.Empty)
-                {
-                    return new(false, "host.sync_job_id", "A valid sync job ID is required.");
-                }
-                var syncId = new SyncJobId(syncGuid);
-                if (!_definitions.Any(definition => definition.Id == mountId && definition.SyncJobs.Any(job => job.Id == syncId)))
-                    return new(false, "sync.not_found", "The sync job no longer exists on this drive.");
-                if (command == "cancel-sync")
-                {
-                    if (_operations.TryGetValue(SyncKey(syncId), out var source))
-                    {
-                        try
-                        {
-                            source.Cancel();
-                        }
-                        catch (ObjectDisposedException)
-                        {
-                        }
-                    }
-                    var cancelled = await _syncs.CancelAsync(mountId, syncId, token).ConfigureAwait(false);
-                    if (cancelled.Error?.Code == "sync.not_running")
-                    {
-                        await _syncs.MarkCancelledAsync(mountId, syncId).ConfigureAwait(false);
-                    }
-                    return cancelled.Succeeded || cancelled.Error?.Code == "sync.not_running" ? Status() : Response(cancelled);
-                }
-                return QueueSync(mountId, syncId, token) ? Status()
-                    : new(false, "host.operation_in_progress", "This sync job is already queued or running.");
-            }
-            if (command == "stop")
-            {
-                var target = mountCoordinator.ValidateStopTarget(mountId);
-                if (!target.Succeeded) return Response(target);
-                if (!request.AllowPendingUploads)
-                {
-                    var uploads = await mountCoordinator.CheckPendingUploadsForMountAsync(mountId, token).ConfigureAwait(false);
-                    if (!uploads.Succeeded) return Response(uploads);
-                }
-            }
-            Func<CancellationToken, Task<OperationResult>>? action = command switch
-            {
-                "start" => operationToken => mountCoordinator.StartAsync(mountId, operationToken),
-                "stop" => operationToken => mountCoordinator.StopAsync(mountId, request.AllowPendingUploads, operationToken),
-                "restart" => operationToken => mountCoordinator.RestartAsync(mountId, operationToken),
-                _ => null
-            };
-            if (action is null)
-            {
-                return new(false, "host.command", $"Unknown host command '{request.Command}'.");
-            }
-            return Queue(
-                    MountKey(mountId),
-                    action,
-                    token,
-                    () => mountCoordinator.MarkPending(mountId, command is "stop" or "restart"))
-                ? Status()
-                : new(false, "host.operation_in_progress", "A mount operation is already queued or running.");
+                return await HandleReloadCommandAsync(command, request, token).ConfigureAwait(false);
+            return await HandleDriveCommandAsync(command, request, token).ConfigureAwait(false);
         }
         finally
         {
@@ -449,6 +364,7 @@ public sealed partial class Worker : BackgroundService
 
     private async Task MonitorMountsAsync(CancellationToken token)
     {
+        using var connectionChanges = new ConnectionChangeObserver();
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
         while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
         {
@@ -456,7 +372,11 @@ public sealed partial class Worker : BackgroundService
             try
             {
                 if (_mounts is not null && !_shutdownRequested)
+                {
+                    if (connectionChanges.Consume()) _mounts.NotifyNetworkChanged();
+                    QueueConnectionRetries(token);
                     await _mounts.RefreshHealthAsync(token).ConfigureAwait(false);
+                }
                 UpdateSessionProtection();
             }
             finally { _reloadGate.Release(); }
@@ -622,77 +542,6 @@ public sealed partial class Worker : BackgroundService
                 await SaveScheduleStateAsync(token).ConfigureAwait(false);
             }
         } while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false));
-    }
-
-    private bool QueueSync(MountId mountId, SyncJobId syncId, CancellationToken token)
-    {
-        var coordinator = _syncs;
-        return coordinator is not null && Queue(SyncKey(syncId), async operationToken =>
-        {
-            var result = await coordinator.RunAsync(mountId, syncId, operationToken).ConfigureAwait(false);
-            // Every dequeued scheduled attempt consumes its interval. Retrying launch,
-            // configuration, or access failures on every 30-second scheduler tick can
-            // otherwise create an unbounded error loop on unattended machines.
-            _scheduleAnchors[syncId] = DateTimeOffset.UtcNow;
-            await SaveScheduleStateAsync(CancellationToken.None).ConfigureAwait(false);
-            return result;
-        }, token, () => coordinator.MarkQueued(mountId, syncId));
-    }
-
-    private bool Queue(
-        string key,
-        Func<CancellationToken, Task<OperationResult>> action,
-        CancellationToken token,
-        Action? onQueued = null)
-    {
-        if (_shutdownRequested)
-            return false;
-        var source = CancellationTokenSource.CreateLinkedTokenSource(token);
-        if (!_operations.TryAdd(key, source))
-        {
-            source.Dispose();
-            return false;
-        }
-        onQueued?.Invoke();
-        UpdateSessionProtection();
-        Track(RunAsync(key, source, action));
-        return true;
-    }
-
-    private async Task RunAsync(string key, CancellationTokenSource source, Func<CancellationToken, Task<OperationResult>> action)
-    {
-        try
-        {
-            await _slots.WaitAsync(source.Token).ConfigureAwait(false);
-            try
-            {
-                var result = await action(source.Token).ConfigureAwait(false);
-                if (!result.Succeeded && result.Error?.Code != "sync.cancelled")
-                {
-                    LogOperationFailure(_logger, key, result.Error?.Code, result.Error?.Message);
-                }
-            }
-            finally
-            {
-                _slots.Release();
-            }
-        }
-        catch (OperationCanceledException) when (source.IsCancellationRequested)
-        {
-        }
-        catch (Exception exception)
-        {
-            LogOperationException(_logger, key, exception);
-        }
-        finally
-        {
-            if (_operations.TryGetValue(key, out var current) && ReferenceEquals(current, source))
-            {
-                _operations.TryRemove(key, out _);
-            }
-            source.Dispose();
-            UpdateSessionProtection();
-        }
     }
 
     private async Task<OperationResult> ReloadAsync(CancellationToken token)
@@ -868,8 +717,8 @@ public sealed partial class Worker : BackgroundService
     }
 
     private bool HasWork() =>
-        !_operations.IsEmpty ||
-        (_mounts?.GetSnapshots().Any(snapshot => snapshot.Lifecycle is not MountLifecycle.Stopped and not MountLifecycle.Failed) ?? false) ||
+        HasBlockingOperations(_mounts?.GetSnapshots() ?? []) ||
+        (_mounts?.GetSnapshots().Any(snapshot => snapshot.Lifecycle is not MountLifecycle.Stopped and not MountLifecycle.Failed and not MountLifecycle.WaitingForConnection) ?? false) ||
         (_syncs?.GetSnapshots().Any(snapshot => snapshot.Lifecycle is SyncLifecycle.Running or SyncLifecycle.Queued) ?? false);
 
     private DefinitionWorkAnalysis AnalyzeDefinitionWork(ManagerSettings incoming)
@@ -915,6 +764,8 @@ public sealed partial class Worker : BackgroundService
             LogStateFailure(_logger, exception);
         }
     }
+
+    private string StatePath => Path.Combine(_paths.Root, "scheduler-state.json");
 
     private async Task SaveScheduleStateAsync(CancellationToken token)
     {
@@ -994,10 +845,6 @@ public sealed partial class Worker : BackgroundService
         result.Error?.Message,
         HostBaseDirectory: AppContext.BaseDirectory
     );
-    private static string MountKey(MountId id) => $"mount:{id.Value:N}";
-    private static string SyncKey(SyncJobId id) => $"sync:{id.Value:N}";
-    private string StatePath => Path.Combine(_paths.Root, "scheduler-state.json");
-
     [LoggerMessage(1001, LogLevel.Error, "Host initialization failed: {Code} {Message}")]
     private static partial void LogInitializationFailure(ILogger logger, string? code, string? message);
     [LoggerMessage(1002, LogLevel.Warning, "A host client request failed.")]

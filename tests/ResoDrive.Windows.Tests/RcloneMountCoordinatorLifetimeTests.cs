@@ -9,6 +9,48 @@ namespace ResoDrive.Windows.Tests;
 
 public sealed class RcloneMountCoordinatorLifetimeTests
 {
+    [Fact]
+    public async Task CacheWatcherInvalidatesOnlyItsDriveAndIdlePollingWaitsForAChange()
+    {
+        await using var fixture = new Fixture();
+        var first = fixture.Definition;
+        var second = first with { Id = MountId.New(), DisplayName = "Second disposable drive", RemoteName = "second", Target = new MountTarget.Drive('S') };
+        Assert.True((await fixture.Coordinator.ReconcileAsync([first, second])).Succeeded);
+        var watcher = Field<FileSystemWatcher>(fixture.Coordinator, "_cacheWatcher");
+        watcher.EnableRaisingEvents = false;
+        var firstMeta = Path.Combine(fixture.Paths.Cache, "vfsMeta", "first");
+        var secondMeta = Path.Combine(fixture.Paths.Cache, "vfsMeta", "second");
+        Directory.CreateDirectory(firstMeta);
+        Directory.CreateDirectory(secondMeta);
+        using var process = await ExitedProcessAsync();
+        var firstSession = fixture.AddSession(process, first);
+        var secondSession = fixture.AddSession(process, second);
+        var snapshots = Field<ConcurrentDictionary<MountId, MountSnapshot>>(fixture.Coordinator, "_snapshots");
+        foreach (var (definition, session, metadata) in new[] { (first, firstSession, firstMeta), (second, secondSession, secondMeta) })
+        {
+            var clean = new VfsTransferStatus(0, 0, 0, 0, false) { MetadataPath = metadata };
+            session.GetType().GetProperty("LastTransfers")!.SetValue(session, clean);
+            snapshots[definition.Id] = new MountSnapshot { MountId = definition.Id, Lifecycle = MountLifecycle.Mounted }
+                .WithTransfers(new(clean, null));
+        }
+        watcher.EnableRaisingEvents = true;
+        // A healthy idle observation avoids another filesystem/control inspection.
+        await fixture.Coordinator.RefreshHealthAsync();
+        Assert.All(snapshots.Values, snapshot => Assert.False(snapshot.UploadStatusStale));
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Coordinator.UploadStatusInvalidated += (_, _) =>
+        {
+            if (snapshots[first.Id].UploadStatusChecking) changed.TrySetResult();
+        };
+        await File.WriteAllTextAsync(Path.Combine(firstMeta, "file"), "{\"Dirty\":true,\"Size\":100}");
+        await changed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(snapshots[first.Id].UploadStatusStale);
+        Assert.True(snapshots[first.Id].UploadStatusChecking);
+        Assert.False(snapshots[second.Id].UploadStatusStale);
+        Assert.False(snapshots[second.Id].UploadStatusChecking);
+        Assert.False((await fixture.Coordinator.CheckPendingUploadsForMountAsync(first.Id)).Succeeded);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

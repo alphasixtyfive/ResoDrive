@@ -59,7 +59,7 @@ internal static class InstallerPreparation
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
             InvalidOperationException or TimeoutException or System.ComponentModel.Win32Exception or ArgumentException)
         {
-            var errorId = UiDiagnosticLog.Current.Exception("installer.prepare_failed", exception);
+            var errorId = UiDiagnosticLog.ReportException("installer.prepare_failed", exception);
             result = new(false, exception.Message + $" Error ID: {errorId}", DateTimeOffset.UtcNow);
         }
         try
@@ -71,7 +71,7 @@ internal static class InstallerPreparation
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            UiDiagnosticLog.Current.Exception("installer.prepare_result_failed", exception);
+            UiDiagnosticLog.ReportException("installer.prepare_result_failed", exception);
         }
         return result;
     }

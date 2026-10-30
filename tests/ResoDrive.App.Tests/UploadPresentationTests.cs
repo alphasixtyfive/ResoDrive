@@ -341,7 +341,7 @@ public sealed class UploadPresentationTests
         model.Update([row], false);
         Assert.Equal(2, model.Transfers.Count);
         Assert.Contains(model.Transfers, file => file.Name.EndsWith("status", StringComparison.Ordinal));
-        Assert.Contains(model.Transfers, file => file.Detail.Contains("unavailable", StringComparison.Ordinal));
+        Assert.Contains(model.Transfers, file => file.Detail.Contains("Checking again automatically", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -457,6 +457,64 @@ public sealed class UploadPresentationTests
 
         Assert.Equal("Some transfers need attention.", model.Summary);
         Assert.Contains(model.Transfers, transfer => transfer.Detail.Contains("1 upload error", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CacheChurnRetainsRecentMeasuredProgressButNeverASpeedOrSafeVerdict()
+    {
+        var clock = new ObservationClock();
+        var mount = Mount();
+        var row = new MountRow(mount, null);
+        var model = new TransfersViewModel(clock);
+        TransferRow? retained = null;
+        for (var sample = 1; sample <= 50; sample++)
+        {
+            clock.Advance(TimeSpan.FromSeconds(1));
+            row.ApplyStatus(new HostMountStatus(mount.Id, "Mounted", "Mounted", 0, 1)
+            {
+                UploadStatusStale = true, UploadStatusChecking = true, UploadObservedAt = clock.GetUtcNow(),
+                Uploads = [new MountUploadFile { RelativePath = "report.docx", State = MountUploadState.Uploading,
+                    BytesTransferred = sample, TotalBytes = 100, SpeedBytesPerSecond = 16 }],
+            });
+            model.Update([row], false);
+            var file = Assert.Single(model.Transfers);
+            if (retained is not null) Assert.Same(retained, file);
+            retained = file;
+            Assert.Equal(sample, file.Percent);
+            Assert.Equal(System.Windows.Visibility.Visible, file.ProgressVisibility);
+            Assert.Contains("updating status", file.Detail, StringComparison.Ordinal);
+            Assert.DoesNotContain("/s", file.ProgressText, StringComparison.Ordinal);
+            Assert.True(row.UploadNeedsAttention);
+        }
+        clock.Advance(TimeSpan.FromSeconds(11));
+        model.Update([row], false);
+        Assert.Equal(System.Windows.Visibility.Collapsed, retained!.ProgressVisibility);
+        Assert.Equal("Waiting for upload status", retained.Detail);
+        row.ApplyStatus(new HostMountStatus(mount.Id, "Mounted", "Mounted", 0, 0));
+        model.Update([row], false);
+        Assert.Empty(model.Transfers);
+        Assert.Equal("No active transfers.", model.Summary);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void RecentMeasurementsCannotMaskHostLossOrRecovery(bool hostUnavailable, bool recovery)
+    {
+        var clock = new ObservationClock();
+        var mount = Mount();
+        var row = new MountRow(mount, new HostMountStatus(mount.Id, "Mounted", "Mounted", 0, 1)
+        {
+            UploadStatusChecking = true, UploadStatusStale = true, UploadRecoveryRequired = recovery,
+            UploadObservedAt = clock.GetUtcNow(),
+            Uploads = [new MountUploadFile { RelativePath = "report.docx", State = MountUploadState.Uploading,
+                BytesTransferred = 50, TotalBytes = 100 }],
+        });
+        var model = new TransfersViewModel(clock);
+        model.Update([row], hostUnavailable);
+        var file = Assert.Single(model.Transfers, item => item.Key.StartsWith("file:", StringComparison.Ordinal));
+        Assert.Equal(System.Windows.Visibility.Collapsed, file.ProgressVisibility);
+        Assert.Equal(System.Windows.Visibility.Collapsed, file.ProgressTextVisibility);
     }
 
     private static MountSettings Mount() => new()

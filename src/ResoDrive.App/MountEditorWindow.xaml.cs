@@ -309,7 +309,7 @@ public partial class MountEditorWindow : WpfWindow
         catch (Exception exception)
         {
             if (_closed) return;
-            UiDiagnosticLog.Current.Exception("drive-settings.load", exception);
+            UiDiagnosticLog.ReportException("drive-settings.load", exception);
             SetLoadingStatus("Settings could not be loaded. Close and try again.");
             LoadingText.Foreground = StatusPalette.Warning;
         }

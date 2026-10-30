@@ -176,7 +176,7 @@ public sealed partial class RcloneMountCoordinator
                     _recovery.Find(id) is not { } current) continue;
                 // The exit observer owns this delayed reconnect and its backoff.
                 // Reconciliation must not launch a second recovery attempt early.
-                if (_snapshots.TryGetValue(id, out var pending) && pending.Lifecycle == MountLifecycle.WaitingToRestart)
+                if (_snapshots.TryGetValue(id, out var pending) && pending.Lifecycle is MountLifecycle.WaitingToRestart or MountLifecycle.WaitingForConnection)
                     continue;
                 if (await RecoveryCacheIsCleanAsync(current, token).ConfigureAwait(false))
                 {
@@ -220,8 +220,12 @@ public sealed partial class RcloneMountCoordinator
     {
         if (_unverifiedOwnedWork.ContainsKey(id.Value) || _sessions.ContainsKey(id)) return;
         if (_definitions.TryGetValue(id, out var definition))
-            Publish(Snapshot(definition, MountLifecycle.Stopped, "Recovered uploads completed") with
-                { UploadsQueued = 0, UploadsInProgress = 0, UploadsDirty = 0, UploadObservedAt = DateTimeOffset.UtcNow });
+        {
+            var waiting = _waitingConnections.TryGetValue(id, out var wait) && ConnectionRequestIsCurrent(id, wait.Generation);
+            Publish(Snapshot(definition, waiting ? MountLifecycle.WaitingForConnection : MountLifecycle.Stopped,
+                waiting ? "Waiting for connection" : "Recovered uploads completed") with
+                { UploadsQueued = 0, UploadsInProgress = 0, UploadsDirty = 0, UploadErrors = 0, UploadObservedAt = DateTimeOffset.UtcNow });
+        }
         else _snapshots.TryRemove(id, out _);
     }
 

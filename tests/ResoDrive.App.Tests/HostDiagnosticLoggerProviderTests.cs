@@ -11,6 +11,29 @@ public sealed class HostDiagnosticLoggerProviderTests : IDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(), "resodrive-host-log-tests", Guid.NewGuid().ToString("N"));
 
     [Theory]
+    [InlineData("ResoDrive.Host.Worker", 1001, "host.worker.initialization_failed")]
+    [InlineData("ResoDrive.Host.Worker", 1003, "host.worker.operation_failed")]
+    [InlineData("ResoDrive.Host.Worker", 1014, "host.worker.runtime_identity_recovered")]
+    [InlineData("ResoDrive.Host.Worker", 1011, "host.log")]
+    [InlineData("Other.Worker", 1003, "host.log")]
+    public void KnownWorkerEventsRemainClassifiableAfterMessageRedaction(string category, int id, string expectedEvent)
+    {
+        var diagnostic = new ProcessDiagnosticLog(Path.Combine(_root, "resodrive-host.log"));
+        using var provider = new HostDiagnosticLoggerProvider(diagnostic);
+        var logger = provider.CreateLogger(category);
+        logger.Log(LogLevel.Warning, new EventId(id),
+            "token=DO-NOT-EXPORT https://private.example/secret C:\\private\\file.txt",
+            exception: null, static (state, _) => state);
+
+        var contents = File.ReadAllText(diagnostic.LogFile);
+        Assert.Contains($"event={expectedEvent} ", contents, StringComparison.Ordinal);
+        Assert.DoesNotContain("DO-NOT-EXPORT", contents, StringComparison.Ordinal);
+        Assert.DoesNotContain("private.example", contents, StringComparison.Ordinal);
+        Assert.DoesNotContain("C:\\private", contents, StringComparison.Ordinal);
+        Assert.Null(provider.FatalBackgroundException);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task RealGenericHostBackgroundServiceFailureIsReportedAsFatal(bool externalLoggingDisabled)

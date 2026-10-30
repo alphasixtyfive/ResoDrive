@@ -137,7 +137,11 @@ public partial class MainWindow
         async Task<OperationResult> ReloadAsync()
         {
             var response = await HostClient.SendAsync(new HostRequest("reload"));
-            if (response.Succeeded) LoadHostStatus(response);
+            if (response.Succeeded)
+            {
+                LoadHostStatus(response);
+                UpdateTrayStatus();
+            }
             return SetupHostResult(response);
         }
         var startRequested = reloadHost && provisioning.NewMount.AutoMount.Equals(

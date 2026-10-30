@@ -8,6 +8,8 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
 using ResoDrive.Core.Domain;
+using ResoDrive.Core.Contracts;
+using ResoDrive.Core.Results;
 using ResoDrive.Core.Settings;
 using ResoDrive.Core.Setup;
 using ResoDrive.Core.Validation;
@@ -30,6 +32,7 @@ public partial class MainWindow : WpfWindow
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly HostConnectionRecovery _hostConnection;
+    private readonly RcloneRuntimeLocator _runtimeLocator;
     private readonly SemaphoreSlim _settingsMutationGate = new(1, 1);
     private CancellationTokenSource? _rcloneOperationCancellation;
     private CancellationTokenSource? _applicationDownloadCancellation;
@@ -64,8 +67,11 @@ public partial class MainWindow : WpfWindow
     internal bool IsStartupReady { get; private set; }
     internal bool IsClosing { get; private set; }
 
-    public MainWindow(bool startInBackground = false)
+    public MainWindow(bool startInBackground = false) : this(startInBackground, runtimeLocator: null) { }
+
+    internal MainWindow(bool startInBackground, RcloneRuntimeLocator? runtimeLocator)
     {
+        _runtimeLocator = runtimeLocator ?? new RcloneRuntimeLocator(_paths);
         _hostConnection = new(_lifetimeCancellation.Token);
         _startInBackground = startInBackground;
         InitializeComponent();
@@ -112,20 +118,25 @@ public partial class MainWindow : WpfWindow
             _store = store;
             await LoadSettingsAsync();
             await ReconcileAutostartAsync();
-            var runtimeReady = (await new RcloneRuntimeLocator(_paths)
-                .InspectAsync(_lifetimeCancellation.Token)).Succeeded;
+            var inspectionGeneration = _componentStatusGeneration;
+            OperationResult<InstallationStatus>? runtimeInspection = await _runtimeLocator
+                .InspectAsync(_lifetimeCancellation.Token);
+            var runtimeReady = runtimeInspection.Succeeded;
             var setupNeeded = !File.Exists(_paths.ConfigFile);
             var setupDeferred = !runtimeReady;
             if (runtimeReady && setupNeeded && !_startInBackground)
             {
                 setupDeferred = !await RunSetupAsync(firstRun: true);
+                // A modal setup may remain open for a long time. Inspect again
+                // afterwards rather than carrying that older observation forward.
+                runtimeInspection = null;
             }
             else if (setupNeeded)
             {
                 setupDeferred = true;
             }
 
-            if (!await LoadAndConnectAsync(setupDeferred ? "Settings" : "Mounts"))
+            if (!await LoadAndConnectAsync(setupDeferred ? "Settings" : "Mounts", runtimeInspection, inspectionGeneration))
             {
                 Close();
                 return;
@@ -143,7 +154,7 @@ public partial class MainWindow : WpfWindow
         }
         catch (Exception exception)
         {
-            var errorId = UiDiagnosticLog.Current.Exception("startup.failed", exception);
+            var errorId = UiDiagnosticLog.ReportException("startup.failed", exception);
             ShowError(
                 $"{ProductInfo.Name} could not start",
                 $"{exception.Message}\n\nError ID: {errorId}");
@@ -257,7 +268,8 @@ public partial class MainWindow : WpfWindow
         }
     }
 
-    private async Task<bool> LoadAndConnectAsync(string initialPage)
+    private async Task<bool> LoadAndConnectAsync(string initialPage,
+        OperationResult<InstallationStatus>? runtimeInspection, int inspectionGeneration)
     {
         var response = await EnsureHostAsync();
         if (!_startInBackground &&
@@ -274,7 +286,7 @@ public partial class MainWindow : WpfWindow
         LoadHostStatus(response);
         UpdateTrayStatus();
         LoadSettingsControls();
-        UpdateConnectionStatus();
+        UpdateConnectionStatus(runtimeInspection, inspectionGeneration);
         if (!hostReady)
         {
             var detail = response.InitializationErrorMessage ?? response.ErrorMessage;
@@ -590,8 +602,10 @@ public partial class MainWindow : WpfWindow
         catch (Exception exception)
         {
             if (!CanInteractWithHost) return;
-            _model.AddLogEntry(heading, exception.Message, LogSeverity.Error);
-            ShowError(heading, exception.Message);
+            var errorId = UiDiagnosticLog.ReportException("ui.action.failed", exception);
+            var message = $"{exception.Message}\n\nError ID: {errorId}";
+            _model.AddLogEntry(heading, message, LogSeverity.Error);
+            ShowError(heading, message);
         }
         finally
         {
@@ -756,7 +770,8 @@ public partial class MainWindow : WpfWindow
         var uploadWarning = _powerProtectionUnavailable ||
             (_mountUploadStatusUnavailable && _model.Mounts.Any(mount => mount.ShouldStop || mount.NeedsHostRecovery)) ||
             mounts.Any(mount => mount.UploadNeedsAttention &&
-                ((mount.UploadStatus?.UploadStatusStale == true && !mount.UploadStatus.UploadStatusChecking) ||
+                ((!mount.IsWaitingForConnection && mount.UploadStatus?.UploadStatusStale == true && (!mount.UploadStatus.UploadStatusChecking ||
+                    mount.UploadStatus.UploadObservedAt is not null && !UploadPresentation.HasRecentProgress(mount.UploadStatus, DateTimeOffset.UtcNow))) ||
                     UploadPresentation.Errors(mount.UploadStatus) > 0 || mount.UploadStatus?.UploadRecoveryRequired == true));
         _tray.UpdateStatus(_model.Mounts.Count(mount => mount.IsMounted),
             ActiveSyncJobCount,
@@ -764,7 +779,8 @@ public partial class MainWindow : WpfWindow
             uploadWarning,
             attentionStatusConfirmed: !_mountUploadStatusUnavailable && _syncStatusAvailable &&
                 mounts.All(mount => mount.UploadStatus?.UploadStatusStale != true &&
-                    mount.UploadStatus?.UploadStatusChecking != true && !UploadPresentation.HasPending(mount.UploadStatus)));
+                    mount.UploadStatus?.UploadStatusChecking != true && !UploadPresentation.HasPending(mount.UploadStatus)),
+            immediateAttention: _powerProtectionUnavailable || mounts.Any(mount => mount.UploadStatus?.UploadRecoveryRequired == true));
     }
 
     private void OpenAbout_Click(object sender, RoutedEventArgs e) =>

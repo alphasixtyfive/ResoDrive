@@ -85,8 +85,8 @@ public partial class MainWindow
             }
 
             var metadata = await RcloneConnectionMetadataService.ReadAsync(
-                new RcloneRuntimeLocator(_paths).ExecutablePath,
-                _paths);
+                _runtimeLocator.ExecutablePath,
+                _paths, cancellationToken: _lifetimeCancellation.Token);
             if (!metadata.Succeeded || metadata.Value is null || metadata.Value.Count == 0)
             {
                 return false;
@@ -142,6 +142,7 @@ public partial class MainWindow
             LoadHostStatus(status);
             UpdateTrayStatus();
         }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested) { }
         catch (Exception exception)
         {
             _model.AddLogEntry(

@@ -3,6 +3,8 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using ResoDrive.Windows;
+using ResoDrive.Core.Contracts;
+using ResoDrive.Core.Results;
 using WpfMessageBox = ResoDrive.App.ModernMessageBox;
 
 namespace ResoDrive.App;
@@ -11,16 +13,21 @@ namespace ResoDrive.App;
 public partial class MainWindow
 #pragma warning restore CA1001
 {
-    private void UpdateConnectionStatus()
+    private void UpdateConnectionStatus(OperationResult<InstallationStatus>? runtimeInspection = null,
+        int? inspectionGeneration = null)
     {
-        if (!IsInitialized || _rcloneMutationBusy)
+        if (!IsInitialized || _settingsClosing || _rcloneMutationBusy)
             return;
         StatusVisuals.ApplyPending(RcloneStatusIcon);
         SetLiveText(RcloneStatusText, "Checking…");
         _rcloneRuntimeReady = false;
         AddMountButton.IsEnabled = false;
+        // Reuse only this startup's successful observation. A completed runtime
+        // mutation changes the generation even after its busy flag has cleared.
+        var reusableInspection = inspectionGeneration == _componentStatusGeneration && runtimeInspection?.Succeeded == true
+            ? runtimeInspection : null;
         var generation = ++_componentStatusGeneration;
-        _ = ObserveComponentStatusAsync(UpdateLocalRcloneStatusAsync(generation), generation, rclone: true);
+        _ = ObserveComponentStatusAsync(UpdateLocalRcloneStatusAsync(generation, reusableInspection), generation, rclone: true);
         SetLiveText(WinFspStatusText, "Checking WinFsp…");
         StatusVisuals.ApplyPending(WinFspStatusIcon);
         _ = ObserveComponentStatusAsync(UpdateWinFspStatusAsync(generation), generation, rclone: false);
@@ -74,9 +81,10 @@ public partial class MainWindow
             : $"WinFsp {result.Value.Version} is installed");
     }
 
-    private async Task UpdateLocalRcloneStatusAsync(int? generation = null)
+    private async Task UpdateLocalRcloneStatusAsync(int? generation = null,
+        OperationResult<InstallationStatus>? runtimeInspection = null)
     {
-        var result = await new RcloneRuntimeLocator(_paths).InspectAsync();
+        var result = runtimeInspection ?? await _runtimeLocator.InspectAsync(_lifetimeCancellation.Token);
         if (!IsInitialized || generation is int value && value != _componentStatusGeneration)
         {
             return;
@@ -296,7 +304,7 @@ public partial class MainWindow
         var activeSyncs = _model.Jobs.Count(job => job.IsBusy);
         var activeItems = new[]
         {
-            activeMounts == 0 ? null : $"{activeMounts} mounted drive{(activeMounts == 1 ? string.Empty : "s")}",
+            activeMounts == 0 ? null : $"{activeMounts} active drive{(activeMounts == 1 ? string.Empty : "s")}",
             activeSyncs == 0 ? null : $"{activeSyncs} running sync job{(activeSyncs == 1 ? string.Empty : "s")}",
         }.Where(value => value is not null);
         var activeWork = activeMounts + activeSyncs == 0
@@ -456,12 +464,15 @@ public partial class MainWindow
             return;
         }
 
-        if (_model.Mounts.Any(mount => mount.ShouldStop || mount.IsTransient) ||
-            _model.Jobs.Any(job => job.IsBusy))
+        // Normal updates replace a verified staged executable atomically. Windows
+        // keeps existing processes on their loaded image, so no disconnect is needed.
+        // Repair removes the runtime and still requires stopped work.
+        if (_rcloneRepairRequested && (_model.Mounts.Any(mount => mount.ShouldStop || mount.IsTransient) ||
+            _model.Jobs.Any(job => job.IsBusy)))
         {
             ShowError(
                 "Stop active work first",
-                $"Stop all mounted drives and running sync jobs before changing the {ProductInfo.Name} rclone runtime.");
+                "Stop mounted drives and running sync jobs before repairing rclone. Normal updates keep connections running.");
             return;
         }
 
@@ -496,7 +507,7 @@ public partial class MainWindow
             var status = result.Value.Updated
                 ? repairing
                     ? "Repair complete"
-                    : installing ? "Install complete" : "Update complete"
+                    : installing ? "Install complete" : "Update complete · Existing connections keep running"
                 : "Up to date";
             _rcloneInstalledVersion = result.Value.CurrentVersion;
             await RefreshStatusAsync();
@@ -507,7 +518,7 @@ public partial class MainWindow
                 _model.AddLogEntry($"rclone {status.ToLowerInvariant()}",
                     $"Installed {result.Value.CurrentVersion}", severity: LogSeverity.Success);
                 var reload = await HostClient.SendAsync(
-                    new HostRequest("activate-runtime"),
+                    new HostRequest("activate-runtime", Confirmed: installing || repairing),
                     _lifetimeCancellation.Token);
                 if (!reload.Succeeded)
                 {

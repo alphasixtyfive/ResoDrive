@@ -6,6 +6,20 @@ namespace ResoDrive.App.Tests;
 public sealed class LogPresentationTests
 {
     [Fact]
+    public void WaitingForConnectionStaysQuietAndExplicitStopIsRecordedOnce()
+    {
+        var mount = Mount();
+        var model = new ShellViewModel();
+        model.Load(new ManagerSettings { Mounts = [mount] }, [Status(mount, "Stopped")]);
+        for (var tick = 0; tick < 50; tick++)
+            model.ApplyStatus([Status(mount, "WaitingForConnection", "Waiting for connection")]);
+        Assert.Empty(model.Log);
+        model.ApplyStatus([Status(mount, "Stopped")]);
+        model.ApplyStatus([Status(mount, "Stopped")]);
+        Assert.StartsWith("Stopped", Assert.Single(model.Log).Title, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void LateEventsAreSortedByOccurrenceAndHistoryKeepsTheNewestHundred()
     {
         var model = new ShellViewModel();

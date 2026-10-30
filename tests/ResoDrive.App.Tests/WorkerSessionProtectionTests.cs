@@ -92,6 +92,39 @@ public sealed class WorkerSessionProtectionTests
         Assert.Contains("checking for files", ReadShutdownReason(fixture.Guard), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task CleanDriveWaitingForNetworkDoesNotPreventSleepOrExitAsItsObservationAges()
+    {
+        await using var fixture = new SessionFixture(SyncMode.CopyToRemote);
+        fixture.SetUploadObservation(fixture.CleanUploadObservation() with
+        {
+            Lifecycle = MountLifecycle.WaitingForConnection, UploadObservedAt = DateTimeOffset.UtcNow.AddHours(-1),
+        });
+        fixture.RepresentQueuedConnectionProbe();
+        AssertSafe(await fixture.RefreshAsync());
+        Assert.False(fixture.Guard.BlocksSessionEnding);
+    }
+
+    [Theory]
+    [InlineData("pending")]
+    [InlineData("unknown")]
+    [InlineData("recovery")]
+    [InlineData("missing")]
+    public async Task WaitingForNetworkCannotReleaseProtectionForCachedOrUnverifiedWork(string work)
+    {
+        await using var fixture = new SessionFixture(SyncMode.CopyToRemote);
+        var clean = fixture.CleanUploadObservation() with { Lifecycle = MountLifecycle.WaitingForConnection };
+        fixture.SetUploadObservation(work switch
+        {
+            "pending" => clean with { UploadsQueued = 1 },
+            "unknown" => clean with { UploadStatusStale = true },
+            "recovery" => clean with { UploadRecoveryRequired = true },
+            "missing" => clean with { UploadsDirty = null },
+            _ => throw new ArgumentOutOfRangeException(nameof(work)),
+        });
+        AssertProtected(await fixture.RefreshAsync(), fixture.Guard);
+    }
+
     private static void AssertProtected(NativeSessionGuardStatus status, NativeSessionGuard guard)
     {
         Assert.True(guard.BlocksSessionEnding);
@@ -194,6 +227,13 @@ public sealed class WorkerSessionProtectionTests
         }
 
         public void MarkSettingsUnavailable() => SetWorkerField("_settings", null);
+
+        public void RepresentQueuedConnectionProbe()
+        {
+            var operations = (ConcurrentDictionary<string, CancellationTokenSource>)typeof(Worker)
+                .GetField("_operations", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(_worker)!;
+            Assert.True(operations.TryAdd($"mount:{Mount.Id.Value:N}", new CancellationTokenSource()));
+        }
 
         private void SetWorkerField(string name, object? value) =>
             typeof(Worker).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(_worker, value);

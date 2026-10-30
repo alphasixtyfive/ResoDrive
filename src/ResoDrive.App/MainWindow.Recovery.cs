@@ -28,11 +28,12 @@ public partial class MainWindow
                 return;
             var status = await HostClient.SendAsync(new HostRequest("status"), _lifetimeCancellation.Token);
             var winFsp = await WinFspPrerequisiteService.InspectAsync();
-            var lines = File.Exists(_paths.UiLogFile)
-                ? await File.ReadAllLinesAsync(_paths.UiLogFile, _lifetimeCancellation.Token)
-                : [];
+            var uiLogs = DiagnosticReport.ReadRecentLogsAsync(_paths.UiLogFile, _lifetimeCancellation.Token);
+            var hostLogs = DiagnosticReport.ReadRecentLogsAsync(
+                Path.Combine(_paths.Logs, "resodrive-host.log"), _lifetimeCancellation.Token);
+            await Task.WhenAll(uiLogs, hostLogs);
             var report = DiagnosticReport.Create(_settings, status, ProductInfo.Version,
-                _rcloneInstalledVersion, winFsp.Value?.Version, lines);
+                _rcloneInstalledVersion, winFsp.Value?.Version, await uiLogs, await hostLogs);
             await new RecoveryToolsService(_paths).ExportDiagnosticReportAsync(dialog.FileName, report, _lifetimeCancellation.Token);
             WpfMessageBox.Show(this, "The report is saved. It omits names, addresses, paths, credentials and raw log messages. Review it before sharing.",
                 "Diagnostic report saved", MessageBoxButton.OK, MessageBoxImage.Information);

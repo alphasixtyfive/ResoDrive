@@ -213,13 +213,41 @@ internal static class VfsStatusReader
         if (!response.IsSuccessStatusCode)
             return null;
         await using var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+        return await ReadResponseAsync(stream, token).ConfigureAwait(false);
+    }
+
+    internal static async Task<string?> ReadResponseAsync(Stream stream, CancellationToken token,
+        ArrayPool<byte>? buffers = null)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        buffers ??= ArrayPool<byte>.Shared;
+        // Most control responses are small. Rent larger buffers only when their
+        // contents require it; clearing three maximum-size rentals on each health
+        // poll otherwise touches megabytes even for a few hundred bytes of JSON.
         const int limit = 1024 * 1024 + 1;
-        var buffer = ArrayPool<byte>.Shared.Rent(limit);
+        var buffer = buffers.Rent(8 * 1024);
         try
         {
-            var count = await stream.ReadAtLeastAsync(buffer.AsMemory(0, limit), limit, false, token).ConfigureAwait(false);
-            return count == limit ? null : Encoding.UTF8.GetString(buffer, 0, count);
+            var count = 0;
+            while (count < limit)
+            {
+                token.ThrowIfCancellationRequested();
+                var capacity = Math.Min(buffer.Length, limit);
+                if (count == capacity)
+                {
+                    var larger = buffers.Rent(Math.Min(capacity * 2, limit));
+                    buffer.AsSpan(0, count).CopyTo(larger);
+                    buffers.Return(buffer, clearArray: true);
+                    buffer = larger;
+                    capacity = Math.Min(buffer.Length, limit);
+                }
+                var read = await stream.ReadAsync(buffer.AsMemory(count, capacity - count), token).ConfigureAwait(false);
+                if (read == 0) return Encoding.UTF8.GetString(buffer, 0, count);
+                count += read;
+            }
+            // One byte beyond the maximum proves this response is too large.
+            return null;
         }
-        finally { ArrayPool<byte>.Shared.Return(buffer, clearArray: true); }
+        finally { buffers.Return(buffer, clearArray: true); }
     }
 }

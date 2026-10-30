@@ -6,6 +6,43 @@ namespace ResoDrive.App.Tests;
 
 public sealed class SyncStatusPresentationTests
 {
+    [Theory]
+    [InlineData("future-state")]
+    [InlineData("999")]
+    [InlineData("-1")]
+    public void UnknownLifecycleWaitsForFreshStatusWithoutOfferingADuplicateRun(string lifecycle)
+    {
+        var mount = new MountSettings { Id = Guid.NewGuid(), DisplayName = "Cloud", RemoteName = "fixture" };
+        var job = new SyncJobSettings { Id = Guid.NewGuid(), DisplayName = "Backup", LocalPath = @"C:\Demo\Backup", Mode = nameof(SyncMode.CopyToRemote) };
+        var row = new SyncRow(mount, job, null);
+        Assert.True(row.CanAct);
+        Assert.Equal("Run", row.ActionText);
+        var unknown = new HostSyncStatus(mount.Id, job.Id, lifecycle, "Unknown state", null,
+            BytesTransferred: 40, TotalBytes: 100, ProgressPercent: 40);
+        row.ApplyStatus(unknown);
+        var model = new TransfersViewModel();
+        model.Update([], false, [row], 1);
+        var transfer = Assert.Single(model.Transfers);
+
+        Assert.Same(unknown, row.TransferStatus);
+        Assert.Equal("Unknown state", row.StatusPrimary);
+        Assert.False(row.IsBusy);
+        Assert.False(row.CanAct);
+        Assert.Equal("Waiting…", row.ActionText);
+        Assert.Equal(System.Windows.Visibility.Collapsed, transfer.ProgressVisibility);
+        Assert.Equal("Transfer status unavailable.", model.Summary);
+
+        var recovered = unknown with { Lifecycle = nameof(SyncLifecycle.Running), ProgressPercent = 40.125 };
+        row.ApplyStatus(recovered);
+        model.Update([], false, [row], 1);
+        Assert.Same(recovered, row.TransferStatus);
+        Assert.True(row.IsBusy);
+        Assert.True(row.CanAct);
+        Assert.Equal("Stop", row.ActionText);
+        Assert.Same(transfer, Assert.Single(model.Transfers));
+        Assert.Equal(40.125, transfer.Percent);
+    }
+
     [Fact]
     public void RawProgressUpdatesEvenWhenRoundedDisplayTextIsUnchanged()
     {

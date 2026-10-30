@@ -18,7 +18,31 @@ public sealed class RcloneUpdateServiceTests
         Assert.Equal("v1.75.0", result.Value!.CurrentVersion);
         Assert.Equal("v1.76.0", result.Value.AvailableVersion);
         Assert.True(result.Value.UpdateAvailable);
-        Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(["version", "--check"]));
+        Assert.Single(runner.Calls, call => call.ExecutablePath == package.ExecutablePath &&
+            call.Arguments.SequenceEqual(["version"]));
+        Assert.Single(runner.Calls, call => call.Arguments.SequenceEqual(["version", "--check"]));
+    }
+
+    [Fact]
+    public async Task CheckAsync_ReverifiesCanonicalVersionOnEveryCall()
+    {
+        using var package = new TestPackage("v1.75.0");
+        var runner = new FakeRunner { LatestVersion = "v1.76.0" };
+        var service = CreateService(package, runner);
+
+        var first = await service.CheckAsync();
+        Assert.True(first.Succeeded, first.Error?.Message);
+        Assert.Equal("v1.75.0", first.Value!.CurrentVersion);
+        File.WriteAllText(package.ExecutablePath, "v1.76.0");
+
+        var second = await service.CheckAsync();
+
+        Assert.True(second.Succeeded, second.Error?.Message);
+        Assert.Equal("v1.76.0", second.Value!.CurrentVersion);
+        Assert.False(second.Value.UpdateAvailable);
+        Assert.Equal(2, runner.Calls.Count(call => call.ExecutablePath == package.ExecutablePath &&
+            call.Arguments.SequenceEqual(["version"])));
+        Assert.Equal(2, runner.Calls.Count(call => call.Arguments.SequenceEqual(["version", "--check"])));
     }
 
     [Theory]
@@ -257,14 +281,16 @@ public sealed class RcloneUpdateServiceTests
             "v1.74.0",
             DateTime.UtcNow.AddMinutes(-1));
 
-        var result = await CreateService(
-            package,
-            new FakeRunner { LatestVersion = "v1.74.0" }).CheckAsync();
+        var runner = new FakeRunner { LatestVersion = "v1.74.0" };
+        var result = await CreateService(package, runner).CheckAsync();
 
         Assert.True(result.Succeeded, result.Error?.Message);
         Assert.Equal("v1.74.0", result.Value!.CurrentVersion);
         Assert.Equal("v1.74.0", File.ReadAllText(package.ExecutablePath));
         Assert.Empty(Directory.EnumerateFiles(package.ComponentDirectory, ".rclone-old-*.exe"));
+        // Invalid entry, copied-backup verification, and the fresh post-recovery inspection.
+        Assert.Equal(3, runner.Calls.Count(call => call.ExecutablePath == package.ExecutablePath &&
+            call.Arguments.SequenceEqual(["version"])));
     }
 
     [Fact]

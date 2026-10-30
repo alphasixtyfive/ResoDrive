@@ -14,7 +14,8 @@ internal static class SyncStatusPresentation
         bool busy,
         SyncLifecycle lifecycle,
         HostSyncStatus? status,
-        bool recognized)
+        bool recognized,
+        bool transferStarted = false)
     {
         if (mode is null)
             return new("Invalid mode", string.Empty);
@@ -22,11 +23,13 @@ internal static class SyncStatusPresentation
             return new("Disabled", string.Empty);
         if (status is not null && !recognized)
             return new("Unknown state", string.Empty);
+        if (status is not null)
+            status = SyncProgressPresentation.Normalize(status);
 
         return lifecycle switch
         {
             SyncLifecycle.Queued => new("Waiting to start", string.Empty),
-            SyncLifecycle.Running => new(RunningTitle(status), RunningDetail(status)),
+            SyncLifecycle.Running => new(RunningTitle(status), RunningDetail(status, transferStarted)),
             SyncLifecycle.Succeeded => new(
                 string.Equals(status?.Status, "No changes", StringComparison.OrdinalIgnoreCase)
                     ? "Up to date"
@@ -43,7 +46,7 @@ internal static class SyncStatusPresentation
             ? $"Syncing {Math.Clamp(progress, 0d, 100d):0}%"
             : "Syncing";
 
-    private static string RunningDetail(HostSyncStatus? status)
+    private static string RunningDetail(HostSyncStatus? status, bool transferStarted)
     {
         if (status is null)
             return "Preparing files";
@@ -61,7 +64,9 @@ internal static class SyncStatusPresentation
             parts.Add($"{DisplayFormatting.Bytes(status.SpeedBytesPerSecond.Value)}/s");
         if (status.EtaSeconds is >= 1 and < 31_536_000)
             parts.Add($"{DisplayFormatting.Duration(status.EtaSeconds.Value)} left");
-        return parts.Count == 0 ? "Preparing files" : string.Join(" · ", parts);
+        return parts.Count > 0 ? string.Join(" · ", parts)
+            : status.Errors > 0 ? "Waiting to retry automatically"
+            : transferStarted ? "Waiting for transfer progress" : "Preparing files";
     }
 
     private static string CompletionDetail(HostSyncStatus? status)

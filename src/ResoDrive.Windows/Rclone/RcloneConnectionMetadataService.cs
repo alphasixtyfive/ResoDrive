@@ -5,6 +5,7 @@ namespace ResoDrive.Windows;
 public sealed record RcloneConnectionMetadata(string? Host, string? Type)
 {
     public string? Address { get; init; }
+    internal bool UsesCustomTransport { get; init; }
 }
 
 public static class RcloneConnectionMetadataService
@@ -83,13 +84,14 @@ public static class RcloneConnectionMetadataService
         string? type = null;
         Uri? endpoint = null;
         string? port = null;
+        var customTransport = false;
         void SaveRemote()
         {
             if (!string.IsNullOrWhiteSpace(remote) &&
                 (!string.IsNullOrWhiteSpace(host) || !string.IsNullOrWhiteSpace(type)))
             {
                 var address = ConnectionAddress(type, host, port, endpoint);
-                connections[remote] = new RcloneConnectionMetadata(host, type) { Address = address };
+                connections[remote] = new RcloneConnectionMetadata(host, type) { Address = address, UsesCustomTransport = customTransport };
             }
         }
 
@@ -104,6 +106,7 @@ public static class RcloneConnectionMetadataService
                 type = null;
                 endpoint = null;
                 port = null;
+                customTransport = false;
                 continue;
             }
             if (remote is null)
@@ -118,6 +121,8 @@ public static class RcloneConnectionMetadataService
             }
             var key = line[..separator].Trim();
             var value = line[(separator + 1)..].Trim();
+            if ((key.Contains("proxy", StringComparison.OrdinalIgnoreCase) || key.Equals("ssh", StringComparison.OrdinalIgnoreCase)) &&
+                !string.IsNullOrWhiteSpace(value)) customTransport = true;
             if (key.Equals("type", StringComparison.OrdinalIgnoreCase))
             {
                 type = value.ToLowerInvariant() switch

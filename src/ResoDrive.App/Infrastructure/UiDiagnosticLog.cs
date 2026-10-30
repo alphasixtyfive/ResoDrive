@@ -32,5 +32,16 @@ internal sealed class UiDiagnosticLog
     internal void StartSession() => _log?.StartSession();
     internal void Information(string eventName, string? detail = null) => _log?.Information(eventName, detail);
     internal string Exception(string eventName, Exception exception) => _log?.Exception(eventName, exception) ??
+        NewErrorId();
+
+    internal static string ReportException(string eventName, Exception exception, Func<UiDiagnosticLog>? loggerProvider = null)
+    {
+#pragma warning disable CA1031 // Even resolving the diagnostic destination may fail during startup failure reporting.
+        try { return (loggerProvider is null ? Current : loggerProvider()).Exception(eventName, exception); }
+        catch (Exception) { return NewErrorId(); }
+#pragma warning restore CA1031
+    }
+
+    private static string NewErrorId() =>
         Guid.NewGuid().ToString("N", System.Globalization.CultureInfo.InvariantCulture)[..8].ToUpperInvariant();
 }

@@ -227,20 +227,20 @@ public partial class App : System.Windows.Application
     private static void Application_DispatcherUnhandledException(
         object sender,
         System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e) =>
-        UiDiagnosticLog.Current.Exception("exception.dispatcher", e.Exception);
+        UiDiagnosticLog.ReportException("exception.dispatcher", e.Exception);
 
     private static void CurrentDomain_UnhandledException(object sender, UnhandledExceptionEventArgs e)
     {
         var exception = e.ExceptionObject as Exception ??
             new InvalidOperationException("An unknown unhandled exception occurred.");
-        UiDiagnosticLog.Current.Exception("exception.app_domain", exception);
+        UiDiagnosticLog.ReportException("exception.app_domain", exception);
     }
 
     private static void TaskScheduler_UnobservedTaskException(
         object? sender,
         UnobservedTaskExceptionEventArgs e)
     {
-        UiDiagnosticLog.Current.Exception("exception.unobserved_task", e.Exception);
+        UiDiagnosticLog.ReportException("exception.unobserved_task", e.Exception);
         e.SetObserved();
     }
 

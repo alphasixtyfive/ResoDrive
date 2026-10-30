@@ -5,6 +5,12 @@ namespace ResoDrive.App;
 
 internal static class UploadPresentation
 {
+    // Cache mutations invalidate the safe-stop verdict, not a recent byte measurement.
+    // Keep that measurement briefly; never retain a speed or ETA as live telemetry.
+    internal static bool HasRecentProgress(HostMountStatus? status, DateTimeOffset now) =>
+        status?.UploadStatusChecking == true && status.UploadObservedAt is { } observed &&
+        now >= observed && now - observed <= TimeSpan.FromSeconds(10);
+
     internal static bool HasPending(HostMountStatus? status) => status is not null &&
         (status.UploadsQueued > 0 || status.UploadsInProgress > 0 || status.UploadsDirty > 0 ||
          status.UploadErrors > 0 || status.UploadRecoveryRequired || status.Uploads?.Count > 0 ||
@@ -33,8 +39,9 @@ internal static class UploadPresentation
     internal static string Activity(HostMountStatus? status)
     {
         if (status is null) return string.Empty;
-        if (status.UploadStatusChecking) return HasPending(status) ? "Waiting for upload status" : string.Empty;
-        if (status.UploadStatusStale) return "Upload status unavailable";
+        var recent = HasRecentProgress(status, DateTimeOffset.UtcNow);
+        if (status.UploadStatusChecking && !recent) return HasPending(status) ? "Waiting for upload status" : string.Empty;
+        if (status.UploadStatusStale && !recent) return "Upload status unavailable";
         var uploading = ObservedCount(status, MountUploadState.Uploading, status.UploadsInProgress);
         var queued = ObservedCount(status, MountUploadState.Queued, status.UploadsQueued);
         var dirty = ObservedCount(status, MountUploadState.WaitingForClose, status.UploadsDirty);
@@ -73,7 +80,7 @@ internal static class UploadPresentation
         MountUploadState.WaitingForClose => "Waiting for the application to close this file",
         MountUploadState.Uploading => file.TotalBytes is >= 0 && file.BytesTransferred >= file.TotalBytes
             ? "Waiting for server confirmation" : "Uploading",
-        MountUploadState.Retrying => "Upload failed · waiting to retry",
+        MountUploadState.Retrying => "Waiting to retry automatically",
         _ => "Queued for upload",
     };
 }

@@ -137,6 +137,33 @@ public sealed class SyncTransferPresentationTests
         Assert.Equal(Visibility.Collapsed, row.ProgressTextVisibility);
     }
 
+    [Fact]
+    public void RetryCounterResetDoesNotSendAnActiveTransferBackToPreparing()
+    {
+        var job = Job();
+        job.ApplyStatus(job.TransferStatus! with { BytesTransferred = 40, TotalBytes = 100, ProgressPercent = 40 });
+        var model = new TransfersViewModel();
+        model.Update([], false, [job], 1);
+        var row = Assert.Single(model.Transfers);
+        job.ApplyStatus(job.TransferStatus! with
+        {
+            BytesTransferred = 0, TotalBytes = null, ProgressPercent = null, SpeedBytesPerSecond = null,
+        });
+        model.Update([], false, [job], 1);
+        Assert.Same(row, Assert.Single(model.Transfers));
+        Assert.Equal("Waiting for transfer progress", row.ProgressText);
+        Assert.Equal(Visibility.Collapsed, row.ProgressVisibility);
+        Assert.DoesNotContain("Preparing", job.StatusLine, StringComparison.Ordinal);
+
+        job.ApplyStatus(job.TransferStatus! with { Errors = 1 });
+        model.Update([], false, [job], 1);
+        Assert.Equal("Waiting to retry automatically", row.ProgressText);
+        job.ApplyStatus(job.TransferStatus! with { Lifecycle = "Queued", Errors = null });
+        job.ApplyStatus(job.TransferStatus! with { Lifecycle = "Running" });
+        model.Update([], false, [job], 1);
+        Assert.Equal("Preparing files", row.ProgressText);
+    }
+
     [Theory]
     [InlineData("Succeeded")]
     [InlineData("Failed")]
@@ -170,7 +197,7 @@ public sealed class SyncTransferPresentationTests
         model.Update([], true, [job], 1, syncStatusAvailable: false);
 
         Assert.Same(row, Assert.Single(model.Transfers));
-        Assert.Contains("unavailable", row.Detail, StringComparison.Ordinal);
+        Assert.Contains("Waiting for sync status", row.Detail, StringComparison.Ordinal);
         Assert.Equal(Visibility.Collapsed, row.ProgressVisibility);
         Assert.Equal(Visibility.Collapsed, row.ProgressTextVisibility);
         Assert.Empty(row.ProgressText);

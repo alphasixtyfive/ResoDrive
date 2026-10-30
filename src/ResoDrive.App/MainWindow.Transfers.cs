@@ -16,7 +16,7 @@ public partial class MainWindow
     private void ShowTransfers()
     {
         if (!CanInteractWithHost || _lifetimeCancellation.IsCancellationRequested) return;
-        RefreshTransfersPresentation();
+        RefreshTransfersPresentation(force: true);
         if (_transfersWindow is null)
         {
             _transfersWindow = new TransfersWindow(_transfersModel,
@@ -53,7 +53,6 @@ public partial class MainWindow
             {
                 Id = mount.MountId, DisplayName = "Drive needing recovery", RemoteName = "unavailable", Enabled = false,
             }, mount));
-        RefreshTransfersPresentation();
     }
 
     private void LoadHostStatus(HostResponse? response)
@@ -73,12 +72,13 @@ public partial class MainWindow
     {
         _mountUploadStatusUnavailable = true;
         _syncStatusAvailable = false;
-        RefreshTransfersPresentation();
     }
 
-    private void RefreshTransfersPresentation()
+    private void RefreshTransfersPresentation(bool force = false)
     {
-        if (!_model.IsInitialized) return;
+        // Mount/sync observations and tray safety keep updating while this view is
+        // hidden. Build its rows only when visible, or immediately before opening.
+        if (!_model.IsInitialized || (!force && _transfersWindow?.IsVisible != true)) return;
         _transfersModel.Update(UploadMountRows(), _mountUploadStatusUnavailable,
             _model.Jobs, _hostActiveSyncJobs, _powerProtectionUnavailable, _syncStatusAvailable);
     }

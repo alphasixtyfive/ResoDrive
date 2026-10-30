@@ -1,9 +1,64 @@
 using System.Diagnostics;
+using System.Reflection;
+using System.Runtime.Loader;
 
 namespace ResoDrive.Windows.Tests;
 
 public sealed class ProcessDiagnosticLogTests : IDisposable
 {
+    [Fact]
+    public void MissingStackTraceAssemblyCannotReplaceTheOriginalException()
+    {
+        var context = new MissingStackTraceContext();
+        var path = Path.Combine(_root, "missing-stack-runtime.log");
+        try
+        {
+            var assembly = context.LoadFromAssemblyPath(typeof(ProcessDiagnosticLog).Assembly.Location);
+            var loggerType = assembly.GetType(typeof(ProcessDiagnosticLog).FullName!, throwOnError: true)!;
+            var logger = Activator.CreateInstance(loggerType, [path, ProcessDiagnosticLog.DefaultMaximumBytes, null])!;
+            var report = loggerType.GetMethod(nameof(ProcessDiagnosticLog.Exception))!;
+            var original = new InvalidOperationException("Original startup failure token=private-secret https://private.example/path");
+
+            var id = Assert.IsType<string>(report.Invoke(logger, ["startup.fatal", original]));
+
+            Assert.True(context.StackTraceLoadsDenied > 0);
+            Assert.Matches("^[A-F0-9]{8}$", id);
+            var contents = File.ReadAllText(path);
+            Assert.Contains("exceptionType=System.InvalidOperationException", contents, StringComparison.Ordinal);
+            Assert.Contains("Original startup failure", contents, StringComparison.Ordinal);
+            Assert.Contains("stack=unavailable", contents, StringComparison.Ordinal);
+            Assert.DoesNotContain("private-secret", contents, StringComparison.Ordinal);
+            Assert.DoesNotContain("private.example", contents, StringComparison.Ordinal);
+            Assert.Contains($"errorId={id}", contents, StringComparison.Ordinal);
+        }
+        finally { context.Unload(); }
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("load")]
+    [InlineData("type-initializer")]
+    public void UnavailableStackFormatterRetainsBoundedOriginalDetails(string failure)
+    {
+        var log = new ProcessDiagnosticLog(Path.Combine(_root, "unavailable-formatter.log"), maximumBytes: 512)
+        {
+            StackMetadataFormatter = _ => throw (failure switch
+            {
+                "missing" => new FileNotFoundException("Simulated missing dependency"),
+                "load" => new FileLoadException("Simulated load failure"),
+                _ => new TypeInitializationException("SimulatedFormatter", new InvalidOperationException()),
+            }),
+        };
+        var id = log.Exception("startup.fatal", new BrokenTextException());
+        var contents = File.ReadAllText(log.LogFile);
+        Assert.Matches("^[A-F0-9]{8}$", id);
+        Assert.Contains("Original startup failure", contents, StringComparison.Ordinal);
+        Assert.Contains("exceptionType=", contents, StringComparison.Ordinal);
+        Assert.Contains("hresult=0x", contents, StringComparison.Ordinal);
+        Assert.DoesNotContain("original-secret", contents, StringComparison.Ordinal);
+        Assert.InRange(new FileInfo(log.LogFile).Length, 1, 512);
+    }
+
     private readonly string _root = Path.Combine(Path.GetTempPath(), "resodrive-crash-log-tests", Guid.NewGuid().ToString("N"));
 
     [Fact]
@@ -253,6 +308,26 @@ public sealed class ProcessDiagnosticLogTests : IDisposable
     private sealed class BrokenException : Exception
     {
         public override string ToString() => throw new InvalidOperationException("Broken exception formatter");
+    }
+
+    private sealed class BrokenTextException : Exception
+    {
+        public override string Message => "Original startup failure token=original-secret " + new string('X', 50_000);
+        public override string ToString() => throw new FileNotFoundException("Simulated text formatter dependency failure");
+    }
+
+    private sealed class MissingStackTraceContext() : AssemblyLoadContext(isCollectible: true)
+    {
+        internal int StackTraceLoadsDenied { get; private set; }
+        protected override Assembly? Load(AssemblyName assemblyName)
+        {
+            if (assemblyName.Name == "System.Diagnostics.StackTrace")
+            {
+                StackTraceLoadsDenied++;
+                throw new FileNotFoundException("Simulated removed optional runtime assembly", assemblyName.Name);
+            }
+            return Default.Assemblies.FirstOrDefault(assembly => AssemblyName.ReferenceMatchesDefinition(assembly.GetName(), assemblyName));
+        }
     }
 
     private static InvalidOperationException CaptureFailure()

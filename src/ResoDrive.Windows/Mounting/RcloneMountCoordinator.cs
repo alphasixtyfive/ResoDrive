@@ -192,25 +192,58 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
         }
     }
 
+    public void ReportOperationFailure(MountId mountId, string message)
+    {
+        // Failed or cancelled queue/preflight work must release the UI's transient
+        // state. Retain uncertainty and recovery data for any surviving process.
+        while (_snapshots.TryGetValue(mountId, out var snapshot) &&
+            snapshot.Lifecycle is MountLifecycle.Starting or MountLifecycle.Stopping)
+        {
+            var failed = snapshot with
+            {
+                Lifecycle = _sessions.ContainsKey(mountId) ? MountLifecycle.Degraded : MountLifecycle.Failed,
+                StatusText = message, UploadStatusStale = true, UploadStatusChecking = false,
+                UploadRecoveryRequired = snapshot.UploadRecoveryRequired || _recovery.Find(mountId) is not null,
+            };
+            if (_snapshots.TryUpdate(mountId, failed, snapshot)) return;
+        }
+    }
+
     public Task<OperationResult> StopAsync(MountId mountId, CancellationToken cancellationToken = default) =>
         StopAsync(mountId, false, cancellationToken);
 
     public async Task<OperationResult> StopAsync(MountId mountId, bool allowPendingUploads, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        _waitingConnections.TryGetValue(mountId, out var previousWait);
+        var stopGeneration = NextConnectionGeneration(mountId);
+        _waitingConnections.TryRemove(mountId, out _);
         var operationGate = OperationGate(mountId);
-        await operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { await operationGate.WaitAsync(cancellationToken).ConfigureAwait(false); }
+        catch (OperationCanceledException)
+        {
+            RestoreConnectionWait(mountId, previousWait, stopGeneration);
+            throw;
+        }
         try
         {
             if (!_definitions.TryGetValue(mountId, out var definition))
             {
                 return Result.Failure("mount.not_found", "The mount definition no longer exists.");
             }
-            _restartAttempts.TryRemove(mountId, out _);
-            return await StopCoreAsync(mountId, definition, cancellationToken, allowPendingUploads).ConfigureAwait(false);
+            var result = await StopCoreAsync(mountId, definition, cancellationToken, allowPendingUploads).ConfigureAwait(false);
+            if (!result.Succeeded) RestoreConnectionWait(mountId, previousWait, stopGeneration);
+            return result;
         }
         catch (Exception exception) when (Expected(exception))
         {
+            RestoreConnectionWait(mountId, previousWait, stopGeneration);
             return Result.Failure("mount.stop_failed", exception.Message, true);
+        }
+        catch (OperationCanceledException)
+        {
+            RestoreConnectionWait(mountId, previousWait, stopGeneration);
+            throw;
         }
         finally
         {
@@ -260,11 +293,28 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
 
     private async Task<OperationResult> StartInternalAsync(MountId mountId, StartIntent intent, CancellationToken cancellationToken)
     {
+        _waitingConnections.TryGetValue(mountId, out var previousWait);
+        var generation = NextConnectionGeneration(mountId);
+        _waitingConnections.TryRemove(mountId, out _);
+        try { return await StartCoreAsync(mountId, intent, generation, null, cancellationToken).ConfigureAwait(false); }
+        catch (OperationCanceledException)
+        {
+            RestoreConnectionWait(mountId, previousWait, generation);
+            throw;
+        }
+    }
+
+    private async Task<OperationResult> StartCoreAsync(MountId mountId, StartIntent intent,
+        long connectionGeneration, ConnectionWait? expectedWait, CancellationToken cancellationToken)
+    {
         var operationGate = OperationGate(mountId);
         await operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         var launchReserved = false;
         try
         {
+            if (!ConnectionRequestIsCurrent(mountId, connectionGeneration) ||
+                expectedWait is not null && (!_waitingConnections.TryGetValue(mountId, out var pendingWait) ||
+                    pendingWait.Generation != expectedWait.Generation)) return Result.Success();
             if (!_definitions.TryGetValue(mountId, out var definition))
             {
                 return Result.Failure("mount.not_found", "The mount definition no longer exists.");
@@ -305,8 +355,6 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
             }
             var target = Target(definition.Target);
             var configFingerprint = await ConfigFingerprintAsync(definition, cancellationToken).ConfigureAwait(false);
-            await _launchGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            launchReserved = true;
             if (!_unverifiedOwnedWork.IsEmpty)
                 return Result.Failure("mount.recovery_unknown", "A surviving drive cannot be verified. Preserve its cache and restore its original configuration.", true);
             if (_recovery.Find(mountId) is { } recovery &&
@@ -317,6 +365,15 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
                     return Fail(definition, "mount.cache_identity_changed", "Pending cache belongs to an earlier drive configuration. Restore that configuration before reconnecting.");
                 await _recovery.RemoveAsync(mountId, cancellationToken).ConfigureAwait(false);
             }
+            // An unavailable endpoint releases this drive's operation/queue slot
+            // after one bounded probe. Never hold the cross-drive launch gate while
+            // waiting for a VPN/private network; unrelated drives can start.
+            if (!await CanAttemptConnectionAsync(definition, intent, connectionGeneration, expectedWait, cancellationToken).ConfigureAwait(false))
+                return Result.Success();
+            await _launchGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            launchReserved = true;
+            if (!_unverifiedOwnedWork.IsEmpty)
+                return Result.Failure("mount.recovery_unknown", "A surviving drive cannot be verified. Preserve its cache and restore its original configuration.", true);
             if (_sessions.Values.Any(session => Target(session.Definition.Target).Equals(target, StringComparison.OrdinalIgnoreCase)))
             {
                 return Fail(definition, "mount.target_reserved", $"Target {target} is already reserved by ResoDrive.");
@@ -339,6 +396,8 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
             if (intent == StartIntent.Reconnect && (!_definitions.TryGetValue(mountId, out var latest) || !CanRestart(mountId, latest)))
                 return CancelPendingRestart(definition);
             cancellationToken.ThrowIfCancellationRequested();
+            if (!ConnectionRequestIsCurrent(mountId, connectionGeneration)) return Result.Success();
+            _waitingConnections.TryRemove(mountId, out _);
             Publish(Snapshot(definition, MountLifecycle.Starting, "Starting…") with { UploadStatusStale = true, UploadStatusChecking = true });
             var session = StartSession(definition);
             var process = session.Process;
@@ -385,6 +444,12 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
         }
         finally
         {
+            if (cancellationToken.IsCancellationRequested && expectedWait is not null && !_sessions.ContainsKey(mountId))
+                RestoreConnectionWait(mountId, expectedWait, connectionGeneration);
+            if (_waitingConnections.TryGetValue(mountId, out var connectionWait) && connectionWait.Generation == connectionGeneration &&
+                ((cancellationToken.IsCancellationRequested && expectedWait is null) || !_snapshots.TryGetValue(mountId, out var connectionSnapshot) ||
+                    connectionSnapshot.Lifecycle != MountLifecycle.WaitingForConnection))
+                _waitingConnections.TryRemove(new KeyValuePair<MountId, ConnectionWait>(mountId, connectionWait));
             if (launchReserved) _launchGate.Release();
             operationGate.Release();
         }
@@ -405,12 +470,14 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
                 {
                     if (!allowPendingUploads)
                         return Result.Failure("mount.upload_recovery_pending", "The cache has pending or unverified work. Restore the original drive and finish its uploads before disconnecting.", true);
+                    RetireConnectionWait(id);
                     _pausedRecovery[id] = RecoveryPause.Disconnected;
                     PublishRecoveryPaused(definition);
                     return Result.Success();
                 }
                 await _recovery.RemoveAsync(id, cancellationToken).ConfigureAwait(false);
             }
+            RetireConnectionWait(id);
             await _ownership.RemoveAsync(id.Value, cancellationToken).ConfigureAwait(false);
             Publish(Snapshot(definition, MountLifecycle.Stopped, "Not mounted"));
             return Result.Success();
@@ -430,10 +497,15 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
             {
                 if (transfers.Generation != Volatile.Read(ref session.CacheGeneration))
                     return Result.Failure("mount.uploads_pending", "Cached files changed while checking uploads. Close open documents and try again after uploads finish.", true);
+                RetireConnectionWait(id);
                 session.RequestStop();
             }
         }
-        else session.RequestStop();
+        else
+        {
+            RetireConnectionWait(id);
+            session.RequestStop();
+        }
         Publish(Snapshot(definition, MountLifecycle.Stopping, "Stopping…"));
         await RequestGracefulStopAsync(session, CancellationToken.None).ConfigureAwait(false);
         if (!ProcessTermination.HasExitedOrUnavailable(session.Process))
@@ -657,12 +729,22 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
                 RclonePasswordCommand.Create(), [definition.RemoteName], token).ConfigureAwait(false);
             if (!remotes.TryGetValue(definition.RemoteName, out var values))
                 throw new IOException("The drive's protected configuration could not be verified.");
+            SetConnectionEndpoint(definition, values);
             var bytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(values.OrderBy(pair => pair.Key, StringComparer.Ordinal).ToArray());
             try { return "remote:" + Convert.ToHexString(SHA256.HashData(bytes)); }
             finally { CryptographicOperations.ZeroMemory(bytes); }
         }
         await using var stream = new FileStream(_configPath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.Asynchronous);
-        return "file:" + Convert.ToHexString(await SHA256.HashDataAsync(stream, token).ConfigureAwait(false));
+        var fingerprint = "file:" + Convert.ToHexString(await SHA256.HashDataAsync(stream, token).ConfigureAwait(false));
+        if (stream.Length <= 4 * 1024 * 1024)
+        {
+            stream.Position = 0;
+            using var reader = new StreamReader(stream, leaveOpen: true);
+            var metadata = RcloneConnectionMetadataService.Parse(await reader.ReadToEndAsync(token).ConfigureAwait(false));
+            SetConnectionEndpoint(definition, metadata.GetValueOrDefault(definition.RemoteName));
+        }
+        else _connectionEndpoints.TryRemove(definition.Id, out _);
+        return fingerprint;
     }
 
     private Session StartSession(MountDefinition definition)
@@ -804,8 +886,8 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
     }
     private async Task<bool> ReadyAsync(Session session, CancellationToken cancellationToken)
     {
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(20);
-        while (DateTimeOffset.UtcNow < deadline &&
+        var began = Stopwatch.GetTimestamp();
+        while (Stopwatch.GetElapsedTime(began) < TimeSpan.FromSeconds(45) &&
                !ProcessTermination.HasExitedOrUnavailable(session.Process))
         {
             if (await ProbeReadyAsync(session, cancellationToken).ConfigureAwait(false))

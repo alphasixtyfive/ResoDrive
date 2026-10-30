@@ -67,7 +67,7 @@ public sealed partial class ShellViewModel
             AddLogEntry($"Mounted · {mount.DisplayName}", detail, LogSeverity.Success);
         var explicitStop = previous == MountLifecycle.Stopping && confirmed && !errors && !recovery;
         if (lifecycle == MountLifecycle.Stopped &&
-            previous is MountLifecycle.Mounted or MountLifecycle.Degraded or MountLifecycle.Stopping or MountLifecycle.WaitingToRestart &&
+            previous is MountLifecycle.Mounted or MountLifecycle.Degraded or MountLifecycle.Stopping or MountLifecycle.WaitingToRestart or MountLifecycle.WaitingForConnection &&
             (!observation.Attention.IsActive || explicitStop))
         {
             AddLogEntry($"Stopped · {mount.DisplayName}", detail);

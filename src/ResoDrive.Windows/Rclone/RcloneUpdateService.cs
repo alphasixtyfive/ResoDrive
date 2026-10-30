@@ -18,8 +18,9 @@ public sealed record RcloneUpdateResult(
 /// Checks and explicitly installs stable rclone updates for the bundled executable.
 /// </summary>
 /// <remarks>
-/// This service intentionally has no activity awareness and never updates automatically.
-/// The caller must stop all mounts and sync jobs before calling <see cref="UpdateAsync"/>.
+/// This service never stops active work. Windows retains the old loaded image for
+/// existing connections; subsequent launches use the atomically replaced executable.
+/// A running image's backup is retained until Windows permits its removal.
 /// </remarks>
 public sealed class RcloneUpdateService
 {
@@ -64,13 +65,13 @@ public sealed class RcloneUpdateService
         await using var mutationLock = await RcloneRuntimeMutationLock.AcquireAsync(
             _locator.Paths.Rclone,
             cancellationToken).ConfigureAwait(false);
-        await ReconcileInterruptedUpdateAsync(cancellationToken).ConfigureAwait(false);
-        return await CheckCoreAsync(cancellationToken).ConfigureAwait(false);
+        var verifiedCanonicalVersion = await ReconcileInterruptedUpdateAsync(cancellationToken).ConfigureAwait(false);
+        return await CheckCoreAsync(cancellationToken, verifiedCanonicalVersion).ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Downloads and installs the latest stable release after the caller has stopped all
-    /// rclone mounts and sync jobs. This method never stops active work itself.
+    /// Downloads, verifies and atomically installs the latest stable release without
+    /// stopping existing rclone processes. They use the new engine on their next launch.
     /// </summary>
     public async Task<OperationResult<RcloneUpdateResult>> UpdateAsync(
         IProgress<RcloneBootstrapProgress>? bootstrapProgress = null,
@@ -99,7 +100,7 @@ public sealed class RcloneUpdateService
         return Result.Success(new RcloneUpdateResult(string.Empty, installed.Value.Version, true));
     }
 
-    private async Task ReconcileInterruptedUpdateAsync(CancellationToken cancellationToken)
+    private async Task<string?> ReconcileInterruptedUpdateAsync(CancellationToken cancellationToken)
     {
         var directory = _locator.Paths.Rclone;
         var executablePath = _locator.ExecutablePath;
@@ -111,7 +112,7 @@ public sealed class RcloneUpdateService
         if (canonical.Succeeded)
         {
             CleanupUpdateArtifacts(directory, includeBackups: true);
-            return;
+            return canonical.Value;
         }
 
         if (canonicalIsSafe)
@@ -138,7 +139,7 @@ public sealed class RcloneUpdateService
                     if (restored.Succeeded)
                     {
                         CleanupUpdateArtifacts(directory, includeBackups: true);
-                        return;
+                        return null;
                     }
                 }
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -150,6 +151,7 @@ public sealed class RcloneUpdateService
         }
 
         CleanupUpdateArtifacts(directory, includeBackups: false);
+        return null;
     }
 
     private static string[] EnumerateUpdateArtifacts(
@@ -218,20 +220,27 @@ public sealed class RcloneUpdateService
     }
 
     private async Task<OperationResult<RcloneUpdateCheck>> CheckCoreAsync(
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string? verifiedCanonicalVersion = null)
     {
-        var installed = await _locator.InspectAsync(cancellationToken).ConfigureAwait(false);
-        if (!installed.Succeeded || installed.Value?.Version is null)
+        // CheckAsync may reuse the canonical verification it just performed under
+        // this same mutation lock. Recovery and installation paths still inspect afresh.
+        var installedVersion = verifiedCanonicalVersion;
+        if (installedVersion is null)
         {
-            if (installed.Error?.Code == "rclone.not_installed")
+            var installed = await _locator.InspectAsync(cancellationToken).ConfigureAwait(false);
+            if (!installed.Succeeded || installed.Value?.Version is null)
             {
-                return Result.Success(new RcloneUpdateCheck(
-                    string.Empty,
-                    RcloneBootstrapService.ReleaseVersion,
-                    true));
+                if (installed.Error?.Code == "rclone.not_installed")
+                {
+                    return Result.Success(new RcloneUpdateCheck(
+                        string.Empty,
+                        RcloneBootstrapService.ReleaseVersion,
+                        true));
+                }
+                var error = installed.Error!;
+                return Result.Failure<RcloneUpdateCheck>(error.Code, error.Message, error.IsTransient);
             }
-            var error = installed.Error!;
-            return Result.Failure<RcloneUpdateCheck>(error.Code, error.Message, error.IsTransient);
+            installedVersion = installed.Value.Version;
         }
 
         ProcessRunResult processResult;
@@ -283,7 +292,7 @@ public sealed class RcloneUpdateService
                 "rclone returned an unrecognized update response.");
         }
 
-        var currentVersion = NormalizeStableVersion(installed.Value.Version);
+        var currentVersion = NormalizeStableVersion(installedVersion);
         if (currentVersion is null)
         {
             return Result.Failure<RcloneUpdateCheck>(

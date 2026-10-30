@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -90,7 +91,92 @@ public sealed class TransfersWindowTests
         transfers.ShowFlyout(System.Drawing.Point.Empty);
         Assert.Equal(2, opened);
         Assert.Equal(1, settingsOpened);
+        VerifyHiddenPresentationDefersWork();
     }
+
+    private static void VerifyHiddenPresentationDefersWork()
+    {
+        var previousData = Environment.GetEnvironmentVariable("RDRIVE_DATA_DIR");
+        Environment.SetEnvironmentVariable("RDRIVE_DATA_DIR", Path.Combine(Path.GetTempPath(), "resodrive-hidden-transfers-" + Guid.NewGuid().ToString("N")));
+        try
+        {
+            var main = new MainWindow(); // Keep startup/host IO out of this rendering fixture.
+            var model = Assert.IsType<ShellViewModel>(main.DataContext);
+            var mount = new MountSettings { Id = Guid.NewGuid(), DisplayName = "Cloud", RemoteName = "fixture" };
+            var status = new HostMountStatus(mount.Id, "Mounted", "Mounted", 20, 1)
+            {
+                Uploads = [new MountUploadFile { RelativePath = "active.bin", State = MountUploadState.Uploading,
+                    BytesTransferred = 40, TotalBytes = 100 },
+                    .. Enumerable.Range(0, 20).Select(index => new MountUploadFile { RelativePath = $"queued-{index}.bin" })],
+            };
+            model.Load(new ManagerSettings { Mounts = [mount] }, [status]);
+            var apply = MainMethod("ApplyTransferStatus").CreateDelegate<Action<HostResponse>>(main);
+            var refresh = MainMethod("RefreshTransfersPresentation").CreateDelegate<Action<bool>>(main);
+            var transfers = (TransfersViewModel)MainField("_transfersModel").GetValue(main)!;
+            try
+            {
+                apply(new HostResponse(true, Mounts: [status], SyncJobs: []));
+                refresh(false);
+                Assert.Empty(transfers.Transfers);
+
+                // A previously opened but dismissed flyout should also skip work.
+                MainField("_transfersWindow").SetValue(main, new TransfersWindow(transfers, Noop, Noop));
+                refresh(false);
+                Assert.Empty(transfers.Transfers);
+                for (var warmup = 0; warmup < 10; warmup++) refresh(false);
+                var allocatedBeforeHidden = GC.GetAllocatedBytesForCurrentThread();
+                for (var poll = 0; poll < 100; poll++) refresh(false);
+                var hiddenBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedBeforeHidden;
+
+                refresh(true);
+                var active = Assert.Single(transfers.Transfers, row => row.Key == $"file:{mount.Id}:active.bin");
+                Assert.Equal(40, active.Percent);
+                var allocatedBeforeForced = GC.GetAllocatedBytesForCurrentThread();
+                for (var poll = 0; poll < 100; poll++) refresh(true);
+                var forcedBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedBeforeForced;
+                Assert.True(hiddenBytes * 10 < forcedBytes,
+                    $"Hidden refreshes should avoid row-building allocations: hidden={hiddenBytes}, forced={forcedBytes}.");
+                var captureDirectory = Environment.GetEnvironmentVariable("RESODRIVE_PERF_CAPTURE_DIR");
+                if (!string.IsNullOrEmpty(captureDirectory))
+                {
+                    Directory.CreateDirectory(captureDirectory);
+                    File.WriteAllText(Path.Combine(captureDirectory, "hidden-flyout.json"),
+                        System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            refreshes = 100, hiddenAllocatedBytes = hiddenBytes, forcedAllocatedBytes = forcedBytes,
+                            reductionPercent = 100 * (1 - hiddenBytes / (double)forcedBytes),
+                        }));
+                }
+
+                var latest = status with { Uploads = [status.Uploads[0] with { BytesTransferred = 70 }] };
+                apply(new HostResponse(true, Mounts: [latest], SyncJobs: []));
+                refresh(false);
+                Assert.Equal(70, Assert.Single(model.Mounts).UploadStatus!.Uploads[0].BytesTransferred);
+                Assert.Equal(40, active.Percent);
+                // The same forced refresh used before opening must use already-observed
+                // status immediately; it must not wait for another host poll.
+                refresh(true);
+                Assert.Same(active, Assert.Single(transfers.Transfers));
+                Assert.Equal(70, active.Percent);
+
+                model.ApplyHostUnavailable();
+                MainMethod("MarkTransfersUnavailable").CreateDelegate<Action>(main)();
+                refresh(true);
+                Assert.Equal(Visibility.Collapsed, active.ProgressVisibility);
+                Assert.Equal(Visibility.Collapsed, active.ProgressTextVisibility);
+                Assert.Equal("Transfer status unavailable.", transfers.Summary);
+            }
+            finally
+            {
+                MainField("_exitRequested").SetValue(main, true);
+                main.Close();
+            }
+        }
+        finally { Environment.SetEnvironmentVariable("RDRIVE_DATA_DIR", previousData); }
+    }
+
+    private static MethodInfo MainMethod(string name) => typeof(MainWindow).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!;
+    private static FieldInfo MainField(string name) => typeof(MainWindow).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!;
 
     private static void VerifySummaryLayout(TransfersWindow transfers, TransfersViewModel model)
     {

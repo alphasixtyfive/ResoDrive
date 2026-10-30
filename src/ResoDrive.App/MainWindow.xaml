@@ -6,7 +6,7 @@
   xmlns:controls="clr-namespace:ResoDrive.App.Controls"
   Title="{x:Static local:ProductInfo.Name}"
   Width="920"
-  Height="610"
+  Height="720"
   MinWidth="640"
   MinHeight="440"
   WindowStartupLocation="CenterScreen"
@@ -812,9 +812,9 @@
             </Border>
             <Border Style="{StaticResource Card}" Padding="16">
               <StackPanel>
-                <TextBlock Text="Settings transfer" FontSize="15" FontWeight="SemiBold" />
+                <TextBlock Text="Settings and diagnostics" FontSize="15" FontWeight="SemiBold" />
                 <TextBlock
-                  Text="Export a settings file for safekeeping, or import one you exported earlier."
+                  Text="Back up your settings, restore an export, or save a report for troubleshooting."
                   Foreground="{StaticResource MutedBrush}"
                   TextWrapping="Wrap"
                   Margin="0,3,0,12"
@@ -844,7 +844,7 @@
                   </Button>
                   <Button Style="{StaticResource ButtonStyle}" Click="ExportDiagnostics_Click"
                           AutomationProperties.Name="Export diagnostic report" Margin="0,0,8,8"
-                          ToolTip="Versions, performance settings and error references. Private connection details are omitted.">
+                          ToolTip="Versions, host health, transfer status and recent diagnostic events. Private connection details are omitted.">
                     <TextBlock Text="Export diagnostics" />
                   </Button>
                 </WrapPanel>

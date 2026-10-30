@@ -41,9 +41,13 @@ credentials, private service addresses, configuration files, or unredacted logs.
   names and absolute paths. In-app activity includes operational context and
   cleaned backend errors, so it may still contain names, addresses or paths.
   Free-form error text cannot be classified perfectly; review logs before sharing.
-- Diagnostic exports use an allowlist of component versions, numeric performance
-  options, enumerated states and UI error IDs. They do not include raw configuration,
-  raw exception messages, process arguments, server addresses, paths or account names.
+- Diagnostic exports use an allowlist of component versions, numeric resource and
+  transfer measurements, freshness/recovery flags, enumerated states, known event
+  categories and error references. Recent UI and host startup events can show
+  different runtime versions across sessions. Only bounded excerpts from the
+  current and one rotated log per role are examined, with missing or truncated
+  history identified in the report. Raw configuration, exception messages, process
+  arguments, server addresses, file paths, filenames and account names are omitted.
 - Mount upload statistics are fetched from authenticated IPv4 loopback control
   endpoints with proxies and redirects disabled, a three-second deadline, and a
   bounded response size. An unavailable result is never presented as zero uploads.

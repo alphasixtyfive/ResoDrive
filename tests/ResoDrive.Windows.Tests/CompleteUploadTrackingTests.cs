@@ -6,6 +6,25 @@ namespace ResoDrive.Windows.Tests;
 
 public sealed class CompleteUploadTrackingTests
 {
+    [Fact]
+    public void RacedCleanMeasurementCannotErasePendingFilesBeforeStableConfirmation()
+    {
+        var previous = new VfsTransferStatus(1, 0, 0, 100, false)
+        {
+            Files = [new MountUploadFile { RelativePath = "pending.txt", TotalBytes = 100 }],
+        };
+        var raced = new MountUploadObservation(new(0, 0, 0, 100, false), previous).DuringCacheChange();
+        var snapshot = new MountSnapshot { MountId = MountId.New() }.WithTransfers(raced);
+        Assert.Null(raced.Current);
+        Assert.True(raced.BlocksStop);
+        Assert.Equal(1, snapshot.UploadsQueued);
+        Assert.Equal("pending.txt", Assert.Single(snapshot.Uploads).RelativePath);
+        Assert.Equal(previous.ObservedAt, snapshot.UploadObservedAt);
+        var stable = snapshot.WithTransfers(new(new(0, 0, 0, 100, false), previous));
+        Assert.Empty(stable.Uploads);
+        Assert.False(stable.UploadStatusStale);
+        Assert.Equal(0, stable.UploadsQueued);
+    }
     private static string Statistics(long queued = 0, long uploading = 0, long errors = 0, int mode = 3) => JsonSerializer.Serialize(new
     {
         fs = "remote:", opt = new { CacheMode = mode },
@@ -156,4 +175,38 @@ public sealed class CompleteUploadTrackingTests
         Assert.True(result.UploadStatusChecking);
         Assert.Equal(1, result.UploadsQueued);
     }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void FreshCountersDuringCacheMutationRemainVisibleAndCannotAuthorizeStop(long uploading)
+    {
+        var current = new VfsTransferStatus(0, uploading, 0, 100, false)
+        {
+            SpeedBytesPerSecond = 16, EtaSeconds = 4,
+            Files = uploading > 0 ? [new MountUploadFile { RelativePath = "file", State = MountUploadState.Uploading,
+                BytesTransferred = 40, TotalBytes = 100 }] : [],
+        };
+        var observation = new MountUploadObservation(current, null, Checking: true);
+        var result = new MountSnapshot { MountId = MountId.New() }.WithTransfers(observation);
+        Assert.True(observation.BlocksStop);
+        Assert.True(result.UploadStatusStale);
+        Assert.True(result.UploadStatusChecking);
+        Assert.Equal(current.ObservedAt, result.UploadObservedAt);
+        Assert.Equal(current.Files, result.Uploads);
+        Assert.Null(result.UploadSpeedBytesPerSecond);
+        Assert.Null(result.UploadEtaSeconds);
+    }
+
+    [Theory]
+    [InlineData(@"C:\cache\vfsMeta\a", @"C:\cache\vfsMeta\a\file", null, true)]
+    [InlineData(@"C:\cache\vfsMeta\a", @"C:\cache\vfsMeta\ab\file", null, false)]
+    [InlineData(@"C:\cache\vfsMeta\a", @"C:\cache\vfsMeta", null, true)]
+    [InlineData(@"C:\cache\vfsMeta\a", @"C:\cache\vfsMeta\b\file", @"C:\cache\vfsMeta\a\file", true)]
+    [InlineData(@"C:\cache\vfsMeta\a", @"c:\CACHE\VFSMETA\A\file", null, true)]
+    [InlineData(null, @"C:\cache\vfsMeta\b\file", null, true)]
+    [InlineData(@"C:\cache\vfsMeta\a", null, null, true)]
+    public void CacheInvalidationFollowsTheAffectedDriveIncludingRenamesAndOverflow(string? metadata,
+        string? changed, string? old, bool expected) =>
+        Assert.Equal(expected, RcloneMountCoordinator.CacheChangeAffectsMount(metadata, changed, old));
 }
