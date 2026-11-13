@@ -22,7 +22,7 @@ internal sealed class MountOwnershipStore : IDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            return await ReadAsync(cancellationToken).ConfigureAwait(false);
+            return (await ReadAsync(cancellationToken).ConfigureAwait(false)).Mounts;
         }
         finally
         {
@@ -35,9 +35,9 @@ internal sealed class MountOwnershipStore : IDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var mounts = await ReadAsync(cancellationToken).ConfigureAwait(false);
+            var (mounts, recoveredFromBackup) = await ReadAsync(cancellationToken).ConfigureAwait(false);
             var updated = mounts.Where(item => item.MountId != mount.MountId).Append(mount).ToArray();
-            await WriteAsync(updated, cancellationToken).ConfigureAwait(false);
+            await WriteAsync(updated, recoveredFromBackup, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -50,9 +50,9 @@ internal sealed class MountOwnershipStore : IDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var mounts = await ReadAsync(cancellationToken).ConfigureAwait(false);
+            var (mounts, recoveredFromBackup) = await ReadAsync(cancellationToken).ConfigureAwait(false);
             var updated = mounts.Where(item => item.MountId != mountId).ToArray();
-            await WriteAsync(updated, cancellationToken).ConfigureAwait(false);
+            await WriteAsync(updated, recoveredFromBackup, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -125,17 +125,17 @@ internal sealed class MountOwnershipStore : IDisposable
 
     public void Dispose() => _gate.Dispose();
 
-    private async Task<IReadOnlyList<OwnedMount>> ReadAsync(CancellationToken cancellationToken)
+    private async Task<(IReadOnlyList<OwnedMount> Mounts, bool RecoveredFromBackup)> ReadAsync(CancellationToken cancellationToken)
     {
         var primary = await TryReadAsync(_path, cancellationToken).ConfigureAwait(false);
         if (primary is not null)
-            return primary;
+            return (primary, false);
 
         var backup = await TryReadAsync(_backupPath, cancellationToken).ConfigureAwait(false);
-        if (backup is not null) return backup;
+        if (backup is not null) return (backup, true);
         if (File.Exists(_path) || File.Exists(_backupPath))
             throw new IOException("The recorded drive processes could not be read. Preserve the cache and repair the ownership records before continuing.");
-        return [];
+        return ([], false);
     }
 
     private static async Task<IReadOnlyList<OwnedMount>?> TryReadAsync(
@@ -168,7 +168,7 @@ internal sealed class MountOwnershipStore : IDisposable
         }
     }
 
-    private async Task WriteAsync(IReadOnlyList<OwnedMount> mounts, CancellationToken cancellationToken)
+    private async Task WriteAsync(IReadOnlyList<OwnedMount> mounts, bool recoveredFromBackup, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
         var temporary = _path + $".{Guid.NewGuid():N}.tmp";
@@ -181,7 +181,7 @@ internal sealed class MountOwnershipStore : IDisposable
                 stream.Flush(true);
             }
             if (File.Exists(_path))
-                File.Replace(temporary, _path, _backupPath, ignoreMetadataErrors: true);
+                File.Replace(temporary, _path, recoveredFromBackup ? null : _backupPath, ignoreMetadataErrors: true);
             else
                 File.Move(temporary, _path);
         }

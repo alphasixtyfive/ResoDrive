@@ -118,6 +118,26 @@ public sealed class CompleteUploadTrackingTests
         Assert.True(busy.NeedsAttention);
     }
 
+    [Fact]
+    public void CacheOffAcceptsRclonesEmptyQueueObjectAndStillTracksDirectUploads()
+    {
+        var idle = VfsTransferStatus.ParseComplete(Statistics(mode: 0), "{}", Core(), Dirty());
+        Assert.False(new MountUploadObservation(idle, null).BlocksStop);
+        Assert.False(idle.UsesDiskCache);
+        var busy = VfsTransferStatus.ParseComplete(Statistics(mode: 0), "{}", Core([Active()]), Dirty());
+        Assert.True(new MountUploadObservation(busy, idle).BlocksStop);
+        Assert.Equal(1, busy.Uploading);
+    }
+
+    [Theory]
+    [InlineData(3, "{}")]
+    [InlineData(0, "{\"error\":\"unavailable\"}")]
+    [InlineData(0, "{\"queue\":null}")]
+    [InlineData(0, "[]")]
+    [InlineData(0, "null")]
+    public void OnlyCacheOffWithAnEmptyObjectMayOmitTheQueue(int mode, string queue) =>
+        Assert.Throws<JsonException>(() => VfsTransferStatus.ParseComplete(Statistics(mode: mode), queue, Core(), Dirty()));
+
     [Theory]
     [InlineData("{}", "{\"queue\":[]}", "{}")]
     [InlineData("{\"fs\":\"remote:\",\"opt\":{\"CacheMode\":3}}", "{\"queue\":[]}", "{}")]

@@ -47,6 +47,9 @@ jobs:
         run: >-
           ./tests/process-smoke.ps1
           -AppPath "artifacts\win-x64\resodrive\resodrive.exe"
+      - name: Verify published updater helper readiness and cancellation
+        shell: pwsh
+        run: ./tests/update-helper-smoke.ps1 -AppPath artifacts/win-x64/resodrive/resodrive.exe
       - name: Verify installation, upgrade and removal
         shell: pwsh
         env:

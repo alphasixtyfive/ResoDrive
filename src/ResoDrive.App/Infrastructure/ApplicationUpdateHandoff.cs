@@ -84,13 +84,16 @@ internal static class ApplicationUpdateHandoff
         }
     }
 
-    internal static void Start(
+    internal static async Task StartAsync(
         string version,
         string installerPath,
         string updatesDirectory,
         string sourceExecutablePath,
         string installedExecutablePath,
-        string expectedSha256)
+        string expectedSha256,
+        Func<ProcessStartInfo, string, IDisposable?>? startHelper = null,
+        TimeSpan? readinessTimeout = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(version);
         ArgumentException.ThrowIfNullOrWhiteSpace(installerPath);
@@ -154,9 +157,31 @@ internal static class ApplicationUpdateHandoff
         startInfo.ArgumentList.Add(expectedSha256.ToUpperInvariant());
         startInfo.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
         startInfo.Environment[HandoffDirectoryEnvironmentVariable] = directory;
-        using var helper = CetCompatibility.StartInstalledHelper(startInfo, sourceExecutable);
-        if (helper is null)
-            throw new InvalidOperationException("The update handoff process could not be started.");
+        var readinessName = "ResoDrive.UpdateReady." + Guid.NewGuid().ToString("N");
+        using var readiness = CurrentUserPipe.CreateServer(readinessName);
+        startInfo.Environment[UpdateHelperReadiness.EnvironmentVariable] = readinessName;
+        try
+        {
+            using var helper = (startHelper ?? CetCompatibility.StartInstalledHelper)(startInfo, sourceExecutable);
+            if (helper is null)
+                throw new InvalidOperationException("The update handoff process could not be started.");
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(readinessTimeout ?? UpdateHelperReadiness.Timeout);
+            try { await UpdateHelperReadiness.AcceptAsync(readiness, timeout.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException("The update helper did not become ready. ResoDrive remains open. Check Windows Security for a blocked file, or retry the update.");
+            }
+        }
+        catch (Exception exception) when (exception is Win32Exception or IOException or UnauthorizedAccessException or InvalidOperationException or TimeoutException or OperationCanceledException)
+        {
+            // The original window is still alive. A refused process launch must
+            // not leave a pending receipt that suggests an installer is running.
+            TryWriteOutcome(outcomePath, new ApplicationUpdateOutcome(version, "failed", null,
+                "The update helper could not start. " + DescribeLaunchFailure(exception),
+                false, true, DateTimeOffset.UtcNow));
+            throw;
+        }
     }
 
     internal static bool TryParseCompletionRequest(
@@ -253,6 +278,22 @@ internal static class ApplicationUpdateHandoff
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (runtime is null && Environment.GetEnvironmentVariable(UpdateHelperReadiness.EnvironmentVariable) is { Length: > 0 } pipeName)
+        {
+            Environment.SetEnvironmentVariable(UpdateHelperReadiness.EnvironmentVariable, null);
+            try
+            {
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeout.CancelAfter(UpdateHelperReadiness.Timeout);
+                await UpdateHelperReadiness.SignalAsync(pipeName, request.ParentProcessId, timeout.Token).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or OperationCanceledException or Win32Exception)
+            {
+                // The parent owns the failure receipt. A late helper must not
+                // overwrite it, prepare an installation, or wait for a later exit.
+                return 1;
+            }
+        }
         runtime ??= new ApplicationUpdateRuntime();
         await runtime.WaitForParentExitAsync(request.ParentProcessId, cancellationToken)
             .ConfigureAwait(false);
@@ -303,7 +344,7 @@ internal static class ApplicationUpdateHandoff
                 UnauthorizedAccessException or TimeoutException)
         {
             message = prepared
-                ? "Windows Installer could not complete the update: " + exception.Message
+                ? "Windows Installer could not complete the update: " + DescribeLaunchFailure(exception)
                 : "ResoDrive could not safely stop background work before installation: " + exception.Message;
         }
 
@@ -353,7 +394,7 @@ internal static class ApplicationUpdateHandoff
             }
         }
         if (!acknowledged && relaunchException is not null)
-            message += " ResoDrive could not be reopened: " + relaunchException.Message;
+            message += " ResoDrive could not be reopened: " + DescribeLaunchFailure(relaunchException);
 
         outcome = outcome with
         {
@@ -452,6 +493,7 @@ internal static class ApplicationUpdateHandoff
     internal static (string Status, string Message) ClassifyInstallerExitCode(int exitCode) =>
         NormalizeInstallerExitCode(exitCode) switch
         {
+            var code when SecurityBlockMessage(code) is { } blocked => ("failed", blocked + " ResoDrive was not updated."),
             0 => ("succeeded", "The ResoDrive update was installed."),
             1641 => ("succeeded", "The ResoDrive update was installed and Windows initiated a restart."),
             3010 => ("succeeded", "The ResoDrive update was installed. Windows should be restarted."),
@@ -462,6 +504,22 @@ internal static class ApplicationUpdateHandoff
             1632 => ("failed", "Windows cannot write to its temporary folder. Check free disk space and folder permissions, then retry. ResoDrive was not updated."),
             _ => ("failed", $"Windows Installer stopped with code {exitCode}. ResoDrive was not updated."),
         };
+
+    internal static string DescribeLaunchFailure(Exception exception) =>
+        exception is Win32Exception native
+            ? SecurityBlockMessage(NormalizeInstallerExitCode(native.NativeErrorCode)) ??
+                $"{native.Message} (Windows error {native.NativeErrorCode}.)"
+            : exception.Message;
+
+    private static string? SecurityBlockMessage(int code) => code switch
+    {
+        577 => "Windows could not verify this file's digital signature (error 577). Obtain a trusted signed release from the publisher, or ask your IT administrator to review the blocked file.",
+        1260 or 4551 or 4556 or 4557 or 4558 or 4580 or 4582 =>
+            $"Windows application control blocked this file (error {code}). Check the block details in Windows Security and contact the publisher or your IT administrator for an approved release.",
+        4559 or 4581 =>
+            $"Windows application control could not check this file's reputation (error {code}). Check your internet connection and try again later. If it remains blocked, contact the publisher or your IT administrator.",
+        _ => null,
+    };
 
     // Burn can return HRESULT_FROM_WIN32; MSI returns the underlying Win32 code.
     private static int NormalizeInstallerExitCode(int code) =>

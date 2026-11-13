@@ -12,7 +12,6 @@ namespace ResoDrive.Windows;
 
 public sealed partial class RcloneMountCoordinator : IAsyncDisposable
 {
-    private static readonly TimeSpan GracefulStopCommandTimeout = TimeSpan.FromSeconds(4);
     private static readonly TimeSpan GracefulStopExitTimeout = TimeSpan.FromSeconds(6);
     private static readonly TimeSpan ForcedStopTimeout = TimeSpan.FromSeconds(3);
     private readonly string _rclonePath;
@@ -838,42 +837,25 @@ public sealed partial class RcloneMountCoordinator : IAsyncDisposable
             argument.Equals(option, StringComparison.OrdinalIgnoreCase) ||
             argument.StartsWith(option + "=", StringComparison.OrdinalIgnoreCase));
 
-    private async Task RequestGracefulStopAsync(Session session, CancellationToken cancellationToken)
+    private static async Task RequestGracefulStopAsync(Session session, CancellationToken cancellationToken)
     {
         if (session.Control is null || ProcessTermination.HasExitedOrUnavailable(session.Process))
         {
             return;
         }
 
-        ProcessRunResult result;
         try
         {
-            result = await ProcessRunner.RunAsync(
-                _rclonePath,
-                [
-                    "rc",
-                    "core/quit",
-                    "--rc-addr",
-                    session.Control.Address,
-                    "--rc-user",
-                    session.Control.User,
-                    "--rc-pass",
-                    session.Control.Password,
-                    "--config",
-                    string.Empty
-                ],
-                GracefulStopCommandTimeout,
-                cancellationToken).ConfigureAwait(false);
+            // Use the running engine's authenticated endpoint. A replaced or
+            // blocked executable must not prevent an old engine from stopping.
+            if (!await VfsStatusReader.RequestQuitAsync(session.Control.Address,
+                    session.Control.User, session.Control.Password, cancellationToken).ConfigureAwait(false))
+                return;
         }
         catch (Exception exception) when (Expected(exception))
         {
             return;
         }
-        if (result.ExitCode != 0 || result.TimedOut)
-        {
-            return;
-        }
-
         using var timeout = new CancellationTokenSource(GracefulStopExitTimeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
         try

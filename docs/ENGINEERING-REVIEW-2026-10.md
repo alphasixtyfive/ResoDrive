@@ -180,3 +180,120 @@ must remove every updater artifact within the original ten-second deadline.
 Remaining filenames are reported if cleanup fails. All live-image and rollback
 assertions remain; there is no longer timeout, skipped test, production cleanup
 change or forced tag replacement. The final release candidate is v0.3.48.
+
+## Follow-up review — 13 November 2026
+
+This pass starts from `8bff9bd`, following the previous connection/performance
+review. It surveys the Core validation boundaries, App settings/setup/update
+flows, Host queues and shutdown, Windows persistence/process/rclone/recovery
+paths, and installer/build organization. Generated outputs, archived workspace
+copies and the private deployment projects are outside the application review.
+This is a risk-focused review, not a claim that every line is defect-free.
+
+### Completed changes
+
+- Recovery and mount-ownership stores could load a valid backup, then overwrite
+  it with a corrupt primary on the first repair write. They now retain the verified
+  backup for that write and resume normal backup rotation afterward. Regression
+  fixtures corrupt the repaired primary again and verify recovery still works.
+  Recovery-store cleanup also releases its mutation gate if temporary-file
+  removal fails.
+- Cache metadata containing valid JSON of the wrong shape (`null`, arrays or
+  booleans) escaped as `InvalidOperationException` during offline inspection.
+  Shape validation now yields the expected invalid-metadata result, preserving
+  recovery records and treating uploads as unknown. Cancellation is observed
+  before the cache-off fast path as well.
+- With caching off, rclone returns an empty object for `vfs/queue`. The parser
+  wrongly required a queue array and could leave an idle drive permanently
+  unverified. Only the documented cache-off empty object is now accepted;
+  direct uploads still come from `core/stats`, and missing cached-mode queues,
+  error-shaped objects and malformed responses remain unknown. See
+  [the rclone VFS control API](https://rclone.org/rc/#vfs-queue-queue-info-for-a-vfs).
+- Graceful mount shutdown now sends authenticated `core/quit` directly to the
+  existing loopback endpoint. It no longer launches another copy of rclone or
+  depends on the replacement executable being launchable. Upload guards,
+  ownership checks and exit confirmation remain in the coordinator. Transport
+  code moved from the transfer-status model into `VfsStatusReader.cs`; the shared
+  transport retains bounded replies, cancellation, no proxies and no redirects.
+- A refused updater-helper launch now records a finalized failure instead of
+  leaving a pending receipt. Signature, application-control policy and reputation
+  failures retain their Windows error codes and give specific guidance. The same
+  classification covers installer launch, Burn-wrapped errors and application
+  relaunch. Access-denied and UAC cancellation remain distinct. A successful MSI
+  followed by a blocked relaunch remains a successful installation with a failed
+  relaunch; it is not mislabeled as a rolled-back update.
+- A private, account-restricted readiness pipe now keeps the old UI open until
+  the copied updater reaches its handoff code. The helper verifies the parent
+  process and account and requires acceptance before waiting for exit. Timeout
+  or cancellation finalizes the parent's failure receipt; a late helper exits
+  without running installation. Legacy direct helper invocations remain supported.
+
+Six new regression cases failed before the recovery/parser fixes and passed
+afterward. Update-block tests inject Windows launch failures; they do not alter
+Windows security policy. Real rclone 1.76.0 interoperability tests start isolated
+local WebDAV VFS instances with disposable configuration, cache and credentials,
+cover cache-off/full status, reject wrong credentials, accept authenticated quit
+and preserve the local sentinel. No production mount or server account is used.
+
+The reported 12 November App Control block happened on another machine. Local
+event queries therefore do not identify its blocked file or policy. The local
+installed executable is unsigned, consistent with the documented release build;
+this establishes a distribution gap, not the remote incident's precise cause.
+The [release guide](RELEASING.md#signing) now contains a prepared free-signing
+enrollment brief and the required packaging order. Following the owner's request,
+the free SignPath application was submitted and the owner installed the GitHub
+App. Foundation approval and actual signing remain pending. Version 0.3.49 is
+being prepared as an unsigned maintenance release at the owner's request.
+
+### Remaining design work, in priority order
+
+1. **Signed release chain and first-hop acceptance.** Sign the application and
+   installer layers, including the extracted Burn engine, then test the actual
+   affected policy. An unsigned old helper may require one manual signed Setup
+   installation. The helper-ready acknowledgement is now implemented, covering
+   helpers that fail during initialization as well as synchronous launch refusal.
+2. **Durable sync-run ownership.** `RcloneSyncCoordinator` tracks live runs in
+   memory and persists only terminal outcomes. Following an abrupt host death,
+   ordinary startup cannot identify/rejoin a surviving sync by job identity.
+   The wipe path conservatively detects surviving managed processes, but that
+   is not ordinary sync recovery. Persist job/process identity and interrupted
+   state before adding replay. Do not automatically rerun a destructive mirror
+   after an ambiguous interruption. This needs crash/process acceptance, not
+   just another coordinator abstraction.
+3. **Durable setup transaction manifest.** `SetupFileTransaction` rolls back
+   exceptions in the current process and retains backups on failure, but its
+   ordered transaction entries live in memory. A process/power failure between
+   settings/configuration commits needs a durable manifest and startup recovery
+   policy that respects the account-write guard and remote wipe generation.
+4. **Focused responsibility extraction.** The main mount coordinator still owns
+   a large start/stop lifecycle; setup and update components are also large.
+   Extract lifecycle decisions only alongside ownership/ordering tests. Keep
+   security-specific persistence semantics explicit instead of replacing all
+   stores with a generic serializer. Existing partials and presentation modules
+   already provide useful boundaries; another broad file shuffle adds little.
+
+Keep the existing queue backoff and rclone's live transfer retries. There is no
+evidence here supporting forced remounts on network loss, deletion of dirty
+caches, automatic mirror replay, a global shared rclone daemon, or removing
+legacy installer compatibility paths. Those changes would weaken recovery or
+broaden failure scope without solving the defects reproduced in this pass.
+
+### Verification
+
+- Version 0.3.49's full `build.ps1 -BuildMsi $true` passed: Core 206, Windows
+  771 and App 441 — **1,418 passed**, with the optional installed-MSI locator
+  skipped. MSI and Setup built without warnings. The published helper process
+  signaled readiness, then exited after a rejected handoff without changing the
+  source, installer sentinel or parent receipt. Both workflows now run this check.
+- Locked restores and `build.ps1 -BuildMsi $false` passed using the existing
+  .NET 10.0.400 SDK. Release suite: Core 206, Windows 771, App 437 — **1,414 passed**.
+  One optional installed-MSI locator test was skipped; rclone integrations ran
+  against the existing 1.76.0 executable with isolated data.
+- The App suite also passed all 437 tests with `DOTNET_PROCESSOR_COUNT=1`.
+  The isolated process smoke passed with that constraint: populated drive rows,
+  concurrent cold startup, tray/show acknowledgement, automatic host recovery
+  and relaunch. Its disposable processes and data were cleaned up successfully.
+- No live App Control policy block, signed installer, cross-elevation upgrade,
+  power-loss upload or real Nextcloud wipe was tested. Existing wipe tests use
+  simulated HTTP. Full signed MSI/Setup and affected-machine acceptance remain
+  release gates; the generated portable package is a local unsigned candidate.

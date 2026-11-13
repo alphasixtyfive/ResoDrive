@@ -260,6 +260,47 @@ public sealed class MountUploadRecoveryTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task RepairWritePreservesVerifiedRecoveryBackup(bool missingPrimary)
+    {
+        var definition = Definition();
+        var path = Path.Combine(_paths.Root, "mount-upload-recovery.json");
+        using (var store = new MountRecoveryStore(_paths))
+        {
+            await store.RecordAsync(definition, Metadata, CancellationToken.None);
+            await store.RecordAsync(definition with { DisplayName = "Before corruption" }, Metadata, CancellationToken.None);
+        }
+        var backup = await File.ReadAllTextAsync(path + ".bak");
+        if (missingPrimary) File.Delete(path);
+        else await File.WriteAllTextAsync(path, "not json");
+        using (var repaired = new MountRecoveryStore(_paths))
+            await repaired.RecordAsync(definition with { DisplayName = "Repaired" }, Metadata, CancellationToken.None);
+
+        Assert.Equal(backup, await File.ReadAllTextAsync(path + ".bak"));
+        // A second interrupted primary must still leave a readable recovery record.
+        await File.WriteAllTextAsync(path, "interrupted again");
+        using var recovered = new MountRecoveryStore(_paths);
+        Assert.Equal(definition.Id.Value, Assert.Single(recovered.GetEntries()).MountId);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("[]")]
+    [InlineData("true")]
+    public async Task WrongShapeMetadataPreservesRecoveryAndReturnsUnknown(string json)
+    {
+        var definition = Definition(enabled: false);
+        await SeedAsync(definition, dirty: true);
+        await File.WriteAllTextAsync(Path.Combine(Metadata, "file.txt"), json);
+        Assert.False((await RcloneMountCoordinator.CheckOfflineRecoveryAsync(_paths)).Succeeded);
+        await using var coordinator = Coordinator();
+        Assert.True((await coordinator.ReconcileAsync([definition])).Succeeded);
+        Assert.False((await coordinator.CheckPendingUploadsAsync()).Succeeded);
+        Assert.True(Assert.Single(coordinator.GetSnapshots()).UploadRecoveryRequired);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task CleanRecoveryClearsTheWarningOrRemovesADeletedDrive(bool deleted)
     {
         var definition = Definition(enabled: false);

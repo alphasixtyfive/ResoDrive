@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.49] - 2026-11-13
+
+- Preserve verified recovery backups when repairing corrupt drive records and safely handle malformed cache metadata.
+- Recognize rclone's cache-off upload queue responses and use its authenticated local control endpoint for graceful shutdown.
+- Wait for updater-helper readiness before closing the app, and finalize failures when the helper cannot start.
+- Report Windows signature and application-control blocks with useful error codes, including a blocked restart after successful installation.
+- Apply for SignPath Foundation's free open-source signing program; this release remains unsigned pending approval and integration.
+
 ## [0.3.48] - 2026-10-30
 
 - Retry drives automatically when their server becomes reachable, including after a VPN connects, and fix starts that could stay queued.

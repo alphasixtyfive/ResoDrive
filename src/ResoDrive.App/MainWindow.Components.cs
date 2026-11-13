@@ -387,13 +387,14 @@ public partial class MainWindow
                 await ApplicationUpdateHandoff.WaitForHostShutdownAsync(stoppingHost, shutdown, _lifetimeCancellation.Token);
             SetLiveText(ApplicationUpdateStatusText, "Preparing Windows Installer…");
             if (IsClosing || _exitRequested) return;
-            ApplicationUpdateHandoff.Start(
+            await ApplicationUpdateHandoff.StartAsync(
                 downloaded.Value.Version,
                 downloaded.Value.InstallerPath,
                 _paths.Updates,
                 CurrentExecutablePath,
                 MsiInstalledExecutablePath,
-                downloaded.Value.Sha256);
+                downloaded.Value.Sha256,
+                cancellationToken: _lifetimeCancellation.Token);
 
             _exitRequested = true;
             _timer.Stop();
@@ -412,7 +413,7 @@ public partial class MainWindow
         {
             StatusVisuals.Apply(ApplicationUpdateStatusIcon, success: false, error: true);
             SetLiveText(ApplicationUpdateStatusText, "The update installer was not started.");
-            ShowError("Could not install the ResoDrive update", exception.Message);
+            ShowError("Could not install the ResoDrive update", ApplicationUpdateHandoff.DescribeLaunchFailure(exception));
         }
         finally
         {

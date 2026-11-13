@@ -15,12 +15,14 @@ internal static class DirtyCacheReader
 
     internal static DirtyCacheStatus ReadFromStatistics(string statistics, string cacheRoot, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
         using var document = JsonDocument.Parse(statistics);
-        if (!document.RootElement.TryGetProperty("opt", out var options))
+        if (document.RootElement.ValueKind != JsonValueKind.Object ||
+            !document.RootElement.TryGetProperty("opt", out var options))
             throw new JsonException("Missing cache mode.");
         if (VfsTransferStatus.Count(options, "CacheMode") == 0)
             return DirtyCacheStatus.Empty;
-        if (!document.RootElement.TryGetProperty("diskCache", out var cache) ||
+        if (!document.RootElement.TryGetProperty("diskCache", out var cache) || cache.ValueKind != JsonValueKind.Object ||
             !cache.TryGetProperty("pathMeta", out var metadata) || metadata.ValueKind != JsonValueKind.String)
             throw new JsonException("Missing cache metadata location.");
         var path = ValidatePath(metadata.GetString()!, cacheRoot);
@@ -73,7 +75,8 @@ internal static class DirtyCacheReader
                 if (count == buffer.Length)
                     throw new IOException("Cache metadata changed during inspection.");
                 using var document = JsonDocument.Parse(buffer.AsMemory(0, count));
-                if (!document.RootElement.TryGetProperty("Dirty", out var dirty) || dirty.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                    !document.RootElement.TryGetProperty("Dirty", out var dirty) || dirty.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
                     throw new JsonException("Incomplete cache metadata.");
                 if (!dirty.GetBoolean())
                     continue;

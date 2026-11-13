@@ -106,6 +106,9 @@ jobs:
       - name: Verify populated application window and process recovery
         shell: pwsh
         run: ./tests/process-smoke.ps1 -AppPath artifacts/win-x64/resodrive/resodrive.exe
+      - name: Verify published updater helper readiness and cancellation
+        shell: pwsh
+        run: ./tests/update-helper-smoke.ps1 -AppPath artifacts/win-x64/resodrive/resodrive.exe
       - name: Verify branded in-app Setup updater
         shell: pwsh
         env:

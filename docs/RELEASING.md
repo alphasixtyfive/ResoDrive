@@ -135,3 +135,71 @@ Before broad distribution, configure a protected CI signing identity and sign th
 executables, MSI, and setup bundle before release publication. Never place a signing certificate
 or password in the repository; use GitHub environment secrets or an external
 key-signing service.
+
+### Signing route reviewed on 13 November 2026
+
+Signed packages can continue to use GitHub Releases and the existing updater.
+SHA-256 sidecars must describe the final signed files. Signing identifies the
+publisher; it does not change this project's MIT licence or guarantee acceptance
+under every organization's application-control policy. SmartScreen reputation is
+separate from signature trust. See [Microsoft's signing options](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options).
+
+[SignPath Foundation](https://signpath.org/) is the proposed free route for this
+public open-source project. The application was submitted on 13 November 2026;
+approval is pending and no signing integration is active. Its certificate identifies the
+Foundation as publisher. Review its [eligibility and project requirements](https://signpath.org/terms),
+including MFA, release approval and a public signing policy. Do not claim their
+sponsorship before approval. The maintainer installed the SignPath GitHub App
+on 13 November 2026, including access to this repository. The application contact
+was supplied directly to SignPath and is not stored in the repository.
+
+Information supplied in the [application](https://signpath.org/apply):
+
+- Project: ResoDrive; maintainer: Alexey Ivanov (`alphasixtyfive`).
+- Repository: `https://github.com/alphasixtyfive/ResoDrive`; licence: MIT.
+- Downloads: `https://github.com/alphasixtyfive/ResoDrive/releases`.
+- Description: Windows tray application that mounts user-configured Nextcloud,
+  WebDAV and SFTP storage through rclone, with copy/mirror jobs, upload protection
+  and recovery. Nextcloud enrollment supports documented local remote wipe.
+  Setup includes an explicit, optional CET compatibility choice; disclose that
+  behavior during review rather than omitting installer functionality.
+- Build: public GitHub Actions on Windows, pinned .NET SDK and dependencies,
+  native installer actions and WiX MSI/Burn packages.
+- Requested scope: binaries built from this public repository, including the
+  application, native installer actions and release installers. The separate
+  private deployment bootstrapper is excluded. Upstream rclone is downloaded
+  separately and must not be re-signed as this project's own code.
+- Proposed release approver: the repository owner; external contributor changes
+  require maintainer review. Confirm SignPath's required MFA and approval settings
+  when the Foundation enables the project.
+
+### Required packaging order
+
+1. Build and sign the published application before packaging or embedding it in
+   the native installer actions. The copied updater helper retains that signature
+   because it is the same executable with a different filename.
+2. Finalize/sign any owned scripts that are embedded or executed by the installer,
+   then build and sign `ResoDrive.InstallerActions.dll` from those final inputs.
+   Preserve third-party signatures and review loaded/extracted files separately.
+3. Build/sign MSI, then build Setup from the signed MSI.
+4. Sign both the extracted Burn engine and the final reassembled Setup, following
+   [WiX's signing procedure](https://docs.firegiant.com/wix/tools/signing/).
+5. Verify signatures, timestamps, embedded payload identity and final hashes;
+   generate portable checksums, ZIP and installer sidecars from those exact files.
+   Exercise the existing acceptance gates against the signed artifacts and upload
+   them unchanged. A signed-release job must fail if signing or verification fails.
+
+An existing unsigned installation copies its own executable to launch the update
+helper. If that helper is what App Control blocks, signing only the new download
+cannot repair the first hop. A manual installation of the first approved signed
+Setup may be necessary; subsequent helpers inherit the signed installed image.
+Test the transition on the affected machine with its existing policy enabled.
+Also inspect the separately downloaded rclone executable: signing ResoDrive does
+not confer trust on a different executable.
+
+Store signing is free for Store-distributed MSIX packages, but Microsoft does not
+re-sign an existing EXE/MSI submission. Changing this application's distribution
+and update model to MSIX is a separate project. Azure Artifact Signing is a paid
+alternative, with individual eligibility currently limited to the US and Canada;
+eligible UK organizations have a separate route. These options and limits are
+documented in Microsoft's signing-options page above.

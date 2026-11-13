@@ -5,6 +5,33 @@ namespace ResoDrive.Windows.Tests;
 public sealed class MountOwnershipStoreTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RepairWritePreservesVerifiedOwnershipBackup(bool missingPrimary)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "rdrive-ownership-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = new ApplicationPaths(root);
+            paths.EnsureCreated();
+            using var store = new MountOwnershipStore(paths);
+            var first = new OwnedMount(Guid.NewGuid(), 1, DateTime.UtcNow, "rclone.exe", "first:", "R:");
+            var second = first with { MountId = Guid.NewGuid(), ProcessId = 2, Source = "second:", Target = "S:" };
+            await store.UpsertAsync(first, CancellationToken.None);
+            await store.UpsertAsync(second, CancellationToken.None);
+            var backup = await File.ReadAllTextAsync(paths.OwnershipFile + ".bak");
+            if (missingPrimary) File.Delete(paths.OwnershipFile);
+            else await File.WriteAllTextAsync(paths.OwnershipFile, "not json");
+
+            await store.UpsertAsync(second, CancellationToken.None);
+            Assert.Equal(backup, await File.ReadAllTextAsync(paths.OwnershipFile + ".bak"));
+            await File.WriteAllTextAsync(paths.OwnershipFile, "interrupted again");
+            Assert.Equal(first, Assert.Single(await store.LoadAsync(CancellationToken.None)));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Theory]
     [InlineData("not json")]
     [InlineData("null")]
     [InlineData("[null]")]
