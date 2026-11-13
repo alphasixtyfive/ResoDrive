@@ -242,8 +242,10 @@ this establishes a distribution gap, not the remote incident's precise cause.
 The [release guide](RELEASING.md#signing) now contains a prepared free-signing
 enrollment brief and the required packaging order. Following the owner's request,
 the free SignPath application was submitted and the owner installed the GitHub
-App. Foundation approval and actual signing remain pending. Version 0.3.49 is
+App. Foundation approval and actual signing remain pending. Version 0.3.50 is
 being prepared as an unsigned maintenance release at the owner's request.
+The 0.3.49 tagged workflow was cancelled before publication to include the
+owner's subsequent request for selection-only dropdowns. Its tag is retained.
 
 ### Remaining design work, in priority order
 
@@ -280,6 +282,22 @@ broaden failure scope without solving the defects reproduced in this pass.
 
 ### Verification
 
+- Version 0.3.50's full `build.ps1 -BuildMsi $true` passed: Core 206, Windows
+  771 and App 441 — **1,418 passed**, with one optional installed-MSI locator
+  skipped. MSI and Setup built without warnings. All 441 App tests also passed
+  with one available CPU. Published-process startup/recovery and the rejected
+  updater handoff smoke checks passed with disposable data.
+- The owner approved the compiled drive-settings layout and requested plain
+  choice labels, without "(saved)". Drive, setup and sync forms now use visible
+  sections; obsolete editable-combo and expander templates were removed. The
+  compiled forms were rendered at normal/minimum sizes and 100%, 150%, and 200%
+  scaling. Save/Cancel remain outside the scroll surface. Coverage includes
+  required selections, preserved custom/disabled values, rejected text input,
+  actual save validation and keyboard focus on the invalid cache field.
+- Settings and empty-state wording now describe user actions; removal dialogs
+  explicitly preserve files. Release-writing guidance requires plain user-facing
+  notes. Tagged hosted installer acceptance and desktop UAC checks remain the
+  publication gates; local builds alone do not establish those results.
 - Version 0.3.49's full `build.ps1 -BuildMsi $true` passed: Core 206, Windows
   771 and App 441 — **1,418 passed**, with the optional installed-MSI locator
   skipped. MSI and Setup built without warnings. The published helper process

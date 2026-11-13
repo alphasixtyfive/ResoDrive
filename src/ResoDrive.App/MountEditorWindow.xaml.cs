@@ -163,7 +163,7 @@ public partial class MountEditorWindow : WpfWindow
         if (!OptionsEditor.TryGetArguments(NetworkModeBox.IsChecked == true, out var arguments, out var argumentError))
         {
             error = argumentError ?? "Check the mount options.";
-            _invalidInput = OptionsEditor;
+            _invalidInput = OptionsEditor.InvalidInput ?? (FrameworkElement)OptionsEditor;
             return false;
         }
 
@@ -199,9 +199,9 @@ public partial class MountEditorWindow : WpfWindow
         if (!_ready) return;
         if (WpfMessageBox.Confirm(
                 this,
-                "Delete this drive? Remote data will not be changed.",
+                "Remove this drive from ResoDrive? Files on your storage will stay in place.",
                 Title,
-                "Delete drive"))
+                "Remove drive"))
         {
             DeleteRequested = true;
             DialogResult = true;
@@ -291,8 +291,6 @@ public partial class MountEditorWindow : WpfWindow
         peer?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
         if (_invalidInput is not null)
         {
-            for (DependencyObject? parent = _invalidInput; parent is not null; parent = LogicalTreeHelper.GetParent(parent))
-                if (parent is Expander expander) expander.IsExpanded = true;
             _invalidInput.BringIntoView();
             _invalidInput.Focus();
         }

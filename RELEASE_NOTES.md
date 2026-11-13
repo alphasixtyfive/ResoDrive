@@ -1,11 +1,12 @@
-This release improves recovery and makes failed updates easier to diagnose.
+This update tidies up settings and improves drive recovery and updates.
 
-- Keep a verified recovery backup intact when repairing damaged drive records.
-- Handle damaged cache metadata safely and correctly recognize idle rclone drives with caching turned off.
-- Stop a running rclone directly through its authenticated local control connection, including after its executable has been updated.
-- Keep ResoDrive open until the update helper confirms it is ready. Failed helper launches no longer leave an update marked as pending.
-- Explain Windows signature, application-control and reputation failures with their error codes. A successful installation followed by a blocked restart is reported accurately.
+- Caching and rclone options are now part of the form, without an Advanced section to expand.
+- Dropdowns offer fixed choices and check your selection when saving. Existing cache settings are kept.
+- Clearer labels make startup, updates and removing drives easier to understand. Invalid cache settings take you straight to the field that needs fixing.
+- Drive recovery handles damaged saved records more reliably, preserving a good backup.
+- Fixed upload checks getting stuck when caching is turned off, and improved how drives disconnect after an rclone update.
+- ResoDrive stays open until its update helper is ready. If Windows blocks an update or the app cannot reopen, the message explains what happened.
 
-Update from Settings, or download **ResoDrive-Setup.exe** below. The portable ZIP is also available.
+Update from Settings, or download **ResoDrive-Setup.exe** below. A portable ZIP is also available.
 
-This release is unsigned. An application for free open-source signing through SignPath Foundation has been submitted; approval and integration are pending. Windows App Control may still block this release. If the existing update helper is blocked, try the manual Setup download; signing and acceptance on the affected machine remain separate work.
+This release is still unsigned. We've applied for free open-source signing through SignPath Foundation and are waiting for approval. Windows App Control may still block it. If the in-app updater is blocked, try the Setup download; the unsigned installer may also be blocked by the same policy.

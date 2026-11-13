@@ -142,14 +142,16 @@
                    Foreground="{StaticResource WarningBrush}" Margin="0,2,0,6" FontSize="12" TextWrapping="Wrap"
                    AutomationProperties.LiveSetting="Polite" />
 
-        <Expander
+        <Border
           Grid.Row="9"
           Grid.ColumnSpan="2"
-          Header="Advanced"
-          Margin="0,7,0,0"
+          BorderBrush="{StaticResource BorderBrush}"
+          BorderThickness="0,1,0,0"
+          Padding="0,16,0,0"
+          Margin="0,12,0,0"
         >
           <controls:MountOptionsControl x:Name="OptionsEditor" />
-        </Expander>
+        </Border>
       </Grid>
     </ScrollViewer>
 
@@ -177,11 +179,11 @@
         Style="{StaticResource DangerButton}"
         HorizontalAlignment="Left"
         Click="Delete_Click"
-        AutomationProperties.Name="Delete drive"
+        AutomationProperties.Name="Remove drive"
       >
         <StackPanel Orientation="Horizontal">
           <TextBlock Style="{StaticResource InlineButtonGlyph}" Text="&#xE74D;" />
-          <TextBlock Text="Delete" VerticalAlignment="Center" />
+          <TextBlock Text="Remove" VerticalAlignment="Center" />
         </StackPanel>
       </Button>
       <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">

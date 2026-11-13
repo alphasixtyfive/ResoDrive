@@ -11,6 +11,17 @@ state, stored representation, and existing shared validator. Apply the same
 contract when typing, pasting, loading existing settings, and saving. Preserve
 supported custom values even when they are absent from the preset list.
 
+All dropdowns are selection-only. Cache size and retention use preset choices;
+when loading a valid existing custom value, include that value as a saved choice
+instead of replacing it or opening a text editor. Missing active selections must
+fail validation at the save boundary. Do not interpret `ComboBox.Text` as a new
+setting or reintroduce editable dropdown templates.
+
+Keep choice labels limited to their values; do not append implementation labels
+such as "(saved)". Use plain, always-visible caching and rclone-options sections
+instead of an Advanced expander. Prefer concise wording about what an action
+does; removing a drive or job must not imply that its files will be deleted.
+
 - Use a checkbox or selection for modes such as Unlimited. Never place a keyword
   in a numeric input or expect the user to know a storage sentinel. Reconnect
   attempts use a separate Unlimited checkbox (stored as 0) and a finite number

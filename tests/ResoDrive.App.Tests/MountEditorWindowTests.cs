@@ -1,5 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Controls.Primitives;
 using System.Windows.Threading;
 using ResoDrive.App.Controls;
 using ResoDrive.Core.Settings;
@@ -54,6 +56,7 @@ internal static class MountEditorWindowTests
                 Assert.Equal('S', drive.SelectedItem);
 
                 VerifyCustomCacheValues(Control<MountOptionsControl>(editor, "OptionsEditor"), settings.Arguments);
+                VerifyStrictSelectionsAtSave(editor, settings.Arguments);
                 VerifyReconnectInputs(editor);
             }
             finally { editor.Close(); }
@@ -203,6 +206,79 @@ internal static class MountEditorWindowTests
         Assert.Equal(37, disabled!.Restart.MaximumAttempts);
     }
 
+    private static void VerifyStrictSelectionsAtSave(MountEditorWindow editor, IReadOnlyList<string> original)
+    {
+        var options = Control<MountOptionsControl>(editor, "OptionsEditor");
+        options.LoadArguments(original);
+        var size = Control<ComboBox>(options, "SizeBox");
+        size.SelectedIndex = -1;
+        Assert.False(editor.TryBuildValue(out _, out var error));
+        Assert.Equal("Choose a cache size target.", error);
+        size.SelectedValue = "2G";
+        Assert.True(editor.TryBuildValue(out var saved, out error), error);
+        Assert.Contains("--vfs-cache-max-size=2G", saved!.Arguments);
+        Assert.Contains("--vfs-cache-max-age=48h", saved.Arguments);
+
+        Assert.IsType<Border>(options.Parent);
+        editor.Show();
+        size.SelectedIndex = -1;
+        Control<Button>(editor, "SaveButton").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        DrainDispatcher();
+        Assert.True(editor.IsVisible);
+        Assert.True(size.IsKeyboardFocused);
+        Assert.Equal("Choose a cache size target.", Control<TextBlock>(editor, "FormError").Text);
+        size.SelectedValue = "2G";
+        Assert.Equal(Visibility.Collapsed, Control<TextBlock>(editor, "FormError").Visibility);
+        editor.Width = 540;
+        editor.Height = 640;
+        editor.UpdateLayout();
+        var previewRoot = Assert.IsAssignableFrom<FrameworkElement>(editor.Content);
+        var scroll = Control<ScrollViewer>(editor, "EditorScrollViewer");
+        scroll.ScrollToTop();
+        DrainDispatcher();
+        editor.UpdateLayout();
+        MainWindowUpdateTests.Capture(previewRoot, 1.5d, new Size(editor.Width, editor.Height), "drive-layout-top");
+        scroll.ScrollToBottom();
+        DrainDispatcher();
+        editor.UpdateLayout();
+        MainWindowUpdateTests.Capture(previewRoot, 1.5d, new Size(editor.Width, editor.Height), "drive-layout-options");
+        foreach (var scale in new[] { 1d, 1.5d, 2d })
+        {
+            VisualTreeHelper.SetRootDpi(editor, new DpiScale(scale, scale));
+            editor.Width = editor.MinWidth;
+            editor.Height = editor.MinHeight;
+            editor.UpdateLayout();
+            Control<ScrollViewer>(editor, "EditorScrollViewer").ScrollToBottom();
+            DrainDispatcher();
+            editor.UpdateLayout();
+            size.Focus();
+            size.BringIntoView();
+            DrainDispatcher();
+            Control<ScrollViewer>(editor, "EditorScrollViewer").ScrollToBottom();
+            DrainDispatcher();
+            editor.UpdateLayout();
+            Assert.False(System.Windows.Input.ApplicationCommands.Paste.CanExecute(null, size));
+            var root = Assert.IsAssignableFrom<FrameworkElement>(editor.Content);
+            var bounds = size.TransformToAncestor(root).TransformBounds(new Rect(size.RenderSize));
+            var saveBounds = Control<Button>(editor, "SaveButton").TransformToAncestor(root)
+                .TransformBounds(new Rect(Control<Button>(editor, "SaveButton").RenderSize));
+            Assert.True(bounds.Top >= 0 && bounds.Bottom < saveBounds.Top);
+            MainWindowUpdateTests.Capture(root, scale, new Size(editor.Width, editor.Height), "strict-selects");
+            size.IsDropDownOpen = true;
+            DrainDispatcher();
+            var popup = Assert.IsType<Popup>(size.Template.FindName("PART_Popup", size));
+            var content = Assert.IsAssignableFrom<FrameworkElement>(popup.Child);
+            content.UpdateLayout();
+            MainWindowUpdateTests.Capture(content, scale, new Size(editor.Width, editor.Height), "cache-choices");
+            size.IsDropDownOpen = false;
+            Control<ComboBox>(options, "ModeBox").SelectedValue = "off";
+            DrainDispatcher();
+            MainWindowUpdateTests.Capture(root, scale, new Size(editor.Width, editor.Height), "disabled-selects");
+            Control<ComboBox>(options, "ModeBox").SelectedValue = "full";
+        }
+        options.LoadArguments(original);
+    }
+
     private static void VerifyCustomCacheValues(MountOptionsControl options, IReadOnlyList<string> original)
     {
         options.Measure(new System.Windows.Size(400, 500));
@@ -212,8 +288,12 @@ internal static class MountEditorWindowTests
         DrainDispatcher();
         var size = Control<ComboBox>(options, "SizeBox");
         var age = Control<ComboBox>(options, "AgeBox");
-        Assert.Equal("3G", size.Text);
-        Assert.Equal("48h", age.Text);
+        Assert.False(size.IsEditable);
+        Assert.False(age.IsEditable);
+        Assert.Equal("3G", size.SelectedValue);
+        Assert.Equal("48h", age.SelectedValue);
+        Assert.Null(size.Template.FindName("PART_EditableTextBox", size));
+        Assert.Null(age.Template.FindName("PART_EditableTextBox", age));
         Assert.True(options.TryGetArguments(false, out var unchanged, out var error), error);
         Assert.Equal(original, unchanged);
 
@@ -221,11 +301,11 @@ internal static class MountEditorWindowTests
         DrainDispatcher();
         Assert.True(options.TryGetArguments(false, out var selected, out error), error);
         Assert.Contains("--vfs-cache-max-size=2G", selected);
-        age.Text = "49h";
+        age.SelectedValue = "72h";
         DrainDispatcher();
         Assert.True(options.TryGetArguments(false, out var changed, out error), error);
         Assert.Contains("--vfs-cache-max-size=2G", changed);
-        Assert.Contains("--vfs-cache-max-age=49h", changed);
+        Assert.Contains("--vfs-cache-max-age=72h", changed);
 
         var mode = Control<ComboBox>(options, "ModeBox");
         mode.SelectedValue = "off";
@@ -235,29 +315,35 @@ internal static class MountEditorWindowTests
         mode.SelectedValue = "full";
         DrainDispatcher();
         Assert.Equal("2 GiB", size.Text);
-        Assert.Equal("49h", age.Text);
+        Assert.Equal("72h", age.SelectedValue);
 
         foreach (var invalid in new[] { "", "banana", "2GB", "8E", "-1", "3G\n" })
         {
-            size.Text = invalid;
+            options.LoadArguments(["--vfs-cache-mode=full", "--vfs-cache-max-size=" + invalid, "--vfs-cache-max-age=48h"]);
             DrainDispatcher();
             Assert.False(options.TryGetArguments(false, out _, out error));
-            Assert.Contains(invalid.Any(char.IsControl) ? "control characters" : "--vfs-cache-max-size", error!, StringComparison.Ordinal);
+            Assert.Null(size.SelectedItem);
+            Assert.Equal("Choose a cache size target.", error);
         }
-        size.Text = "3.25GiB";
         foreach (var invalid in new[] { "", "banana", "1d2h", "9223372036854775808ns", "48h\n" })
         {
-            age.Text = invalid;
+            options.LoadArguments(["--vfs-cache-mode=full", "--vfs-cache-max-size=3.25GiB", "--vfs-cache-max-age=" + invalid]);
             DrainDispatcher();
             Assert.False(options.TryGetArguments(false, out _, out error));
-            Assert.Contains(invalid.Any(char.IsControl) ? "control characters" : "--vfs-cache-max-age", error!, StringComparison.Ordinal);
+            Assert.Null(age.SelectedItem);
+            Assert.Equal("Choose when to remove unused cached files.", error);
         }
-        age.Text = "48h";
+        options.LoadArguments(["--vfs-cache-mode=full", "--vfs-cache-max-size=3.25GiB", "--vfs-cache-max-age=48h"]);
         Assert.True(options.TryGetArguments(false, out var custom, out error), error);
         Assert.Contains("--vfs-cache-max-size=3.25GiB", custom);
         Assert.Contains("--vfs-cache-max-age=48h", custom);
-        size.Text = "banana";
-        age.Text = "banana";
+        options.LoadArguments(original);
+        size.SelectedIndex = -1;
+        age.SelectedIndex = -1;
+        size.Text = "3.5G";
+        age.Text = "49h";
+        DrainDispatcher();
+        Assert.False(options.TryGetArguments(false, out _, out error));
         mode.SelectedValue = "off";
         DrainDispatcher();
         Assert.True(options.TryGetArguments(false, out var disabled, out error), error);
@@ -267,11 +353,9 @@ internal static class MountEditorWindowTests
             RcloneMountOptions.Value(disabled, RcloneMountOptions.CacheAgeOption));
         mode.SelectedValue = "full";
         DrainDispatcher();
-        Assert.Equal("banana", size.Text);
-        Assert.Equal("banana", age.Text);
         Assert.False(options.TryGetArguments(false, out _, out error));
-        size.Text = "3.25GiB";
-        age.Text = "48h";
+        size.SelectedValue = "3G";
+        age.SelectedValue = "48h";
         mode.SelectedIndex = -1;
         Assert.False(options.TryGetArguments(false, out _, out error));
         Assert.Equal("Choose a caching mode.", error);

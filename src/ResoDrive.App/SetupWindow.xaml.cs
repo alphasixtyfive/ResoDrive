@@ -492,8 +492,8 @@ public partial class SetupWindow : WpfWindow
         }
         if (!OptionsEditor.TryGetArguments(NetworkModeBox.IsChecked == true, out var mountArguments, out var argumentError))
         {
-            AdvancedBox.IsExpanded = true;
-            return ShowInputError(OptionsEditor, argumentError ?? "Check the mount options.");
+            return ShowInputError(OptionsEditor.InvalidInput ?? (FrameworkElement)OptionsEditor,
+                argumentError ?? "Check the mount options.");
         }
         var candidate = new ProfileSetupRequest
         {
@@ -546,13 +546,8 @@ public partial class SetupWindow : WpfWindow
 
     private void Input_Changed(object sender, RoutedEventArgs e)
     {
-        // Expanding/collapsing a section changes its template's toggle button,
-        // not the input. Keep actionable feedback visible until input changes.
-        if (e.OriginalSource is System.Windows.Controls.Primitives.ToggleButton
-            { TemplatedParent: System.Windows.Controls.Expander }) return;
-        // Editable combo-box templates can initialize when Advanced first
-        // expands. Preserve its error while its actual values remain invalid.
-        if (_inputError && _invalidInput == OptionsEditor &&
+        // Keep the options error visible until its values are valid.
+        if (_inputError && _invalidInput is not null && OptionsEditor.IsAncestorOf(_invalidInput) &&
             !OptionsEditor.TryGetArguments(NetworkModeBox.IsChecked == true, out _, out var error))
         {
             SetInputErrorMessage(error ?? "Check the mount options.");
@@ -730,7 +725,7 @@ public partial class SetupWindow : WpfWindow
         RemotePathBox.IsEnabled = !running;
         DriveBox.IsEnabled = !running;
         NetworkModeBox.IsEnabled = !running;
-        AdvancedBox.IsEnabled = !running;
+        CacheSettingsSection.IsEnabled = !running;
         AutoMountBox.IsEnabled = !running;
         StartWithWindowsBox.IsEnabled = !running;
         Cursor = running ? System.Windows.Input.Cursors.Wait : System.Windows.Input.Cursors.Arrow;

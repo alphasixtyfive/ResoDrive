@@ -85,6 +85,37 @@ internal static class MainWindowUpdateTests
         }
     }
 
+    internal static void VerifyEditorLayout(Window window, string scrollName, string actionName, string prefix)
+    {
+        window.Show();
+        var originalSize = new Size(window.Width, window.Height);
+        var scroll = Assert.IsType<ScrollViewer>(window.FindName(scrollName));
+        var action = Assert.IsType<Button>(window.FindName(actionName));
+        var root = Assert.IsAssignableFrom<FrameworkElement>(window.Content);
+        foreach (var scale in new[] { 1d, 1.5d, 2d })
+        {
+            VisualTreeHelper.SetRootDpi(window, new DpiScale(scale, scale));
+            foreach (var size in new[] { originalSize, new Size(window.MinWidth, window.MinHeight) })
+            {
+                window.Width = size.Width;
+                window.Height = size.Height;
+                window.Measure(size);
+                window.Arrange(new Rect(size));
+                window.UpdateLayout();
+                scroll.ScrollToBottom();
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
+                window.UpdateLayout();
+                var button = action.TransformToAncestor(root).TransformBounds(new Rect(action.RenderSize));
+                var viewport = scroll.TransformToAncestor(root).TransformBounds(new Rect(scroll.RenderSize));
+                Assert.True(button.Top >= viewport.Bottom && button.Bottom <= root.ActualHeight);
+                Assert.True(button.Right <= root.ActualWidth && button.Width >= 50);
+                Capture(root, scale, size, prefix);
+            }
+        }
+        window.Width = originalSize.Width;
+        window.Height = originalSize.Height;
+    }
+
     internal static void Capture(FrameworkElement root, double scale, Size size, string prefix = "update")
     {
         var directory = Environment.GetEnvironmentVariable("RESODRIVE_UI_CAPTURE_DIR");

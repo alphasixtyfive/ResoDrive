@@ -61,7 +61,7 @@ public partial class SyncEditorWindow : WpfWindow
             mounts.FirstOrDefault(mount => mount.Id == mountId)
             ?? (existing is null && mountId is null && mounts.Count > 0 ? mounts[0] : null);
         DeleteButton.Visibility = existing is null ? Visibility.Collapsed : Visibility.Visible;
-        Heading.Text = existing is null ? "New sync job" : "Edit sync job";
+        Heading.Text = existing is null ? "Add sync job" : "Edit sync job";
         if (existing is null)
         {
             ModeBox.SelectedItem = Modes[0];
@@ -109,9 +109,6 @@ public partial class SyncEditorWindow : WpfWindow
             SetInputFeedback(error ?? "Check the sync settings.");
             if (_invalidInput is not null)
             {
-                for (DependencyObject? parent = _invalidInput; parent is not null;
-                     parent = LogicalTreeHelper.GetParent(parent))
-                    if (parent is Expander expander) expander.IsExpanded = true;
                 _invalidInput.BringIntoView();
                 _invalidInput.Focus();
             }
@@ -240,9 +237,9 @@ public partial class SyncEditorWindow : WpfWindow
         if (
             WpfMessageBox.Confirm(
                 this,
-                "Delete this sync job? Local and remote files stay in place. Any managed copies remain included in Nextcloud remote wipe.",
+                "Remove this sync job? Files on this PC and your storage will stay in place. Any managed copies remain included in Nextcloud remote wipe.",
                 Title,
-                "Delete sync job"
+                "Remove sync job"
             )
         )
         {

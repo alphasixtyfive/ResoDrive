@@ -1,12 +1,19 @@
 # Changelog
 
-## [0.3.49] - 2026-11-13
+## [0.3.50] - 2026-11-13
 
+- Keep caching and rclone options visible in the form, without an Advanced expander or extra labels on existing values.
+- Simplify settings wording, clarify that removing a drive or sync job keeps its files, and focus the field that needs fixing when cache settings are invalid.
+- Make all dropdowns selection-only, validate required selections on save and preserve valid previously saved custom cache values as choices.
 - Preserve verified recovery backups when repairing corrupt drive records and safely handle malformed cache metadata.
 - Recognize rclone's cache-off upload queue responses and use its authenticated local control endpoint for graceful shutdown.
 - Wait for updater-helper readiness before closing the app, and finalize failures when the helper cannot start.
 - Report Windows signature and application-control blocks with useful error codes, including a blocked restart after successful installation.
 - Apply for SignPath Foundation's free open-source signing program; this release remains unsigned pending approval and integration.
+
+## [0.3.49] - 2026-11-13 (unpublished verification build)
+
+- Superseded before publication to include selection-only dropdowns in 0.3.50. The existing tag is retained.
 
 ## [0.3.48] - 2026-10-30
 

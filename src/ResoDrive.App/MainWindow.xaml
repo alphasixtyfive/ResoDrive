@@ -380,7 +380,7 @@
           </Border.Style>
           <StackPanel HorizontalAlignment="Center">
             <TextBlock Text="No drives yet" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center" />
-            <TextBlock Text="Add a connection to mount remote storage as a Windows drive." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" TextAlignment="Center" Margin="0,5,0,14" />
+            <TextBlock Text="Connect your storage to browse files in File Explorer." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" TextAlignment="Center" Margin="0,5,0,14" />
             <Button Style="{StaticResource AccentButton}" HorizontalAlignment="Center" Click="AddMount_Click" AutomationProperties.Name="Add your first drive">
               <StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource InlineButtonGlyph}" Text="&#xE710;" /><TextBlock Text="Add drive" /></StackPanel>
             </Button>
@@ -406,7 +406,7 @@
             <Button Style="{StaticResource AccentButton}" Click="NewJob_Click" AutomationProperties.Name="Create sync job">
               <StackPanel Orientation="Horizontal">
                 <TextBlock Style="{StaticResource InlineButtonGlyph}" Text="&#xE710;" />
-                <TextBlock Text="New job" VerticalAlignment="Center" />
+                <TextBlock Text="Add sync job" VerticalAlignment="Center" />
               </StackPanel>
             </Button>
           </StackPanel>
@@ -488,9 +488,9 @@
           </Border.Style>
           <StackPanel HorizontalAlignment="Center">
             <TextBlock Text="No sync jobs yet" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center" />
-            <TextBlock Text="Create a one-way copy or mirror job for one of your drives." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" TextAlignment="Center" Margin="0,5,0,14" />
+            <TextBlock Text="Copy files between your storage and a folder on this PC." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" TextAlignment="Center" Margin="0,5,0,14" />
             <Button Style="{StaticResource AccentButton}" HorizontalAlignment="Center" Click="NewJob_Click" AutomationProperties.Name="Create your first sync job">
-              <StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource InlineButtonGlyph}" Text="&#xE710;" /><TextBlock Text="New job" /></StackPanel>
+              <StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource InlineButtonGlyph}" Text="&#xE710;" /><TextBlock Text="Add sync job" /></StackPanel>
             </Button>
           </StackPanel>
         </Border>
@@ -584,7 +584,7 @@
           </Grid.ColumnDefinitions>
           <StackPanel>
             <TextBlock Style="{StaticResource Title}" Text="Settings" />
-            <TextBlock Style="{StaticResource Subtitle}" Text="Application behavior, components, and settings transfer" />
+            <TextBlock Style="{StaticResource Subtitle}" Text="Startup, updates and backups" />
           </StackPanel>
           <Button
             Grid.Column="1"
@@ -609,14 +609,15 @@
                 <TextBlock Text="General" FontSize="15" FontWeight="SemiBold" />
                 <Grid MinHeight="36" Margin="0,8,0,0">
                   <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                  <TextBlock Text="Close window to the notification area" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,7,16,7" />
+                  <TextBlock Text="Keep running when the window closes" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,7,16,7" />
                   <CheckBox
                     x:Name="MinimizeToTrayBox"
                     Grid.Column="1"
                     Style="{StaticResource ToggleSwitch}"
                     HorizontalAlignment="Right"
                     VerticalAlignment="Center"
-                    AutomationProperties.Name="Close window to the notification area"
+                    AutomationProperties.Name="Keep running when the window closes"
+                    ToolTip="Drives stay connected. Use the tray icon to reopen ResoDrive or quit."
                     Click="SettingsToggle_Click"
                   />
                 </Grid>
@@ -630,6 +631,7 @@
                     HorizontalAlignment="Right"
                     VerticalAlignment="Center"
                     AutomationProperties.Name="{x:Static local:ProductInfo.StartWithWindowsText}"
+                    ToolTip="Start in the tray when you sign in."
                     Click="SettingsToggle_Click"
                   />
                 </Grid>
@@ -637,7 +639,7 @@
                   <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                   <StackPanel VerticalAlignment="Center" Margin="0,5,16,5">
                     <TextBlock Text="Connection profiles" />
-                    <TextBlock Text="Optional deployment presets for adding drives" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,2,0,0" />
+                    <TextBlock Text="Saved connection details for new drives" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,2,0,0" />
                   </StackPanel>
                   <Button Grid.Column="1" Style="{StaticResource ButtonStyle}" VerticalAlignment="Center" Click="OpenProfilesFile_Click">
                     <StackPanel Orientation="Horizontal">
@@ -656,7 +658,7 @@
                   <RowDefinition Height="Auto" />
                   <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
-                <TextBlock Text="Components" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,12" />
+                <TextBlock Text="Updates and components" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,12" />
                 <Grid Grid.Row="1" MinHeight="48">
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="22" />
@@ -845,7 +847,7 @@
                   <Button Style="{StaticResource ButtonStyle}" Click="ExportDiagnostics_Click"
                           AutomationProperties.Name="Export diagnostic report" Margin="0,0,8,8"
                           ToolTip="Versions, host health, transfer status and recent diagnostic events. Private connection details are omitted.">
-                    <TextBlock Text="Export diagnostics" />
+                    <TextBlock Text="Save diagnostic report" />
                   </Button>
                 </WrapPanel>
               </StackPanel>

@@ -28,7 +28,10 @@ public repository before publishing.
 
 1. Set `VersionPrefix` in `Directory.Build.props`.
 2. Rewrite `RELEASE_NOTES.md` in short, plain language for the current release and
-   update other release-facing documentation as needed.
+   update other release-facing documentation as needed. Describe what users will
+   notice in natural sentences. Avoid internal class names, test counts and
+   implementation jargon; keep those in engineering records. Do not claim fixes
+   or signing that have not been verified.
 3. Run `./build.ps1` on Windows and smoke-test the setup executable, portable
    package, and MSI. Complete the UAC upgrade checks below before publishing.
    Verify that Setup leaves one visible, removable MSI entry and no retained

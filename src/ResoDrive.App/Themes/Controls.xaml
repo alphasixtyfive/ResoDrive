@@ -382,13 +382,8 @@
       <ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Arrow" Property="Stroke" Value="{StaticResource TextBrush}" /></Trigger></ControlTemplate.Triggers>
     </ControlTemplate></Setter.Value></Setter>
   </Style>
-  <Style x:Key="EditableComboTextBox" TargetType="TextBox">
-    <Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ComboBox}}" /><Setter Property="CaretBrush" Value="{StaticResource TextBrush}" />
-    <Setter Property="SelectionBrush" Value="{StaticResource AccentBrush}" /><Setter Property="Background" Value="Transparent" />
-    <Setter Property="BorderThickness" Value="0" /><Setter Property="Padding" Value="9,0,0,0" />
-    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="TextBox"><ScrollViewer x:Name="PART_ContentHost" /></ControlTemplate></Setter.Value></Setter>
-  </Style>
   <Style TargetType="ComboBox" BasedOn="{StaticResource FieldBase}">
+    <Setter Property="IsEditable" Value="False" />
     <Setter Property="Padding" Value="9,0,4,0" /><Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ComboBox">
       <Grid>
@@ -396,7 +391,6 @@
         <Grid Margin="{TemplateBinding Padding}"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="28" /></Grid.ColumnDefinitions>
           <ToggleButton Grid.ColumnSpan="2" Style="{StaticResource ComboToggleStyle}" IsChecked="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}" />
           <ContentPresenter x:Name="Selection" VerticalAlignment="Center" Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}" IsHitTestVisible="False" />
-          <TextBox x:Name="PART_EditableTextBox" Style="{StaticResource EditableComboTextBox}" Visibility="Collapsed" Height="Auto" Margin="-9,0,0,0" VerticalContentAlignment="Center" Focusable="True" />
         </Grid>
         <Border x:Name="AccentLine" Height="2" Background="{StaticResource AccentBrush}" CornerRadius="0,0,4,4" VerticalAlignment="Bottom" Opacity="0" />
         <Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom" AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
@@ -406,7 +400,6 @@
         </Popup>
       </Grid>
       <ControlTemplate.Triggers>
-        <Trigger Property="IsEditable" Value="True"><Setter TargetName="PART_EditableTextBox" Property="Visibility" Value="Visible" /><Setter TargetName="Selection" Property="Visibility" Value="Collapsed" /></Trigger>
         <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{StaticResource ControlHoverBrush}" /><Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource BorderHoverBrush}" /></Trigger>
         <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter TargetName="AccentLine" Property="Opacity" Value="1" /></Trigger>
         <Trigger Property="IsDropDownOpen" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{StaticResource ControlPressedBrush}" /><Setter TargetName="AccentLine" Property="Opacity" Value="1" /></Trigger>
@@ -473,42 +466,6 @@
   </Style>
   <Style TargetType="ListBox"><Setter Property="Background" Value="Transparent" /><Setter Property="Foreground" Value="{StaticResource TextBrush}" /><Setter Property="BorderThickness" Value="0" /><Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" /><Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" /><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBox"><ScrollViewer Focusable="False" Padding="{TemplateBinding Padding}"><ItemsPresenter /></ScrollViewer></ControlTemplate></Setter.Value></Setter></Style>
   <Style TargetType="ListBoxItem"><Setter Property="Background" Value="Transparent" /><Setter Property="Foreground" Value="{StaticResource TextBrush}" /><Setter Property="HorizontalContentAlignment" Value="Stretch" /><Setter Property="FocusVisualStyle" Value="{x:Null}" /><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><Border x:Name="Item" Background="{TemplateBinding Background}" CornerRadius="6"><ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" /></Border><ControlTemplate.Triggers><Trigger Property="IsSelected" Value="True"><Setter TargetName="Item" Property="Background" Value="{DynamicResource AccentBrush}" /><Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" /></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style>
-
-  <Style x:Key="ExpanderHeaderStyle" TargetType="ToggleButton">
-    <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
-    <Setter Property="Background" Value="{StaticResource CardBrush}" />
-    <Setter Property="FocusVisualStyle" Value="{StaticResource FocusStyle}" />
-    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-    <Setter Property="Padding" Value="12,0" />
-    <Setter Property="MinHeight" Value="40" />
-    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ToggleButton">
-      <Border x:Name="Chrome" Background="{TemplateBinding Background}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="4" Padding="{TemplateBinding Padding}">
-        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="28" /></Grid.ColumnDefinitions>
-          <ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="True" Margin="0,0,12,0" />
-          <Path x:Name="Chevron" Grid.Column="1" Data="M 0 0 L 4 4 L 8 0" Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Width="8" Height="4" HorizontalAlignment="Center" VerticalAlignment="Center" RenderTransformOrigin=".5,.5" />
-        </Grid>
-      </Border>
-      <ControlTemplate.Triggers>
-        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{StaticResource ControlHoverBrush}" /></Trigger>
-        <Trigger Property="IsPressed" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{StaticResource ControlPressedBrush}" /></Trigger>
-        <Trigger Property="IsChecked" Value="True"><Setter TargetName="Chrome" Property="CornerRadius" Value="4,4,0,0" /><Setter TargetName="Chevron" Property="RenderTransform"><Setter.Value><RotateTransform Angle="180" /></Setter.Value></Setter></Trigger>
-        <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Chrome" Property="Background" Value="{StaticResource CardBrush}" /><Setter TargetName="Chevron" Property="Stroke" Value="{StaticResource DisabledTextBrush}" /><Setter Property="Foreground" Value="{StaticResource DisabledTextBrush}" /></Trigger>
-      </ControlTemplate.Triggers>
-    </ControlTemplate></Setter.Value></Setter>
-  </Style>
-  <Style TargetType="Expander">
-    <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
-    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Expander">
-      <StackPanel>
-        <ToggleButton Style="{StaticResource ExpanderHeaderStyle}" Content="{TemplateBinding Header}" ContentTemplate="{TemplateBinding HeaderTemplate}" IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}" />
-        <Border x:Name="Content" Visibility="Collapsed" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1,0,1,1" CornerRadius="0,0,4,4" Padding="12">
-          <ContentPresenter ContentSource="Content" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" />
-        </Border>
-      </StackPanel>
-      <ControlTemplate.Triggers><Trigger Property="IsExpanded" Value="True"><Setter TargetName="Content" Property="Visibility" Value="Visible" /></Trigger></ControlTemplate.Triggers>
-    </ControlTemplate></Setter.Value></Setter>
-  </Style>
 
   <Style TargetType="ToolTip"><Setter Property="Background" Value="{StaticResource PopupBrush}" /><Setter Property="Foreground" Value="{StaticResource TextBrush}" /><Setter Property="BorderBrush" Value="{StaticResource BorderHoverBrush}" /><Setter Property="BorderThickness" Value="1" /><Setter Property="Padding" Value="8,5" /></Style>
 </ResourceDictionary>

@@ -8,6 +8,7 @@ public partial class MountOptionsControl : System.Windows.Controls.UserControl
 {
     private RcloneMountOptions _options = new([]);
     private bool _loading;
+    internal System.Windows.Controls.Control? InvalidInput { get; private set; }
     private static readonly Choice[] Modes =
     [
         new("Read and write", "full"),
@@ -25,8 +26,6 @@ public partial class MountOptionsControl : System.Windows.Controls.UserControl
     {
         InitializeComponent();
         ModeBox.ItemsSource = Modes;
-        SizeBox.ItemsSource = Sizes;
-        AgeBox.ItemsSource = Ages;
         LoadArguments([], newMount: true);
     }
 
@@ -35,8 +34,8 @@ public partial class MountOptionsControl : System.Windows.Controls.UserControl
         _loading = true;
         _options = new(arguments, newMount);
         ModeBox.SelectedValue = _options.CacheMode;
-        SetChoice(SizeBox, Sizes, _options.CacheSize);
-        SetChoice(AgeBox, Ages, _options.CacheAge);
+        SetChoice(SizeBox, Sizes, _options.CacheSize, RcloneMountOptions.CacheSizeOption);
+        SetChoice(AgeBox, Ages, _options.CacheAge, RcloneMountOptions.CacheAgeOption);
         ArgumentsBox.Text = RcloneArgumentTextCodec.Format(_options.AdditionalArguments);
         _loading = false;
         UpdateHints();
@@ -44,47 +43,58 @@ public partial class MountOptionsControl : System.Windows.Controls.UserControl
 
     public bool TryGetArguments(bool networkMode, out string[] arguments, out string? error)
     {
+        InvalidInput = null;
         if (ModeBox.SelectedValue is not string cacheMode || !Modes.Any(mode => mode.Value == cacheMode))
         {
+            InvalidInput = ModeBox;
             arguments = [];
             error = "Choose a caching mode.";
+            return false;
+        }
+        if (cacheMode != "off" && (SizeBox.SelectedItem is not Choice || AgeBox.SelectedItem is not Choice))
+        {
+            InvalidInput = SizeBox.SelectedItem is not Choice ? SizeBox : AgeBox;
+            arguments = [];
+            error = SizeBox.SelectedItem is not Choice ? "Choose a cache size target." : "Choose when to remove unused cached files.";
             return false;
         }
         var additional = RcloneArgumentTextCodec.Parse(ArgumentsBox.Text);
         if (additional.Any(RcloneMountOptions.IsControlOption))
         {
+            InvalidInput = ArgumentsBox;
             arguments = [];
             error = "Use the caching and network-drive controls for cache and network-mode options; remove those options from Additional rclone options.";
             return false;
         }
         arguments = _options.Compose(cacheMode,
-            CacheValue(SizeBox, RcloneMountOptions.CacheSizeOption, _options.CacheSize, cacheMode == "off"),
-            CacheValue(AgeBox, RcloneMountOptions.CacheAgeOption, _options.CacheAge, cacheMode == "off"),
+            CacheValue(SizeBox, _options.CacheSize),
+            CacheValue(AgeBox, _options.CacheAge),
             networkMode, additional);
         var validation = RcloneArgumentPolicy.ValidateMount(arguments);
         // Keep feedback outside the scroll surface concise. The validator still
         // checks every issue; users can correct one actionable error at a time.
         error = validation.IsValid ? null : validation.Issues[0].Message;
+        if (!validation.IsValid) InvalidInput = ArgumentsBox;
         return validation.IsValid;
     }
 
-    private static void SetChoice(WpfComboBox box, IEnumerable<Choice> choices, string value)
+    private static void SetChoice(WpfComboBox box, IEnumerable<Choice> choices, string value, string option)
     {
-        var choice = choices.FirstOrDefault(item => item.Value == value);
+        var available = choices.ToList();
+        var choice = available.FirstOrDefault(item => item.Value == value);
+        // Retain a valid saved value without allowing arbitrary new text input.
+        if (choice is null && RcloneArgumentPolicy.ValidateMount([option + "=" + value]).IsValid)
+        {
+            choice = new Choice(value, value);
+            available.Add(choice);
+        }
+        box.ItemsSource = available;
         box.SelectedItem = choice;
-        if (choice is null) box.Text = value;
     }
 
-    private static string ChoiceValue(WpfComboBox box) =>
-        box.SelectedItem is Choice choice && box.Text == choice.Label ? choice.Value :
-            box.Text.Any(char.IsControl) ? box.Text : box.Text.Trim();
-
-    private static string CacheValue(WpfComboBox box, string option, string storedValue, bool disabled)
-    {
-        var value = ChoiceValue(box);
-        return disabled && !RcloneArgumentPolicy.ValidateMount([option + "=" + value]).IsValid
-            ? storedValue : value;
-    }
+    // Missing active choices are rejected above; disabled fields retain their stored value.
+    private static string CacheValue(WpfComboBox box, string storedValue) =>
+        box.SelectedItem is Choice choice ? choice.Value : storedValue;
 
     private void Option_Changed(object sender, SelectionChangedEventArgs e) => UpdateHints();
 

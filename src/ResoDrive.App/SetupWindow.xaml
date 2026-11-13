@@ -202,15 +202,17 @@
             </StackPanel>
             </StackPanel>
 
-            <Expander
-              x:Name="AdvancedBox"
+            <Border
+              x:Name="CacheSettingsSection"
               Grid.Row="10"
               Grid.ColumnSpan="2"
-              Header="Advanced"
-              Margin="0,8,0,0"
+              BorderBrush="{StaticResource BorderBrush}"
+              BorderThickness="0,1,0,0"
+              Padding="0,16,0,0"
+              Margin="0,12,0,0"
             >
               <controls:MountOptionsControl x:Name="OptionsEditor" />
-            </Expander>
+            </Border>
           </Grid>
         </Border>
 
@@ -227,6 +229,7 @@
               x:Name="StartWithWindowsBox"
               Style="{StaticResource ToggleSwitch}"
               Content="{x:Static local:ProductInfo.StartWithWindowsText}"
+              ToolTip="Start in the tray when you sign in."
               IsChecked="True"
               Margin="0,7,0,0"
               AutomationProperties.Name="{x:Static local:ProductInfo.StartWithWindowsText}"

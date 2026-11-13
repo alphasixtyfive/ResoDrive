@@ -38,7 +38,7 @@ public static class ProductInfo
     public static string OpenLabel => $"Open {Name}";
     public static string ExitLabel => $"Exit {Name}";
     public static string WelcomeTitle => $"Welcome to {Name}";
-    public static string StartWithWindowsText => $"Start {Name} in the notification area with Windows";
+    public static string StartWithWindowsText => $"Start {Name} with Windows";
     public static string MountOnStartText => $"Mount automatically when {Name} starts";
     public static string RunSyncOnStartText => $"Run once when {Name} starts";
     public static string WelcomeTrayText =>

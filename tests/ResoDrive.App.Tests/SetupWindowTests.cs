@@ -8,11 +8,13 @@ namespace ResoDrive.App.Tests;
 
 internal static class SetupWindowTests
 {
-    // Share the existing STA application fixture. Never show setup or provision a connection.
+    // Share the STA fixture. Disable startup IO; never provision a connection.
     internal static void VerifyWithApplicationResources()
     {
         var paths = new ApplicationPaths(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
         var editor = new SetupWindow(paths, reservedDriveNames: ["Existing files"]);
+        editor.Loaded -= typeof(SetupWindow).GetMethod("SetupWindow_Loaded", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .CreateDelegate<RoutedEventHandler>(editor);
         try
         {
             SetField(editor, "_catalog", new SetupProfileCatalog([], ProfileCatalogSource.None));
@@ -55,15 +57,10 @@ internal static class SetupWindowTests
                 AssertInvalid(editor, "port");
                 Assert.True(Control<Button>(editor, "CancelButton").IsEnabled);
             }
-            var advanced = Control<Expander>(editor, "AdvancedBox");
             editor.Measure(new System.Windows.Size(520, 380));
             editor.Arrange(new Rect(0, 0, 520, 380));
             editor.UpdateLayout();
             AssertInvalid(editor, "port");
-            var portError = Control<TextBlock>(editor, "StatusText").Text;
-            advanced.IsExpanded = true;
-            advanced.IsExpanded = false;
-            Assert.Equal(portError, Control<TextBlock>(editor, "StatusText").Text);
             foreach (var valid in new[] { "1", "22", "65535" })
             {
                 port.Text = valid;
@@ -142,11 +139,10 @@ internal static class SetupWindowTests
             Assert.False(editor.TryPrepareSetup(out _, out _));
             var optionsError = Control<TextBlock>(editor, "StatusText").Text;
             Assert.True(optionsError.Length < 120);
-            advanced.IsExpanded = false;
+            MainWindowUpdateTests.VerifyEditorLayout(editor, "SetupScrollViewer", "ConnectButton", "setup-error");
             options.Measure(new System.Windows.Size(350, 200));
             options.Arrange(new Rect(0, 0, 350, 200));
             options.UpdateLayout();
-            advanced.IsExpanded = true;
             Assert.Equal(optionsError, Control<TextBlock>(editor, "StatusText").Text);
             arguments.Text = "--timeout=1m";
             Assert.Empty(Control<TextBlock>(editor, "StatusText").Text);

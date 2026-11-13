@@ -256,6 +256,7 @@ public sealed class SyncEditorWindowTests
             Control<TextBox>(editor, "ArgumentsBox").Text = "--max-size=3GiB";
             Assert.True(editor.TryGetValue(out value, out error), error);
             Assert.Contains("--max-size=3GiB", value!.Arguments);
+            MainWindowUpdateTests.VerifyEditorLayout(editor, "EditorScrollViewer", "SaveButton", "sync-options");
             Control<ComboBox>(editor, "ModeBox").SelectedIndex = -1;
             Assert.False(editor.TryGetValue(out value, out error));
             Assert.Null(value);
