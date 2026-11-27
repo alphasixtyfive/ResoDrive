@@ -20,7 +20,7 @@ public partial class SetupWindow : WpfWindow
     private static readonly string[] AuthenticationMethods = ["Password", "Private key"];
     private readonly ApplicationPaths _paths;
     private readonly bool _firstRun;
-    private readonly IReadOnlySet<char> _reservedDriveLetters;
+    private readonly HashSet<char> _reservedDriveLetters;
     private readonly HashSet<string> _reservedDriveNames;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private SetupProfileCatalog? _catalog;
@@ -51,6 +51,7 @@ public partial class SetupWindow : WpfWindow
             .ToHashSet();
         _reservedDriveNames = (reservedDriveNames ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase);
         InitializeComponent();
+        SetupScrollViewer.IsEnabled = false;
         ConnectionTypeBox.ItemsSource = ConnectionTypes;
         AuthenticationBox.ItemsSource = AuthenticationMethods;
         AuthenticationBox.SelectedIndex = 0;
@@ -148,16 +149,11 @@ public partial class SetupWindow : WpfWindow
                 ? catalog.Diagnostic ?? string.Empty
                 : string.Empty;
         }
-        try
-        {
-            await RefreshWinFspAsync(force: true, initial: true);
-        }
-        finally
-        {
-            _prerequisitesReady = true;
-            if (!_lifetimeCancellation.IsCancellationRequested) _prerequisiteTimer.Start();
-            SetRunning(false);
-        }
+        await RefreshWinFspAsync(force: true, initial: true);
+        if (!IsLoaded || _lifetimeCancellation.IsCancellationRequested) return;
+        _prerequisitesReady = true;
+        _prerequisiteTimer.Start();
+        SetRunning(false);
     }
 
     private void ProfileSelection_Changed(
@@ -199,6 +195,11 @@ public partial class SetupWindow : WpfWindow
 
         var profile = choice.Profile!;
         _profileId = profile.Id;
+        var selectedAvailableDrive = DriveBox.SelectedItem is char selected && selected is >= 'D' and <= 'Z' &&
+            DriveBox.Items.Contains(selected) && !_reservedDriveLetters.Contains(selected);
+        if (!selectedAvailableDrive && profile.DefaultDriveLetter is >= 'D' and <= 'Z' &&
+            DriveBox.Items.Contains(profile.DefaultDriveLetter) && !_reservedDriveLetters.Contains(profile.DefaultDriveLetter))
+            DriveBox.SelectedItem = profile.DefaultDriveLetter;
         switch (profile.Connection)
         {
             case WebDavConnectionDefinition webDav:
@@ -411,10 +412,15 @@ public partial class SetupWindow : WpfWindow
     {
         provisioningCatalog = null;
         request = null;
+        if (!_prerequisitesReady)
+            return ShowInputError(ProfileCombo, "Wait for drive setup to finish loading.");
         if (_catalog is null)
             return ShowInputError(ProfileCombo, "Storage profiles are still loading.");
+        if (!_manual && (ProfileCombo.SelectedItem is not SetupChoice { Profile: { } selectedProfile } choice ||
+            !ProfileCombo.Items.Contains(choice) || !ReferenceEquals(_catalog.Find(_profileId), selectedProfile)))
+            return ShowInputError(ProfileCombo, "Choose a connection profile.");
         if (DriveBox.SelectedItem is not char drive || drive is < 'D' or > 'Z' ||
-            !DriveBox.Items.Contains(drive))
+            !DriveBox.Items.Contains(drive) || _reservedDriveLetters.Contains(drive))
             return ShowInputError(DriveBox, "Choose a free drive letter.");
         if (UsernameBox.Text.Any(char.IsControl))
             return ShowInputError(UsernameBox, "The username cannot contain control characters.");
@@ -700,6 +706,9 @@ public partial class SetupWindow : WpfWindow
     private void SetRunning(bool running)
     {
         _running = running;
+        // Initial catalog/drive callbacks may populate the form. Keep editing
+        // unavailable until that initial work finishes; Cancel stays outside it.
+        SetupScrollViewer.IsEnabled = _prerequisitesReady && !running;
         ConnectButton.IsEnabled = !running && _prerequisitesReady && DriveBox.Items.Count > 0;
         CancelButton.IsEnabled = true;
         ProfileCombo.IsEnabled = !running;

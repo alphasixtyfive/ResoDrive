@@ -17,6 +17,11 @@ internal static class SetupWindowTests
             .CreateDelegate<RoutedEventHandler>(editor);
         try
         {
+            // Input-boundary fixtures start after initialization; loading itself
+            // is covered by SetupWindowInitializationTests.
+            SetField(editor, "_prerequisitesReady", true);
+            typeof(SetupWindow).GetMethod("SetRunning", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(editor, [false]);
             SetField(editor, "_catalog", new SetupProfileCatalog([], ProfileCatalogSource.None));
             SetField(editor, "_manual", true);
             SetField(editor, "_profileId", "manual");

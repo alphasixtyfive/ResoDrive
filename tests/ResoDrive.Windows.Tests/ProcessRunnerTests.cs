@@ -69,6 +69,7 @@ public sealed class ProcessRunnerTests
         using var fixture = new InheritedOutputFixture();
         var run = fixture.RunAsync(TimeSpan.FromSeconds(8));
         await fixture.WaitForParentExitAsync();
+        Assert.False(run.IsCompleted); // A live descendant still owns both output pipes.
 
         var result = await run.WaitAsync(TimeSpan.FromSeconds(12));
 
@@ -85,6 +86,7 @@ public sealed class ProcessRunnerTests
         using var cancellation = new CancellationTokenSource();
         var run = fixture.RunAsync(TimeSpan.FromMinutes(1), cancellation.Token);
         await fixture.WaitForParentExitAsync();
+        Assert.False(run.IsCompleted);
         cancellation.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run.WaitAsync(TimeSpan.FromSeconds(8)));
@@ -93,43 +95,41 @@ public sealed class ProcessRunnerTests
     private sealed class InheritedOutputFixture : IDisposable
     {
         private readonly string _root = Path.Combine(Path.GetTempPath(), "resodrive-pipe-test-" + Guid.NewGuid().ToString("N"));
-        private readonly string _powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
-            "WindowsPowerShell", "v1.0", "powershell.exe");
-        private string ChildIdentity => Path.Combine(_root, "child.txt");
+        private string ParentExecutable => Path.Combine(_root, "parent.exe");
+        private string ChildExecutable => Path.Combine(_root, "child.exe");
         private string ParentExit => Path.Combine(_root, "parent-exit.txt");
 
         public InheritedOutputFixture()
         {
             Directory.CreateDirectory(_root);
-            File.WriteAllText(Path.Combine(_root, "child.ps1"), """
-                param([string]$Identity)
-                $self = [Diagnostics.Process]::GetCurrentProcess()
-                [IO.File]::WriteAllText($Identity + '.tmp', "$PID,$($self.StartTime.ToUniversalTime().Ticks)")
-                [IO.File]::Move($Identity + '.tmp', $Identity)
-                [Console]::WriteLine('child ready')
-                Start-Sleep -Seconds 60
+            // Native command shells avoid two cold PowerShell startups competing
+            // with the execution deadline on a busy hosted runner. Both binaries
+            // live in this fixture's unique folder for exact cleanup ownership.
+            File.Copy(Path.Combine(Environment.SystemDirectory, "cmd.exe"), ParentExecutable);
+            File.Copy(Path.Combine(Environment.SystemDirectory, "cmd.exe"), ChildExecutable);
+            File.WriteAllText(Path.Combine(_root, "child.cmd"), """
+                @echo off
+                echo child ready
+                >"%~dp0child-ready.txt" echo ready
+                ping 127.0.0.1 -n 60 >nul
                 """);
-            File.WriteAllText(Path.Combine(_root, "parent.ps1"), """
-                param([string]$Root)
-                $start = [Diagnostics.ProcessStartInfo]::new((Join-Path $PSHOME 'powershell.exe'))
-                $start.UseShellExecute = $false
-                $start.CreateNoWindow = $true
-                $start.Arguments = '-NoProfile -File "' + (Join-Path $Root 'child.ps1') + '" -Identity "' + (Join-Path $Root 'child.txt') + '"'
-                $child = [Diagnostics.Process]::Start($start)
-                try {
-                    while (-not (Test-Path (Join-Path $Root 'child.txt'))) { Start-Sleep -Milliseconds 20 }
-                    [Console]::WriteLine('parent finished')
-                    [Console]::Error.WriteLine('parent diagnostic')
-                    $parent = [Diagnostics.Process]::GetCurrentProcess()
-                    $marker = Join-Path $Root 'parent-exit.txt'
-                    [IO.File]::WriteAllText($marker + '.tmp', "$PID,$($parent.StartTime.ToUniversalTime().Ticks)")
-                    [IO.File]::Move($marker + '.tmp', $marker)
-                } finally { $child.Dispose() }
+            File.WriteAllText(Path.Combine(_root, "parent.cmd"), """
+                @echo off
+                start "" /b "%~dp0child.exe" /d /q /c ""%~dp0child.cmd""
+                :wait
+                if exist "%~dp0child-ready.txt" goto ready
+                ping 127.0.0.1 -n 2 >nul
+                goto wait
+                :ready
+                echo parent finished
+                echo parent diagnostic 1>&2
+                >"%~dp0parent-exit.txt" echo ready
+                exit /b 0
                 """);
         }
 
         public Task<ProcessRunResult> RunAsync(TimeSpan timeout, CancellationToken cancellation = default) =>
-            ProcessRunner.RunAsync(_powershell, ["-NoProfile", "-File", Path.Combine(_root, "parent.ps1"), "-Root", _root],
+            ProcessRunner.RunAsync(ParentExecutable, ["/d", "/q", "/c", Path.Combine(_root, "parent.cmd")],
                 timeout, cancellation);
 
         public async Task WaitForParentExitAsync()
@@ -138,32 +138,48 @@ public sealed class ProcessRunnerTests
             while (!File.Exists(ParentExit)) await Task.Delay(20, timeout.Token);
             // Observe the actual parent exit. A fixed delay could cancel before
             // exit on a busy runner and miss the inherited-pipe regression.
-            var identity = File.ReadAllText(ParentExit).Split(',');
+            using var parent = FindFixtureProcess(ParentExecutable);
+            if (parent is not null) await parent.WaitForExitAsync(timeout.Token);
+            using var child = FindFixtureProcess(ChildExecutable);
+            Assert.NotNull(child);
+            Assert.False(child.HasExited);
+        }
+
+        private static Process? FindFixtureProcess(string executable)
+        {
+            var candidates = Process.GetProcessesByName(Path.GetFileNameWithoutExtension(executable));
+            Process? found = null;
             try
             {
-                using var parent = Process.GetProcessById(int.Parse(identity[0], System.Globalization.CultureInfo.InvariantCulture));
-                if (!parent.HasExited && parent.StartTime.ToUniversalTime().Ticks ==
-                    long.Parse(identity[1], System.Globalization.CultureInfo.InvariantCulture))
-                    await parent.WaitForExitAsync(timeout.Token);
+                foreach (var process in candidates)
+                {
+                    try
+                    {
+                        if (!process.HasExited && process.MainModule is { } module &&
+                            MountOwnershipStore.IsSameExecutablePath(executable, module.FileName))
+                            return found = process;
+                    }
+                    catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+                    { } // Exited or unavailable; never treat a name alone as ownership.
+                }
+                return null;
             }
-            catch (ArgumentException) { } // The original parent already exited.
+            finally
+            {
+                foreach (var process in candidates)
+                    if (!ReferenceEquals(process, found)) process.Dispose();
+            }
         }
 
         public void Dispose()
         {
-            if (File.Exists(ChildIdentity))
+            using (var child = FindFixtureProcess(ChildExecutable))
             {
-                var identity = File.ReadAllText(ChildIdentity).Split(',');
-                try
+                if (child is not null && !child.HasExited)
                 {
-                    using var child = Process.GetProcessById(int.Parse(identity[0], System.Globalization.CultureInfo.InvariantCulture));
-                    if (!child.HasExited && child.StartTime.ToUniversalTime().Ticks == long.Parse(identity[1], System.Globalization.CultureInfo.InvariantCulture))
-                    {
-                        child.Kill(entireProcessTree: true);
-                        child.WaitForExit(3000);
-                    }
+                    child.Kill(entireProcessTree: true);
+                    child.WaitForExit(3000);
                 }
-                catch (ArgumentException) { } // The fixture child already exited.
             }
             var temporaryParent = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
             if (!Path.GetFullPath(_root).StartsWith(temporaryParent, StringComparison.OrdinalIgnoreCase))
