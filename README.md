@@ -152,6 +152,20 @@ add the connection presets you want to offer, and save the result as:
 Profiles are for connection details and defaults. Do not put passwords, tokens, or
 private keys in them.
 
+Deployment tools can import a catalog without opening a window:
+
+```powershell
+resodrive.exe --install-profiles 'C:\deployment\profiles.json'
+```
+
+Run it as the intended user after installation. ResoDrive completes its normal
+data-folder migration, validates the catalog, and uses the active data folder
+(including `RDRIVE_DATA_DIR`). Exit code `0` means installed, `10` means a valid
+existing catalog was preserved, `1` means failure, and `2` means incorrect arguments.
+An invalid existing catalog is backed up before atomic replacement. The command
+does not change existing drives, settings or cached files; pending account cleanup
+blocks the import. The source must be a local absolute path, at most 512 KiB.
+
 Profile cache flags populate the dedicated controls. Other approved arguments
 remain in Additional rclone options, with one `--option=value` or standalone
 switch per line. Profiles are copied when a connection is created; updating a

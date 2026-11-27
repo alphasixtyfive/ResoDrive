@@ -27,13 +27,13 @@ public partial class MainWindow
         var reusableInspection = inspectionGeneration == _componentStatusGeneration && runtimeInspection?.Succeeded == true
             ? runtimeInspection : null;
         var generation = ++_componentStatusGeneration;
-        _ = ObserveComponentStatusAsync(UpdateLocalRcloneStatusAsync(generation, reusableInspection), generation, rclone: true);
+        _ = ObserveComponentStatusAsync(UpdateLocalRcloneStatusAsync(generation, reusableInspection), generation);
         SetLiveText(WinFspStatusText, "Checking WinFsp…");
         StatusVisuals.ApplyPending(WinFspStatusIcon);
-        _ = ObserveComponentStatusAsync(UpdateWinFspStatusAsync(generation), generation, rclone: false);
+        _ = UpdateWinFspStatusAsync(force: true);
     }
 
-    private async Task ObserveComponentStatusAsync(Task inspection, int generation, bool rclone)
+    private async Task ObserveComponentStatusAsync(Task inspection, int generation)
     {
         try
         {
@@ -44,41 +44,10 @@ public partial class MainWindow
             if (!IsInitialized || generation != _componentStatusGeneration)
                 return;
 
-            if (rclone)
-            {
-                StatusVisuals.Apply(RcloneStatusIcon, success: false, error: true);
-                SetLiveText(RcloneStatusText, "Could not inspect");
-            }
-            else
-            {
-                StatusVisuals.Apply(WinFspStatusIcon, success: false, error: true);
-                SetLiveText(WinFspStatusText, "WinFsp could not be inspected");
-            }
+            StatusVisuals.Apply(RcloneStatusIcon, success: false, error: true);
+            SetLiveText(RcloneStatusText, "Could not inspect");
             _model.AddLogEntry("Component check failed", exception.Message, LogSeverity.Error);
         }
-    }
-
-    private async Task UpdateWinFspStatusAsync(int? generation = null)
-    {
-        var result = await WinFspPrerequisiteService.InspectAsync();
-        if (!IsInitialized || generation is int value && value != _componentStatusGeneration)
-        {
-            return;
-        }
-
-        if (!result.Succeeded || result.Value?.IsInstalled != true)
-        {
-            StatusVisuals.Apply(WinFspStatusIcon, success: false);
-            SetLiveText(WinFspStatusText, "WinFsp is not detected; sync works, but mount drives need it");
-            WinFspReleasesButton.Visibility = Visibility.Visible;
-            return;
-        }
-
-        StatusVisuals.Apply(WinFspStatusIcon, success: true);
-        WinFspReleasesButton.Visibility = Visibility.Hidden;
-        SetLiveText(WinFspStatusText, string.IsNullOrWhiteSpace(result.Value.Version)
-            ? "WinFsp is installed"
-            : $"WinFsp {result.Value.Version} is installed");
     }
 
     private async Task UpdateLocalRcloneStatusAsync(int? generation = null,

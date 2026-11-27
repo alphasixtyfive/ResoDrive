@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.52] - 2026-11-27
+
+- Refresh WinFsp status automatically in Settings and drive setup after an external installation, without restarting or resetting edited fields.
+- Separate prerequisite refresh from rclone operations, coalesce overlapping checks and stop checks when a window closes.
+- Add guarded deployment-profile import through the app, using the active data root and normal migration, validation and write protection. Preserve valid catalogs and back up invalid ones before replacement.
+
 ## [0.3.51] - 2026-11-27
 
 - Retry temporary file locks while downloading, checking and installing rclone, with a short wait that can be cancelled.

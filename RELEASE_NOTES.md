@@ -1,8 +1,8 @@
-This update helps rclone installation recover when another program briefly locks a file.
+WinFsp status now updates automatically after installation, so you can keep using ResoDrive without restarting it.
 
-- ResoDrive now waits and retries temporary file locks during the download and installation.
-- If the file stays locked, the message explains what happened and what to try next.
-- You can cancel the wait. Existing rclone files stay intact if replacement cannot finish.
+- Settings and drive setup check again when you return to the app. Open forms also refresh in the background without changing what you have entered.
+- Fixed a race where an rclone operation could leave the WinFsp check unfinished.
+- Deployment tools can now add connection templates through ResoDrive, using the correct data folder and preserving existing settings.
 
 Update from Settings, or download **ResoDrive-Setup.exe** below. A portable ZIP is also available.
 

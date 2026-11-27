@@ -69,8 +69,10 @@ public partial class MainWindow : WpfWindow
 
     public MainWindow(bool startInBackground = false) : this(startInBackground, runtimeLocator: null) { }
 
-    internal MainWindow(bool startInBackground, RcloneRuntimeLocator? runtimeLocator)
+    internal MainWindow(bool startInBackground, RcloneRuntimeLocator? runtimeLocator,
+        WinFspStatusRefresh? winFspRefresh = null)
     {
+        _winFspRefresh = winFspRefresh ?? new();
         _runtimeLocator = runtimeLocator ?? new RcloneRuntimeLocator(_paths);
         _hostConnection = new(_lifetimeCancellation.Token);
         _startInBackground = startInBackground;
@@ -96,6 +98,7 @@ public partial class MainWindow : WpfWindow
             exception => _model.AddLogEntry("Tray action failed", exception.Message, LogSeverity.Error),
             ShowTransfers);
         Loaded += MainWindow_Loaded;
+        Activated += MainWindow_Activated;
         Closing += MainWindow_Closing;
         Closed += MainWindow_Closed;
         StateChanged += MainWindow_StateChanged;
@@ -253,6 +256,8 @@ public partial class MainWindow : WpfWindow
         try
         {
             await RefreshStatusAsync();
+            if (IsStartupReady && IsVisible && SettingsPage.Visibility == Visibility.Visible)
+                await UpdateWinFspStatusAsync();
         }
         catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested) { }
         catch (Exception exception)
@@ -643,6 +648,7 @@ public partial class MainWindow : WpfWindow
         SettingsPage.Visibility = page == "Settings" ? Visibility.Visible : Visibility.Collapsed;
         foreach (var button in new[] { MountsNav, JobsNav, LogNav, SettingsNav })
             button.IsChecked = Equals(button.Tag, page);
+        if (page == "Settings" && IsStartupReady) _ = UpdateWinFspStatusAsync(force: true);
     }
 
     private void ApplyResponsiveNavigation()

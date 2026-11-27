@@ -10,6 +10,8 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        var profileImport = args.Length > 0 && args[0].Equals("--install-profiles", StringComparison.OrdinalIgnoreCase);
+        if (profileImport && args.Length != 2) return 2;
         if (args.Length == 2 && args[0] == DirectoryMigrationStartup.CleanupArgument)
             return int.TryParse(args[1], out var migrationParent)
                 ? DirectoryMigrationStartup.CleanupHelperAsync(migrationParent).GetAwaiter().GetResult() : 2;
@@ -99,9 +101,22 @@ public static class Program
             // No normal app/host startup, diagnostics or folder creation until the
             // migration succeeds. Preserve the original root on any preflight error.
             DirectoryMigrationStartup.RecordHandoffFailure(exception);
-            if (!args.Contains("--host", StringComparer.OrdinalIgnoreCase))
+            if (!profileImport && !args.Contains("--host", StringComparer.OrdinalIgnoreCase))
                 System.Windows.MessageBox.Show(exception.Message, "ResoDrive migration needs attention", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
             return 1;
+        }
+
+        if (profileImport)
+        {
+            if (DirectoryMigrationStartup.PendingHandoff) return 1;
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            try
+            {
+                var imported = new ProfileCatalogInstaller(new ApplicationPaths()).InstallAsync(args[1], deadline.Token)
+                    .GetAwaiter().GetResult();
+                return imported.Succeeded ? imported.Value ? 10 : 0 : 1;
+            }
+            catch (OperationCanceledException) { return 1; }
         }
 
         if (args.Any(argument => argument.Equals("--host", StringComparison.OrdinalIgnoreCase)))

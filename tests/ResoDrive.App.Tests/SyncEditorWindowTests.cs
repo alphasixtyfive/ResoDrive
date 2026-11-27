@@ -40,6 +40,7 @@ public sealed class SyncEditorWindowTests
                 MountEditorWindowTests.VerifyWithApplicationResources();
                 LogWindowTests.VerifyWithApplicationResources();
                 SetupWindowTests.VerifyWithApplicationResources();
+                WinFspWindowTests.VerifyWithApplicationResources();
                 MainWindowUpdateTests.VerifyWithApplicationResources();
                 MainWindowStartupTests.VerifyWithApplicationResources();
                 MigrationStartupWindowTests.VerifyWithApplicationResources();

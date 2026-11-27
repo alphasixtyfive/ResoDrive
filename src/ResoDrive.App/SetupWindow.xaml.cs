@@ -38,7 +38,12 @@ public partial class SetupWindow : WpfWindow
         bool firstRun = false,
         IEnumerable<char>? reservedDriveLetters = null,
         IEnumerable<string>? reservedDriveNames = null)
+        : this(paths, firstRun, reservedDriveLetters, reservedDriveNames, winFspRefresh: null) { }
+
+    internal SetupWindow(ApplicationPaths paths, bool firstRun, IEnumerable<char>? reservedDriveLetters,
+        IEnumerable<string>? reservedDriveNames, WinFspStatusRefresh? winFspRefresh)
     {
+        _winFspRefresh = winFspRefresh ?? new();
         _paths = paths ?? throw new ArgumentNullException(nameof(paths));
         _firstRun = firstRun;
         _reservedDriveLetters = (reservedDriveLetters ?? [])
@@ -62,8 +67,17 @@ public partial class SetupWindow : WpfWindow
         PasswordBox.PasswordChanged += Input_Changed;
         System.Windows.DataObject.AddPastingHandler(PortBox, Port_Pasting);
         Loaded += SetupWindow_Loaded;
+        Activated += async (_, _) =>
+        {
+            if (_prerequisitesReady) await RefreshWinFspAsync(force: true);
+        };
+        _prerequisiteTimer.Tick += async (_, _) => await RefreshWinFspAsync();
         Closing += SetupWindow_Closing;
-        Closed += (_, _) => _lifetimeCancellation.Dispose();
+        Closed += (_, _) =>
+        {
+            _prerequisiteTimer.Stop();
+            _lifetimeCancellation.Dispose();
+        };
     }
 
     public ProfileProvisioningResult? Result { get; private set; }
@@ -136,35 +150,12 @@ public partial class SetupWindow : WpfWindow
         }
         try
         {
-            var inspected = await WinFspPrerequisiteService.InspectAsync(cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!IsLoaded)
-                return;
-            var winFspInstalled = inspected.Succeeded && inspected.Value?.IsInstalled == true;
-            var version = inspected.Value?.Version;
-            WinFspText.Text = winFspInstalled
-                ? $"WinFsp{(string.IsNullOrWhiteSpace(version) ? string.Empty : " " + version)} is installed and mount drives are available."
-                : "WinFsp is not detected. Setup can continue, but mounting needs WinFsp.";
-            StatusVisuals.Apply(WinFspIcon, winFspInstalled);
-            WinFspButton.Visibility = winFspInstalled ? Visibility.Hidden : Visibility.Visible;
-            if (!winFspInstalled)
-                AutoMountBox.IsChecked = false;
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            WinFspText.Text = "WinFsp could not be checked. Setup can continue, but mounting may be unavailable.";
-            WinFspText.ToolTip = exception.Message;
-            StatusVisuals.Apply(WinFspIcon, success: false);
-            WinFspButton.Visibility = Visibility.Visible;
-            AutoMountBox.IsChecked = false;
+            await RefreshWinFspAsync(force: true, initial: true);
         }
         finally
         {
             _prerequisitesReady = true;
+            if (!_lifetimeCancellation.IsCancellationRequested) _prerequisiteTimer.Start();
             SetRunning(false);
         }
     }
