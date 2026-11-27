@@ -34,11 +34,11 @@ public sealed class RcloneRuntimeLocator
 
         try
         {
-            var result = await _processRunner.RunAsync(
+            var result = await RcloneFileAccess.RunAsync(() => _processRunner.RunAsync(
                 ExecutablePath,
                 ["version"],
                 TimeSpan.FromSeconds(10),
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken), cancellationToken).ConfigureAwait(false);
             if (result.TimedOut)
             {
                 return Result.Failure<InstallationStatus>(
@@ -58,6 +58,11 @@ public sealed class RcloneRuntimeLocator
             // A valid engine remains usable even when its version cannot fit in the
             // storage identity; the host checks reportability separately.
             return Result.Success(new InstallationStatus(reportedVersion, ExecutablePath));
+        }
+        catch (Exception exception) when (RcloneFileAccess.IsLocked(exception))
+        {
+            return Result.Failure<InstallationStatus>("rclone.file_locked",
+                RcloneFileAccess.DescribeLock("The rclone executable"), true);
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)

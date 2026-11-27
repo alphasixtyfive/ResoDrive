@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.51] - 2026-11-27
+
+- Retry temporary file locks while downloading, checking and installing rclone, with a short wait that can be cancelled.
+- Explain when another program keeps an rclone file locked and how to try again.
+- Keep an existing locked runtime intact and retain downloaded bytes after a persistent file lock.
+
 ## [0.3.50] - 2026-11-13
 
 - Keep caching and rclone options visible in the form, without an Advanced expander or extra labels on existing values.

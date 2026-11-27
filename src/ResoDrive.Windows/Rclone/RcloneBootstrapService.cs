@@ -64,6 +64,8 @@ public sealed class RcloneBootstrapService
             _locator.Paths.Rclone,
             cancellationToken).ConfigureAwait(false);
         var current = await _locator.InspectAsync(cancellationToken).ConfigureAwait(false);
+        // A locked installed executable is not an invalid engine to replace.
+        if (current.Error?.Code == "rclone.file_locked") return current;
         if (current.Succeeded)
         {
             CleanupInterruptedArtifacts(includeBackups: true);
@@ -84,42 +86,72 @@ public sealed class RcloneBootstrapService
         var replacementStarted = false;
         var preserveBackup = false;
         var preserveArchive = false;
+        var lockedFile = "The rclone download file";
+        void ReportLock() => progress?.Report(new RcloneBootstrapProgress(
+            "Waiting for another program to release the rclone file"));
         using var downloadDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         downloadDeadline.CancelAfter(_downloadTimeout);
         try
         {
             progress?.Report(new RcloneBootstrapProgress("Connecting to the rclone download"));
-            await DownloadAsync(archivePath, progress, downloadDeadline.Token).ConfigureAwait(false);
+            await RcloneFileAccess.RunAsync(async () =>
+            {
+                await DownloadAsync(archivePath, progress, downloadDeadline.Token).ConfigureAwait(false);
+                return true;
+            }, downloadDeadline.Token, ReportLock).ConfigureAwait(false);
             progress?.Report(new RcloneBootstrapProgress("Verifying download"));
-            if (!await HasExpectedHashAsync(archivePath, _archiveSha256, downloadDeadline.Token).ConfigureAwait(false))
+            if (!await RcloneFileAccess.RunAsync(() => HasExpectedHashAsync(
+                archivePath, _archiveSha256, downloadDeadline.Token), downloadDeadline.Token, ReportLock).ConfigureAwait(false))
             {
                 TryDelete(archivePath);
                 return Result.Failure<InstallationStatus>("rclone.download_hash", "The rclone download failed verification.");
             }
 
-            await ExtractExecutableAsync(archivePath, stagedPath, downloadDeadline.Token).ConfigureAwait(false);
+            await ExtractExecutableAsync(archivePath, stagedPath, ReportLock, downloadDeadline.Token).ConfigureAwait(false);
+            lockedFile = "The downloaded rclone executable";
             var stagedVersion = await InspectExecutableAsync(stagedPath, downloadDeadline.Token).ConfigureAwait(false);
             if (!stagedVersion.Succeeded ||
                 !string.Equals(stagedVersion.Value, ReleaseVersion, StringComparison.OrdinalIgnoreCase))
-                return Result.Failure<InstallationStatus>("rclone.download_invalid", "The downloaded rclone executable is invalid.");
+            {
+                preserveArchive = stagedVersion.Error?.Code == "rclone.file_locked";
+                return stagedVersion.Error?.Code == "rclone.file_locked"
+                    ? Result.Failure<InstallationStatus>(stagedVersion.Error.Code, stagedVersion.Error.Message, true)
+                    : Result.Failure<InstallationStatus>("rclone.download_invalid", "The downloaded rclone executable is invalid.");
+            }
 
             progress?.Report(new RcloneBootstrapProgress("Installing rclone"));
             downloadDeadline.Token.ThrowIfCancellationRequested();
             var target = _locator.ExecutablePath;
+            lockedFile = "The rclone executable";
             if (File.Exists(target))
             {
                 if (File.GetAttributes(target).HasFlag(FileAttributes.ReparsePoint))
                     return Result.Failure<InstallationStatus>(
                         "rclone.install_unsafe_path",
                         "The existing ResoDrive rclone runtime is a file-system link.");
-                File.Replace(stagedPath, target, backupPath, ignoreMetadataErrors: true);
+                await RcloneFileAccess.ChangeAsync(() => File.Replace(stagedPath, target, backupPath,
+                    ignoreMetadataErrors: true), downloadDeadline.Token, ReportLock).ConfigureAwait(false);
             }
             else
             {
-                File.Move(stagedPath, target, overwrite: false);
+                await RcloneFileAccess.ChangeAsync(() => File.Move(stagedPath, target, overwrite: false),
+                    downloadDeadline.Token, ReportLock).ConfigureAwait(false);
             }
             replacementStarted = true;
             var installed = await _locator.InspectAsync(CancellationToken.None).ConfigureAwait(false);
+            if (installed.Error?.Code == "rclone.file_locked")
+            {
+                preserveArchive = true;
+                if (File.Exists(backupPath) && !RestoreBackup(target, backupPath))
+                {
+                    preserveBackup = true;
+                    return Result.Failure<InstallationStatus>("rclone.install_rollback_failed",
+                        installed.Error.Message + $" The previous copy has been kept at '{backupPath}'.");
+                }
+                // Keep a verified first-install payload when it is merely locked;
+                // a subsequent retry can inspect it after the lock clears.
+                return installed;
+            }
             if (!installed.Succeeded)
             {
                 if (File.Exists(backupPath))
@@ -175,6 +207,12 @@ public sealed class RcloneBootstrapService
                 return Result.Failure<InstallationStatus>(
                     "rclone.install_rollback_failed",
                     $"Installation failed and the previous runtime could not be restored. Restore '{backupPath}' manually.");
+            if (RcloneFileAccess.IsLocked(exception))
+            {
+                preserveArchive = true;
+                return Result.Failure<InstallationStatus>("rclone.file_locked",
+                    RcloneFileAccess.DescribeLock(lockedFile), true);
+            }
             return Result.Failure<InstallationStatus>("rclone.install_failed", exception.Message, true);
         }
         finally
@@ -311,18 +349,20 @@ public sealed class RcloneBootstrapService
     private static async Task ExtractExecutableAsync(
         string archivePath,
         string destination,
+        Action retrying,
         CancellationToken cancellationToken)
     {
-        using var archive = ZipFile.OpenRead(archivePath);
+        using var archive = await RcloneFileAccess.OpenAsync(() => ZipFile.OpenRead(archivePath),
+            cancellationToken, retrying).ConfigureAwait(false);
         var candidates = archive.Entries.Where(entry =>
             entry.Name.Equals("rclone.exe", StringComparison.OrdinalIgnoreCase)).ToArray();
         if (candidates.Length != 1 || candidates[0].Length is <= 0 or > MaximumExecutableBytes)
             throw new InvalidDataException("The rclone archive has an unexpected layout.");
 
         await using var source = candidates[0].Open();
-        await using var target = new FileStream(
+        await using var target = await RcloneFileAccess.OpenAsync(() => new FileStream(
             destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
+            FileOptions.Asynchronous | FileOptions.SequentialScan), cancellationToken, retrying).ConfigureAwait(false);
         await source.CopyToAsync(target, cancellationToken).ConfigureAwait(false);
         await target.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -333,14 +373,19 @@ public sealed class RcloneBootstrapService
     {
         try
         {
-            var result = await _processRunner.RunAsync(
-                executable, ["version"], TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
+            var result = await RcloneFileAccess.RunAsync(() => _processRunner.RunAsync(
+                executable, ["version"], TimeSpan.FromSeconds(10), cancellationToken), cancellationToken).ConfigureAwait(false);
             var line = result.StandardOutput
                 .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .FirstOrDefault(value => value.StartsWith("rclone v", StringComparison.OrdinalIgnoreCase));
             return !result.TimedOut && result.ExitCode == 0 && line is not null
                 ? Result.Success(line["rclone ".Length..])
                 : Result.Failure<string>("rclone.download_invalid", "The downloaded executable did not report a version.");
+        }
+        catch (Exception exception) when (RcloneFileAccess.IsLocked(exception))
+        {
+            return Result.Failure<string>("rclone.file_locked",
+                RcloneFileAccess.DescribeLock("The downloaded rclone executable"), true);
         }
         catch (System.ComponentModel.Win32Exception)
         {
