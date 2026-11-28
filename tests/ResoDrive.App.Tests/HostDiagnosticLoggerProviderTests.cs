@@ -30,13 +30,12 @@ public sealed class HostDiagnosticLoggerProviderTests : IDisposable
         Assert.DoesNotContain("DO-NOT-EXPORT", contents, StringComparison.Ordinal);
         Assert.DoesNotContain("private.example", contents, StringComparison.Ordinal);
         Assert.DoesNotContain("C:\\private", contents, StringComparison.Ordinal);
-        Assert.Null(provider.FatalBackgroundException);
     }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task RealGenericHostBackgroundServiceFailureIsReportedAsFatal(bool externalLoggingDisabled)
+    public async Task RealGenericHostBackgroundServiceFailurePropagatesAfterCleanupAndRemainsRedacted(bool externalLoggingDisabled)
     {
         // Account lease contention has separate coverage. This fixture verifies
         // generic-host routing, filtering and redaction using its private log.
@@ -51,17 +50,25 @@ public sealed class HostDiagnosticLoggerProviderTests : IDisposable
         builder.Logging.ClearProviders().AddProvider(provider);
         builder.Logging.AddFilter<HostDiagnosticLoggerProvider>(static (_, level) =>
             level >= LogLevel.Information && level != LogLevel.None);
+        builder.Services.Configure<HostOptions>(static options =>
+            options.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.StopHost);
         var reportFailure = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        builder.Services.AddHostedService(_ => new FailingWorker(reportFailure.Task));
+        var failure = new InvalidOperationException("token=DO-NOT-EXPORT");
+        var cleanup = new StopProbe();
+        builder.Services.AddHostedService(_ => new FailingWorker(reportFailure.Task, failure));
+        builder.Services.AddSingleton<IHostedService>(cleanup);
         using var host = builder.Build();
+        var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await host.StartAsync(timeout.Token);
         // Startup lifecycle logging is complete before the worker reports its
         // failure; a fixed delay could overlap those best-effort file writes.
         reportFailure.SetResult();
-        await host.WaitForShutdownAsync(timeout.Token);
+        var propagated = await Assert.ThrowsAsync<InvalidOperationException>(() => host.WaitForShutdownAsync(timeout.Token));
 
-        Assert.IsType<InvalidOperationException>(provider.FatalBackgroundException);
+        Assert.Same(failure, propagated);
+        Assert.True(cleanup.Stopped);
+        Assert.True(lifetime.ApplicationStopped.IsCancellationRequested);
         var contents = File.ReadAllText(diagnostic.LogFile);
         Assert.Contains("eventId=10", contents, StringComparison.Ordinal);
         Assert.Contains("errorId=", contents, StringComparison.Ordinal);
@@ -85,20 +92,86 @@ public sealed class HostDiagnosticLoggerProviderTests : IDisposable
         reportFailure.SetResult();
         await host.WaitForShutdownAsync(timeout.Token);
 
-        Assert.Null(provider.FatalBackgroundException);
-        Assert.Contains("eventId=1004", File.ReadAllText(diagnostic.LogFile), StringComparison.Ordinal);
+        var contents = File.ReadAllText(diagnostic.LogFile);
+        Assert.Contains("eventId=1004", contents, StringComparison.Ordinal);
+        Assert.DoesNotContain("CRITICAL", contents, StringComparison.Ordinal);
+        Assert.DoesNotContain("DO-NOT-EXPORT", contents, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Microsoft.Extensions.Hosting.Internal.Host", 9)]
+    [InlineData("ResoDrive.Host.Worker", 10)]
+    public async Task LoggedExceptionsWithoutAWorkerFaultDoNotStopTheHost(string category, int eventId)
+    {
+        using var provider = new HostDiagnosticLoggerProvider(new ProcessDiagnosticLog(Path.Combine(_root, "resodrive-host.log")));
+        var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder();
+        builder.Logging.ClearProviders().AddProvider(provider);
+        var cleanup = new StopProbe();
+        builder.Services.AddSingleton<IHostedService>(cleanup);
+        using var host = builder.Build();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await host.StartAsync(timeout.Token);
+        var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
+
+        var loggedFailure = new InvalidOperationException("recoverable");
+        provider.CreateLogger(category).Log(LogLevel.Critical, new EventId(eventId, "BackgroundServiceStoppingHost"),
+            "failure", loggedFailure, static (state, _) => state);
+        Assert.False(lifetime.ApplicationStopping.IsCancellationRequested);
+        Assert.False(cleanup.Stopped);
+        lifetime.StopApplication();
+        await host.WaitForShutdownAsync(timeout.Token);
+        Assert.True(cleanup.Stopped);
     }
 
     [Fact]
-    public void FaultedEventAloneAndForeignCategoryCannotTriggerFatalShutdown()
+    public async Task MultipleWorkerFailuresRemainObservableAfterAllServicesStop()
     {
-        using var provider = new HostDiagnosticLoggerProvider(new ProcessDiagnosticLog(new ApplicationPaths(_root), "host"));
-        var exception = new InvalidOperationException("recoverable");
-        var logger = provider.CreateLogger("Microsoft.Extensions.Hosting.Internal.Host");
-        logger.Log(LogLevel.Error, new EventId(9, "BackgroundServiceFaulted"), "failure", exception, static (state, _) => state);
-        var other = provider.CreateLogger("ResoDrive.Host.Worker");
-        other.Log(LogLevel.Critical, new EventId(10, "BackgroundServiceStoppingHost"), "failure", exception, static (state, _) => state);
-        Assert.Null(provider.FatalBackgroundException);
+        var diagnostic = new ProcessDiagnosticLog(Path.Combine(_root, "resodrive-host.log"));
+        using var provider = new HostDiagnosticLoggerProvider(diagnostic);
+        var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder();
+        builder.Logging.ClearProviders().AddProvider(provider);
+        var reportFailure = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = new InvalidOperationException("token=DO-NOT-EXPORT-FIRST");
+        var second = new IOException("token=DO-NOT-EXPORT-SECOND");
+        var cleanup = new StopProbe();
+        builder.Services.AddSingleton<IHostedService>(new FailingWorker(reportFailure.Task, first));
+        builder.Services.AddSingleton<IHostedService>(new FailingWorker(reportFailure.Task, second));
+        builder.Services.AddSingleton<IHostedService>(cleanup);
+        using var host = builder.Build();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await host.StartAsync(timeout.Token);
+        reportFailure.SetResult();
+
+        var propagated = await Assert.ThrowsAsync<AggregateException>(() => host.WaitForShutdownAsync(timeout.Token));
+        Assert.Equal(2, propagated.InnerExceptions.Count);
+        Assert.Contains(first, propagated.InnerExceptions);
+        Assert.Contains(second, propagated.InnerExceptions);
+        Assert.True(cleanup.Stopped);
+        Assert.DoesNotContain("DO-NOT-EXPORT", File.ReadAllText(diagnostic.LogFile), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CallerCancellationStopsServicesWithoutInventingAFatalFailure()
+    {
+        var diagnostic = new ProcessDiagnosticLog(Path.Combine(_root, "resodrive-host.log"));
+        using var provider = new HostDiagnosticLoggerProvider(diagnostic);
+        var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder();
+        builder.Logging.ClearProviders().AddProvider(provider);
+        var cleanup = new StopProbe();
+        var waiting = new CancellationWorker();
+        builder.Services.AddSingleton<IHostedService>(waiting);
+        builder.Services.AddSingleton<IHostedService>(cleanup);
+        using var host = builder.Build();
+        using var cancellation = new CancellationTokenSource();
+        await host.StartAsync(cancellation.Token);
+        await waiting.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var shutdown = host.WaitForShutdownAsync(cancellation.Token);
+        cancellation.Cancel();
+
+        await shutdown.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(cleanup.Stopped);
+        Assert.True(waiting.Cancelled);
+        Assert.DoesNotContain("CRITICAL", File.ReadAllText(diagnostic.LogFile), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -109,9 +182,8 @@ public sealed class HostDiagnosticLoggerProviderTests : IDisposable
         Directory.CreateDirectory(Path.Combine(paths.Logs, "resodrive-host.log"));
         using var provider = new HostDiagnosticLoggerProvider(new ProcessDiagnosticLog(paths, "host"));
         var logger = provider.CreateLogger("ResoDrive.Host.Worker");
-        logger.Log(LogLevel.Error, new EventId(1004), "failure", new InvalidOperationException("original"),
-            static (_, _) => throw new IOException("formatter failed"));
-        Assert.Null(provider.FatalBackgroundException);
+        Assert.Null(Record.Exception(() => logger.Log(LogLevel.Error, new EventId(1004), "failure",
+            new InvalidOperationException("original"), static (_, _) => throw new IOException("formatter failed"))));
     }
 
     public void Dispose()
@@ -119,12 +191,38 @@ public sealed class HostDiagnosticLoggerProviderTests : IDisposable
         if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
     }
 
-    private sealed class FailingWorker(Task reportFailure) : BackgroundService
+    private sealed class FailingWorker(Task reportFailure, Exception failure) : BackgroundService
     {
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            await reportFailure.WaitAsync(stoppingToken);
-            throw new InvalidOperationException("token=DO-NOT-EXPORT");
+            // Once released, each worker must report its actual failure even if
+            // another worker has already requested shutdown.
+            await reportFailure;
+            throw failure;
+        }
+    }
+
+    private sealed class StopProbe : IHostedService
+    {
+        public bool Stopped { get; private set; }
+        public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task StopAsync(CancellationToken cancellationToken)
+        {
+            Stopped = true;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class CancellationWorker : BackgroundService
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool Cancelled { get; private set; }
+
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+            Started.SetResult();
+            try { await Task.Delay(Timeout.InfiniteTimeSpan, stoppingToken); }
+            finally { Cancelled = stoppingToken.IsCancellationRequested; }
         }
     }
 
