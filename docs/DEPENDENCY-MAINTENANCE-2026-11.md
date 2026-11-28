@@ -78,8 +78,8 @@ and the separately refreshed runtime proposals.
   previous-public-updater and compatibility-choice upgrade checks.
 - System.Management 11 in PR #10 passed
   [the same full pipeline](https://github.com/alphasixtyfive/ResoDrive/actions/runs/46130092758).
-  Its original lock-file failure is repaired. Keep this optional major runtime
-  change open for a planned application release; main retains 10.0.11.
+  Its original lock-file failure was repaired. It was initially kept open as an
+  optional major runtime change, with main still on 10.0.11.
 - Microsoft.Extensions.Hosting 11 in PR #8 passed locked restore and compilation,
   then [failed two diagnostic/shutdown cases](https://github.com/alphasixtyfive/ResoDrive/actions/runs/46130089348).
   `RealGenericHostBackgroundServiceFailureIsReportedAsFatal` fails with both
@@ -89,7 +89,44 @@ and the separately refreshed runtime proposals.
   two cases passed with version 10. This is a changed host exception contract,
   not a remaining NuGet restore error. The production outer fatal catch already
   exists; these results alone do not establish lost diagnostics or account data.
-  Keep the proposal unmerged until that contract and its diagnostics are reviewed.
+  The proposal was initially held pending review of that contract and its diagnostics.
 
-The original shutdown/diagnostic assertions remain intact. The final acceptance
-record is documentation only. No runtime upgrade or new public release was made.
+The initial shutdown/diagnostic assertions remained intact. The initial acceptance
+record was documentation only; no runtime upgrade or new public release was made
+in that maintenance pass.
+
+## Subsequent runtime adoption
+
+The maintainer then authorized merging #10 and completing the Hosting 11
+compatibility work in #8, without publishing a release just for the updates.
+System.Management #10 was merged after its full compatibility CI passed.
+
+The package's source-linked
+[Hosting 11 implementation](https://github.com/dotnet/dotnet/blob/297acf930fb0f5c07fd4e51d78e521b4ad2e5d1f/src/runtime/src/libraries/Microsoft.Extensions.Hosting/src/Internal/Host.cs)
+retains worker failures, waits for monitoring/service shutdown, then propagates
+the original failure or an aggregate from StopAsync. ResoDrive now uses this
+contract directly. Its outer fatal handler still records and rethrows failures;
+the old logger-owned exception cache and duplicate post-RunAsync throw were removed.
+The logger remains synchronous, bounded and sanitized, and no longer owns host
+lifecycle decisions.
+
+The regression cases require exact original-exception propagation after cleanup
+with both normal and externally disabled logging, redacted diagnostic content,
+multiple observable worker failures, normal cancellation, and successful shutdown
+after recoverable operation errors. Logged errors alone cannot stop a healthy
+host. The 13 focused cases passed locally. The target framework and SDK remain
+.NET 10; adopting the library does not require a .NET 11 installation.
+
+Installer IPC authentication, upload protection, account-data guards and wipe
+ordering were not changed. Further full-build, constrained-CPU, process and
+hosted installer/update results are retained with this PR's validation evidence.
+Published 0.3.53 artifacts remain immutable; these source changes are for a future
+planned application release.
+
+The first compatibility CI run passed the new Hosting cases but timed out in
+three existing startup fixtures together. The migration fixture synchronously
+blocked on an asynchronous child-process pipe read. It now awaits readiness,
+leaving workers available to the parallel host/activation fixtures. Its five-second
+readiness deadline, process-identity assertions and fail-closed checks are intact.
+All 448 App tests passed locally with two available CPUs after this fixture change;
+the fresh full hosted pipeline remains the merge gate.

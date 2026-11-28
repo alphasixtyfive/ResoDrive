@@ -24,8 +24,7 @@ public static class HostApplication
                 // Default console/event-log providers can retain unsanitized account details.
                 // Use the same bounded, guarded local policy for every host diagnostic.
                 builder.Logging.ClearProviders();
-                var provider = new HostDiagnosticLoggerProvider(diagnostics);
-                builder.Logging.AddProvider(provider);
+                builder.Logging.AddProvider(new HostDiagnosticLoggerProvider(diagnostics));
                 builder.Logging.AddFilter<HostDiagnosticLoggerProvider>(static (_, level) =>
                     level >= LogLevel.Information && level != LogLevel.None);
                 builder.Services.Configure<HostOptions>(static options =>
@@ -36,9 +35,9 @@ public static class HostApplication
                 var worker = host.Services.GetServices<IHostedService>().OfType<Worker>().Single();
                 using var started = host.Services.GetRequiredService<IHostApplicationLifetime>()
                     .ApplicationStarted.Register(() => diagnostics.Information("host.started"));
+                // Hosting 11 completes service shutdown, then propagates worker faults.
+                // The outer fatal handler records and rethrows the original failure.
                 await host.RunAsync(cancellationToken).ConfigureAwait(false);
-                if (provider.FatalBackgroundException is { } fatal)
-                    throw new InvalidOperationException("The ResoDrive background host failed unexpectedly.", fatal);
                 if (!worker.CanResumeRemoteWipe || !worker.RestartForRemoteWipe) break;
                 // A new lifetime must capture the current wipe generation. Old guards
                 // deliberately refuse to recreate deleted account diagnostics.
