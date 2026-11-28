@@ -1,0 +1,11 @@
+EXPORTS
+    PrepareRegisteredInstallation
+    StageMigration
+    ApplyMigration
+    RollbackMigration
+    CommitMigration
+    UnregisterAutostart
+    ConfigureCetPolicy
+    RollbackCetPolicy
+    CommitCetPolicy
+    RemoveCetPolicy

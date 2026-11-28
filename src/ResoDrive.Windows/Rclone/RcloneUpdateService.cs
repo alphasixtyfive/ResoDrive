@@ -18,8 +18,9 @@ public sealed record RcloneUpdateResult(
 /// Checks and explicitly installs stable rclone updates for the bundled executable.
 /// </summary>
 /// <remarks>
-/// This service intentionally has no activity awareness and never updates automatically.
-/// The caller must stop all mounts and sync jobs before calling <see cref="UpdateAsync"/>.
+/// This service never stops active work. Windows retains the old loaded image for
+/// existing connections; subsequent launches use the atomically replaced executable.
+/// A running image's backup is retained until Windows permits its removal.
 /// </remarks>
 public sealed class RcloneUpdateService
 {
@@ -64,13 +65,15 @@ public sealed class RcloneUpdateService
         await using var mutationLock = await RcloneRuntimeMutationLock.AcquireAsync(
             _locator.Paths.Rclone,
             cancellationToken).ConfigureAwait(false);
-        await ReconcileInterruptedUpdateAsync(cancellationToken).ConfigureAwait(false);
-        return await CheckCoreAsync(cancellationToken).ConfigureAwait(false);
+        var reconciled = await ReconcileInterruptedUpdateAsync(cancellationToken).ConfigureAwait(false);
+        if (!reconciled.Succeeded)
+            return Result.Failure<RcloneUpdateCheck>(reconciled.Error!.Code, reconciled.Error.Message, reconciled.Error.IsTransient);
+        return await CheckCoreAsync(cancellationToken, reconciled.Value).ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Downloads and installs the latest stable release after the caller has stopped all
-    /// rclone mounts and sync jobs. This method never stops active work itself.
+    /// Downloads, verifies and atomically installs the latest stable release without
+    /// stopping existing rclone processes. They use the new engine on their next launch.
     /// </summary>
     public async Task<OperationResult<RcloneUpdateResult>> UpdateAsync(
         IProgress<RcloneBootstrapProgress>? bootstrapProgress = null,
@@ -81,9 +84,11 @@ public sealed class RcloneUpdateService
             _locator.Paths.Rclone,
             cancellationToken).ConfigureAwait(false))
         {
-            await ReconcileInterruptedUpdateAsync(cancellationToken).ConfigureAwait(false);
+            var reconciled = await ReconcileInterruptedUpdateAsync(cancellationToken).ConfigureAwait(false);
+            if (!reconciled.Succeeded)
+                return Result.Failure<RcloneUpdateResult>(reconciled.Error!.Code, reconciled.Error.Message, reconciled.Error.IsTransient);
             if (File.Exists(_locator.ExecutablePath))
-                return await UpdateCoreAsync(cancellationToken).ConfigureAwait(false);
+                return await UpdateCoreAsync(bootstrapProgress, cancellationToken).ConfigureAwait(false);
         }
 
         // Bootstrap owns the same mutation lock, so invoke it only after releasing the
@@ -99,7 +104,7 @@ public sealed class RcloneUpdateService
         return Result.Success(new RcloneUpdateResult(string.Empty, installed.Value.Version, true));
     }
 
-    private async Task ReconcileInterruptedUpdateAsync(CancellationToken cancellationToken)
+    private async Task<OperationResult<string?>> ReconcileInterruptedUpdateAsync(CancellationToken cancellationToken)
     {
         var directory = _locator.Paths.Rclone;
         var executablePath = _locator.ExecutablePath;
@@ -107,12 +112,18 @@ public sealed class RcloneUpdateService
         var canonical = canonicalIsSafe
             ? await InspectExecutableAsync(executablePath, cancellationToken).ConfigureAwait(false)
             : Result.Failure<string>("rclone.update_unsafe_path", "The managed runtime is a file-system link.");
+        if (!canonicalIsSafe)
+            return Result.Failure<string?>(canonical.Error!.Code, canonical.Error.Message);
 
         if (canonical.Succeeded)
         {
             CleanupUpdateArtifacts(directory, includeBackups: true);
-            return;
+            return Result.Success<string?>(canonical.Value);
         }
+        // A temporary launch/read lock is not proof of a corrupt runtime. Never
+        // replace the canonical image or discard recovery files on that evidence.
+        if (canonical.Error?.Code == "rclone.file_locked")
+            return Result.Failure<string?>(canonical.Error.Code, canonical.Error.Message, true);
 
         if (canonicalIsSafe)
         {
@@ -124,6 +135,8 @@ public sealed class RcloneUpdateService
                     continue;
 
                 var inspected = await InspectExecutableAsync(backup, cancellationToken).ConfigureAwait(false);
+                if (inspected.Error?.Code == "rclone.file_locked")
+                    return Result.Failure<string?>(inspected.Error.Code, inspected.Error.Message, true);
                 if (!inspected.Succeeded)
                     continue;
 
@@ -131,16 +144,21 @@ public sealed class RcloneUpdateService
                 {
                     // Copying preserves the verified rollback source if the process is
                     // interrupted before the restored canonical file is re-verified.
-                    File.Copy(backup, executablePath, overwrite: true);
+                    await RcloneFileAccess.ChangeAsync(() => File.Copy(backup, executablePath, overwrite: true),
+                        cancellationToken).ConfigureAwait(false);
                     var restored = await InspectExecutableAsync(
                         executablePath,
                         cancellationToken).ConfigureAwait(false);
                     if (restored.Succeeded)
                     {
                         CleanupUpdateArtifacts(directory, includeBackups: true);
-                        return;
+                        return Result.Success<string?>(null);
                     }
+                    if (restored.Error?.Code == "rclone.file_locked")
+                        return Result.Failure<string?>(restored.Error.Code, restored.Error.Message, true);
                 }
+                catch (Exception exception) when (RcloneFileAccess.IsLocked(exception))
+                { return FileLocked<string?>("The rclone executable"); }
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                 {
                     // Preserve backups for a later retry or manual recovery.
@@ -150,6 +168,7 @@ public sealed class RcloneUpdateService
         }
 
         CleanupUpdateArtifacts(directory, includeBackups: false);
+        return Result.Success<string?>(null);
     }
 
     private static string[] EnumerateUpdateArtifacts(
@@ -218,31 +237,40 @@ public sealed class RcloneUpdateService
     }
 
     private async Task<OperationResult<RcloneUpdateCheck>> CheckCoreAsync(
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string? verifiedCanonicalVersion = null)
     {
-        var installed = await _locator.InspectAsync(cancellationToken).ConfigureAwait(false);
-        if (!installed.Succeeded || installed.Value?.Version is null)
+        // CheckAsync may reuse the canonical verification it just performed under
+        // this same mutation lock. Recovery and installation paths still inspect afresh.
+        var installedVersion = verifiedCanonicalVersion;
+        if (installedVersion is null)
         {
-            if (installed.Error?.Code == "rclone.not_installed")
+            var installed = await _locator.InspectAsync(cancellationToken).ConfigureAwait(false);
+            if (!installed.Succeeded || installed.Value?.Version is null)
             {
-                return Result.Success(new RcloneUpdateCheck(
-                    string.Empty,
-                    RcloneBootstrapService.ReleaseVersion,
-                    true));
+                if (installed.Error?.Code == "rclone.not_installed")
+                {
+                    return Result.Success(new RcloneUpdateCheck(
+                        string.Empty,
+                        RcloneBootstrapService.ReleaseVersion,
+                        true));
+                }
+                var error = installed.Error!;
+                return Result.Failure<RcloneUpdateCheck>(error.Code, error.Message, error.IsTransient);
             }
-            var error = installed.Error!;
-            return Result.Failure<RcloneUpdateCheck>(error.Code, error.Message, error.IsTransient);
+            installedVersion = installed.Value.Version;
         }
 
         ProcessRunResult processResult;
         try
         {
-            processResult = await _processRunner.RunAsync(
+            processResult = await RcloneFileAccess.RunAsync(() => _processRunner.RunAsync(
                 _locator.ExecutablePath,
                 ["version", "--check"],
                 _checkTimeout,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken), cancellationToken).ConfigureAwait(false);
         }
+        catch (Exception exception) when (RcloneFileAccess.IsLocked(exception))
+        { return FileLocked<RcloneUpdateCheck>("The rclone executable"); }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             return Result.Failure<RcloneUpdateCheck>(
@@ -283,7 +311,7 @@ public sealed class RcloneUpdateService
                 "rclone returned an unrecognized update response.");
         }
 
-        var currentVersion = NormalizeStableVersion(installed.Value.Version);
+        var currentVersion = NormalizeStableVersion(installedVersion);
         if (currentVersion is null)
         {
             return Result.Failure<RcloneUpdateCheck>(
@@ -298,6 +326,7 @@ public sealed class RcloneUpdateService
     }
 
     private async Task<OperationResult<RcloneUpdateResult>> UpdateCoreAsync(
+        IProgress<RcloneBootstrapProgress>? progress,
         CancellationToken cancellationToken)
     {
         var check = await CheckCoreAsync(cancellationToken).ConfigureAwait(false);
@@ -363,14 +392,18 @@ public sealed class RcloneUpdateService
         var backupPath = Path.Combine(directory, $".rclone-old-{transactionId}.exe");
         var committed = false;
         var preserveBackup = false;
+        var preserveStage = false;
+        var lockedFile = "The rclone executable";
+        void ReportLock() => progress?.Report(new RcloneBootstrapProgress(
+            "Waiting for another program to release the rclone file"));
 
         try
         {
-            var download = await _processRunner.RunAsync(
+            var download = await RcloneFileAccess.RunAsync(() => _processRunner.RunAsync(
                 executablePath,
                 ["selfupdate", "--stable", "--output", stagedPath],
                 _updateTimeout,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken), cancellationToken, ReportLock).ConfigureAwait(false);
             if (download.TimedOut)
             {
                 return Result.Failure<RcloneUpdateResult>(
@@ -388,6 +421,7 @@ public sealed class RcloneUpdateService
             }
 
             cancellationToken.ThrowIfCancellationRequested();
+            lockedFile = "The downloaded rclone executable";
             if (File.GetAttributes(stagedPath).HasFlag(FileAttributes.ReparsePoint))
             {
                 return Result.Failure<RcloneUpdateResult>(
@@ -395,7 +429,12 @@ public sealed class RcloneUpdateService
                     "The staged rclone update is not a regular file.");
             }
 
-            var staged = await InspectExecutableAsync(stagedPath, cancellationToken).ConfigureAwait(false);
+            var staged = await InspectExecutableAsync(stagedPath, cancellationToken, ReportLock).ConfigureAwait(false);
+            if (staged.Error?.Code == "rclone.file_locked")
+            {
+                preserveStage = true;
+                return Result.Failure<RcloneUpdateResult>(staged.Error.Code, staged.Error.Message, true);
+            }
             if (!staged.Succeeded || staged.Value is null ||
                 !string.Equals(staged.Value, check.Value.AvailableVersion, StringComparison.OrdinalIgnoreCase))
             {
@@ -406,10 +445,20 @@ public sealed class RcloneUpdateService
 
             // Keep the rollback copy separate, then use same-volume replacement for the
             // shortest possible commit. Cancellation is deliberately not observed mid-commit.
-            File.Replace(stagedPath, executablePath, backupPath, ignoreMetadataErrors: true);
+            lockedFile = "The rclone executable or downloaded update";
+            await RcloneFileAccess.ChangeAsync(() => File.Replace(stagedPath, executablePath, backupPath,
+                ignoreMetadataErrors: true), cancellationToken, ReportLock).ConfigureAwait(false);
             committed = true;
 
-            var installed = await InspectExecutableAsync(executablePath, CancellationToken.None).ConfigureAwait(false);
+            var installed = await InspectExecutableAsync(executablePath, CancellationToken.None, ReportLock).ConfigureAwait(false);
+            if (installed.Error?.Code == "rclone.file_locked")
+            {
+                // The staged image already passed verification and replacement
+                // completed. Keep its rollback copy until a later unlocked check;
+                // a scanner lock alone must not trigger a downgrade.
+                preserveBackup = true;
+                return Result.Failure<RcloneUpdateResult>(installed.Error.Code, installed.Error.Message, true);
+            }
             if (!installed.Succeeded || installed.Value is null ||
                 !string.Equals(installed.Value, check.Value.AvailableVersion, StringComparison.OrdinalIgnoreCase))
             {
@@ -433,6 +482,15 @@ public sealed class RcloneUpdateService
         catch (OperationCanceledException)
         {
             throw;
+        }
+        catch (Exception exception) when (RcloneFileAccess.IsLocked(exception))
+        {
+            // Keep the downloaded payload for inspection. A later healthy check
+            // cleans abandoned stages; automatic verified-payload reuse requires
+            // a separate durable checksum/transaction receipt.
+            preserveStage = true;
+            preserveBackup = File.Exists(backupPath);
+            return FileLocked<RcloneUpdateResult>(lockedFile);
         }
         catch (UnauthorizedAccessException)
         {
@@ -476,7 +534,7 @@ public sealed class RcloneUpdateService
         }
         finally
         {
-            TryDelete(stagedPath);
+            if (!preserveStage) TryDelete(stagedPath);
             if (!committed && !preserveBackup)
             {
                 TryDelete(backupPath);
@@ -486,17 +544,18 @@ public sealed class RcloneUpdateService
 
     private async Task<OperationResult<string>> InspectExecutableAsync(
         string executablePath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action? retrying = null)
     {
         try
         {
             if (!File.Exists(executablePath) || new FileInfo(executablePath).Length == 0)
                 return Result.Failure<string>("rclone.update_staged_missing", "The staged executable is missing.");
-            var result = await _processRunner.RunAsync(
+            var result = await RcloneFileAccess.RunAsync(() => _processRunner.RunAsync(
                 executablePath,
                 ["version"],
                 _checkTimeout,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken), cancellationToken, retrying).ConfigureAwait(false);
             var line = result.StandardOutput
                 .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .FirstOrDefault(value => value.StartsWith("rclone v", StringComparison.OrdinalIgnoreCase));
@@ -506,11 +565,19 @@ public sealed class RcloneUpdateService
                     : Result.Failure<string>("rclone.update_staged_invalid", "The staged executable reported an invalid version.")
                 : Result.Failure<string>("rclone.update_staged_invalid", "The staged executable is invalid.");
         }
+        catch (Exception exception) when (RcloneFileAccess.IsLocked(exception))
+        {
+            return FileLocked<string>(Path.GetFileName(executablePath) == "rclone.exe"
+                ? "The rclone executable" : "The downloaded or backup rclone executable");
+        }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             return Result.Failure<string>("rclone.update_staged_invalid", "The staged executable could not be verified.");
         }
     }
+
+    private static OperationResult<T> FileLocked<T>(string file) =>
+        Result.Failure<T>("rclone.file_locked", RcloneFileAccess.DescribeLock(file), true);
 
     private static OperationResult<RcloneUpdateResult> RollBack(
         string executablePath,

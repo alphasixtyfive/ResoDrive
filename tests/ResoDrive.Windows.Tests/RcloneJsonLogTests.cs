@@ -35,6 +35,18 @@ public sealed class RcloneJsonLogTests
         Assert.Null(parsed);
     }
 
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"bytes\":\"unknown\"}")]
+    [InlineData("{\"bytes\":-1}")]
+    [InlineData("{\"bytes\":null}")]
+    [InlineData("{\"bytes\":9223372036854775808}")]
+    public void EmptyOrMalformedStatisticsAreNotZeroProgressMeasurements(string stats)
+    {
+        Assert.True(RcloneJsonLogParser.TryParse("{\"level\":\"info\",\"stats\":" + stats + "}", out var parsed));
+        Assert.Null(parsed!.Stats);
+    }
+
     [Fact]
     public void StructuredWriter_ProducesOneValidJsonObjectPerLine()
     {

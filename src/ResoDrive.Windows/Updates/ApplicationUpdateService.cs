@@ -26,16 +26,18 @@ public sealed partial class ApplicationUpdateService
     private static readonly HttpClient SharedClient = CreateClient();
     private readonly HttpClient _client;
     private readonly Uri _endpoint;
+    private readonly TimeProvider _timeProvider;
 
     public ApplicationUpdateService()
         : this(SharedClient, ProductLinks.LatestRelease)
     {
     }
 
-    internal ApplicationUpdateService(HttpClient client, Uri endpoint)
+    internal ApplicationUpdateService(HttpClient client, Uri endpoint, TimeProvider? timeProvider = null)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<OperationResult<ApplicationUpdateCheck>> CheckAsync(
@@ -83,7 +85,7 @@ public sealed partial class ApplicationUpdateService
             var downloadRoot = ProductLinks.Repository.AbsoluteUri.TrimEnd('/') +
                 $"/releases/download/v{version}/";
             var installer = updateAvailable
-                ? new Uri(downloadRoot + $"resodrive-win-x64-{version}.msi")
+                ? new Uri(downloadRoot + $"resodrive-win-x64-{version}-setup.exe")
                 : null;
             var checksum = updateAvailable
                 ? new Uri(installer!.AbsoluteUri + ".sha256")
@@ -136,7 +138,7 @@ public sealed partial class ApplicationUpdateService
         var directory = Path.GetFullPath(destinationDirectory);
         var installerPath = Path.Combine(
             directory,
-            $"resodrive-win-x64-{update.AvailableVersion}.msi");
+            $"resodrive-win-x64-{update.AvailableVersion}-setup.exe");
         var temporaryPath = installerPath + ".download";
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromHours(2));
@@ -151,6 +153,23 @@ public sealed partial class ApplicationUpdateService
                 return Result.Failure<ApplicationUpdatePackage>(
                     "app.update_checksum_invalid",
                     "The published installer checksum is invalid.");
+            }
+
+            // A cancelled/blocked installation does not invalidate its download.
+            // Recheck against the current published checksum before using it again;
+            // the handoff still hashes and locks the package before elevating it.
+            if (File.Exists(installerPath))
+            {
+                await using var cached = new FileStream(installerPath, FileMode.Open, FileAccess.Read,
+                    FileShare.Read, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                if (cached.Length is > 0 and <= MaximumInstallerBytes &&
+                    Convert.ToHexString(await SHA256.HashDataAsync(cached, timeout.Token).ConfigureAwait(false))
+                        .Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    progress?.Report(new ApplicationUpdateDownloadProgress(cached.Length, cached.Length));
+                    RemoveOlderInstallers(directory, installerPath);
+                    return Result.Success(new ApplicationUpdatePackage(update.AvailableVersion, installerPath, expectedHash));
+                }
             }
 
             var downloadProgress = progress is null
@@ -211,6 +230,20 @@ public sealed partial class ApplicationUpdateService
 
     private async Task<string?> DownloadChecksumAsync(Uri uri, string installerName, CancellationToken cancellationToken)
     {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45), _timeProvider);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+        try
+        {
+            return await ReadChecksumAsync(uri, installerName, linked.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            throw new HttpRequestException("The installer checksum request timed out. Check the connection and retry.", exception);
+        }
+    }
+
+    private async Task<string?> ReadChecksumAsync(Uri uri, string installerName, CancellationToken cancellationToken)
+    {
         using var response = await _client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead,
             cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode || response.Content.Headers.ContentLength is > 4096)
@@ -259,7 +292,7 @@ public sealed partial class ApplicationUpdateService
         uri.Host.Equals(ProductLinks.Repository.Host, StringComparison.OrdinalIgnoreCase) &&
         uri.AbsolutePath.StartsWith(repositoryPath + "/", StringComparison.OrdinalIgnoreCase) &&
         uri.AbsolutePath[repositoryPath.Length..].Equals(
-            $"/releases/download/v{version}/resodrive-win-x64-{version}.msi" + (checksum ? ".sha256" : string.Empty),
+            $"/releases/download/v{version}/resodrive-win-x64-{version}-setup.exe" + (checksum ? ".sha256" : string.Empty),
             StringComparison.Ordinal);
     }
 
@@ -272,7 +305,8 @@ public sealed partial class ApplicationUpdateService
 
     private static void RemoveOlderInstallers(string directory, string current)
     {
-        foreach (var path in Directory.EnumerateFiles(directory, "resodrive-win-x64-*.msi"))
+        foreach (var path in Directory.EnumerateFiles(directory, "resodrive-win-x64-*.msi")
+            .Concat(Directory.EnumerateFiles(directory, "resodrive-win-x64-*-setup.exe")))
         {
             if (!path.Equals(current, StringComparison.OrdinalIgnoreCase))
                 DeleteIfPresent(path);

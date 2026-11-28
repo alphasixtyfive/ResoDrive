@@ -149,6 +149,39 @@ public sealed class ScheduledTaskAutostartServiceTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void Migration_PreservesEnabledStateAndRetargetsOwnedTask(bool enabled)
+    {
+        var tasks = new FakeTaskStore { Record = new(ScheduledTaskDefinition.CreateXml(_applicationPath, UserId), enabled) };
+        var current = Path.GetFullPath(@"C:\Program Files\ResoDrive\resodrive.exe");
+        var result = new ScheduledTaskAutostartService(current, UserId, tasks).MigrateFrom(_applicationPath);
+        Assert.True(result.Succeeded);
+        Assert.Equal(enabled, tasks.Record!.Enabled);
+        Assert.True(ScheduledTaskDefinition.IsOwned(tasks.Record.Xml, current, UserId));
+    }
+
+    [Fact]
+    public void Migration_RestoresOriginalTaskWhenVerificationFails()
+    {
+        var original = new StartupTaskRecord(ScheduledTaskDefinition.CreateXml(_applicationPath, UserId), false);
+        var tasks = new FakeTaskStore { Record = original, ThrowVerificationRead = true };
+        var result = new ScheduledTaskAutostartService(@"C:\Program Files\ResoDrive\resodrive.exe", UserId, tasks).MigrateFrom(_applicationPath);
+        Assert.False(result.Succeeded);
+        Assert.Equal(original, tasks.Record);
+    }
+
+    [Fact]
+    public void Migration_LeavesPortableTaskUnchanged()
+    {
+        var original = new StartupTaskRecord(ScheduledTaskDefinition.CreateXml(@"D:\Portable\resodrive.exe", UserId), true);
+        var tasks = new FakeTaskStore { Record = original };
+        var result = new ScheduledTaskAutostartService(@"C:\Program Files\ResoDrive\resodrive.exe", UserId, tasks).MigrateFrom(_applicationPath);
+        Assert.False(result.Succeeded);
+        Assert.Equal(original, tasks.Record);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task VerificationExceptionRestoresThePreviousTask(bool existing)
     {
         var previous = existing ? new StartupTaskRecord(ScheduledTaskDefinition.CreateXml(_applicationPath, UserId), false) : null;

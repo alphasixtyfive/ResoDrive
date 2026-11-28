@@ -88,15 +88,24 @@ and open ResoDrive. The first time through:
 3. If you want a mounted drive, install WinFsp when prompted.
 
 Your settings, encrypted credentials, logs, cache, and managed rclone copy live in
-`%LOCALAPPDATA%\rdrive`. An upgrade leaves that folder alone. After the first
+`%LOCALAPPDATA%\ResoDrive`. The legacy `rdrive` location is migrated once while
+preserving your account data; see the [migration notes](docs/INSTALL-DIRECTORY-MIGRATION.md). After the first
 install, you can check for and install ResoDrive updates from Settings.
 Application and rclone downloads can continue from a partial file after a dropped
 connection, which avoids starting large transfers again on metered or satellite links.
 Downloads can be cancelled from Settings and resumed later.
+Normal rclone updates keep existing drives and syncs running; subsequent
+connections use the updated engine. Repair still requires stopping active work.
+Unavailable WebDAV/SFTP servers can wait quietly for a connection and retry when
+the network changes, including after a VPN connects. Stop cancels the waiting
+connection; there are no additional VPN settings to configure.
 
-Left-click the tray icon, or choose **Uploads** in its menu, to see queued transfers,
-active uploads, modified files waiting to close, and upload errors. The tray icon
-animates while uploads are pending and shows an amber warning when their state
+Left-click the tray icon, or choose **Transfers** in its menu, to see queued uploads,
+active sync jobs, modified files waiting to close, and upload errors. Active sync
+jobs show their direction, progress and speed; finished and idle jobs stay out of
+the popup. The tray icon
+popup has compact Open ResoDrive and Settings actions in its footer. The icon
+animates while uploads are pending or sync jobs are active, and shows an amber warning when upload state
 cannot be confirmed. Explorer's copy progress measures delivery to the local
 cache; ResoDrive tracks the later delivery to the server.
 
@@ -137,11 +146,25 @@ For a team deployment, start with [`profiles.sample.json`](profiles.sample.json)
 add the connection presets you want to offer, and save the result as:
 
 ```text
-%LOCALAPPDATA%\rdrive\profiles.json
+%LOCALAPPDATA%\ResoDrive\profiles.json
 ```
 
 Profiles are for connection details and defaults. Do not put passwords, tokens, or
 private keys in them.
+
+Deployment tools can import a catalog without opening a window:
+
+```powershell
+resodrive.exe --install-profiles 'C:\deployment\profiles.json'
+```
+
+Run it as the intended user after installation. ResoDrive completes its normal
+data-folder migration, validates the catalog, and uses the active data folder
+(including `RDRIVE_DATA_DIR`). Exit code `0` means installed, `10` means a valid
+existing catalog was preserved, `1` means failure, and `2` means incorrect arguments.
+An invalid existing catalog is backed up before atomic replacement. The command
+does not change existing drives, settings or cached files; pending account cleanup
+blocks the import. The source must be a local absolute path, at most 512 KiB.
 
 Profile cache flags populate the dedicated controls. Other approved arguments
 remain in Additional rclone options, with one `--option=value` or standalone

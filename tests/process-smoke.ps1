@@ -267,10 +267,11 @@ try {
     # startup-ready window and acknowledges that exact request.
     $show = Start-OwnedProcess @('--show')
     Wait-ExitCode $show 0 'acknowledged show request'
-    $activationLog = Get-Content -LiteralPath $logPath -Raw
-    if (-not $activationLog.Contains('event=activation.request_completed', [StringComparison]::Ordinal)) {
-        throw 'The primary did not record completion of the show request.'
-    }
+    # The primary records completion after sending the acknowledgement. The
+    # secondary can exit before that last diagnostic write has completed.
+    Wait-Until {
+        (Get-Content -LiteralPath $logPath -Raw).Contains('event=activation.request_completed', [StringComparison]::Ordinal)
+    } 'primary recording completion of the acknowledged show request'
 
     # MainWindow owns automatic host recovery. Stop the host through its supported
     # protocol and verify a replacement process appears within the bounded window.

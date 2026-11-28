@@ -2,7 +2,11 @@ using ResoDrive.Core.Results;
 
 namespace ResoDrive.Windows;
 
-public sealed record RcloneConnectionMetadata(string? Host, string? Type);
+public sealed record RcloneConnectionMetadata(string? Host, string? Type)
+{
+    public string? Address { get; init; }
+    internal bool UsesCustomTransport { get; init; }
+}
 
 public static class RcloneConnectionMetadataService
 {
@@ -11,6 +15,7 @@ public static class RcloneConnectionMetadataService
     public static async Task<OperationResult<IReadOnlyDictionary<string, RcloneConnectionMetadata>>> ReadAsync(
         string rclonePath,
         ApplicationPaths paths,
+        string? remoteName = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rclonePath);
@@ -24,7 +29,7 @@ public static class RcloneConnectionMetadataService
         var arguments = new List<string>
         {
             "config",
-            "redacted",
+            "show",
             "--config",
             paths.ConfigFile,
             "--ask-password=false",
@@ -33,6 +38,11 @@ public static class RcloneConnectionMetadataService
         {
             arguments.Add("--password-command");
             arguments.Add(RclonePasswordCommand.Create());
+        }
+        if (remoteName is not null)
+        {
+            arguments.Add("--");
+            arguments.Add(remoteName);
         }
 
         try
@@ -50,6 +60,8 @@ public static class RcloneConnectionMetadataService
                     true);
             }
 
+            // rclone's redacted output also hides hosts. Inspect privately and
+            // return only the allowlisted display metadata; never log raw output.
             return Result.Success<IReadOnlyDictionary<string, RcloneConnectionMetadata>>(
                 Parse(result.StandardOutput));
         }
@@ -70,12 +82,16 @@ public static class RcloneConnectionMetadataService
         string? remote = null;
         string? host = null;
         string? type = null;
+        Uri? endpoint = null;
+        string? port = null;
+        var customTransport = false;
         void SaveRemote()
         {
             if (!string.IsNullOrWhiteSpace(remote) &&
                 (!string.IsNullOrWhiteSpace(host) || !string.IsNullOrWhiteSpace(type)))
             {
-                connections[remote] = new RcloneConnectionMetadata(host, type);
+                var address = ConnectionAddress(type, host, port, endpoint);
+                connections[remote] = new RcloneConnectionMetadata(host, type) { Address = address, UsesCustomTransport = customTransport };
             }
         }
 
@@ -88,6 +104,9 @@ public static class RcloneConnectionMetadataService
                 remote = line[1..^1].Trim();
                 host = null;
                 type = null;
+                endpoint = null;
+                port = null;
+                customTransport = false;
                 continue;
             }
             if (remote is null)
@@ -102,6 +121,8 @@ public static class RcloneConnectionMetadataService
             }
             var key = line[..separator].Trim();
             var value = line[(separator + 1)..].Trim();
+            if ((key.Contains("proxy", StringComparison.OrdinalIgnoreCase) || key.Equals("ssh", StringComparison.OrdinalIgnoreCase)) &&
+                !string.IsNullOrWhiteSpace(value)) customTransport = true;
             if (key.Equals("type", StringComparison.OrdinalIgnoreCase))
             {
                 type = value.ToLowerInvariant() switch
@@ -112,19 +133,42 @@ public static class RcloneConnectionMetadataService
                 };
             }
             else if (key.Equals("url", StringComparison.OrdinalIgnoreCase) &&
-                Uri.TryCreate(value, UriKind.Absolute, out var uri))
+                Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+                (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) &&
+                !string.IsNullOrWhiteSpace(uri.Host))
             {
                 host = uri.IdnHost;
+                endpoint = uri;
             }
             else if (key.Equals("host", StringComparison.OrdinalIgnoreCase) &&
                      Uri.CheckHostName(value) != UriHostNameType.Unknown)
             {
                 host = value;
             }
+            else if (key.Equals("port", StringComparison.OrdinalIgnoreCase))
+            {
+                port = value;
+            }
 
         }
 
         SaveRemote();
         return connections;
+    }
+
+    private static string AddressHost(string host) => host.Contains(':')
+        ? $"[{host.Trim('[', ']')}]" : host;
+
+    private static string? ConnectionAddress(string? type, string? host, string? port, Uri? endpoint)
+    {
+        if (type != "SFTP")
+            return endpoint is not null ? $"{endpoint.Scheme}://{AddressHost(endpoint.IdnHost)}:{endpoint.Port}" : null;
+        if (string.IsNullOrWhiteSpace(host)) return null;
+        var effectivePort = 22;
+        if (!string.IsNullOrWhiteSpace(port) &&
+            (!int.TryParse(port, System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out effectivePort) || effectivePort is <= 0 or > 65535))
+            return null;
+        return $"sftp://{AddressHost(host)}:{effectivePort}";
     }
 }

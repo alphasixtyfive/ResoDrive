@@ -2,6 +2,13 @@ namespace ResoDrive.Windows;
 
 public sealed class ApplicationPaths
 {
+    public const string DataDirectoryName = "ResoDrive";
+    public const string LegacyDataDirectoryName = "rdrive";
+    public static string DefaultRoot => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), DataDirectoryName);
+    public static string LegacyDefaultRoot => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), LegacyDataDirectoryName);
+
     public ApplicationPaths(string? rootPath = null)
     {
         var configuredRoot = rootPath ?? Environment.GetEnvironmentVariable("RDRIVE_DATA_DIR");
@@ -10,9 +17,7 @@ public sealed class ApplicationPaths
 
         Root = Path.GetFullPath(
             configuredRoot ??
-            Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "rdrive"));
+            DefaultRoot);
         SettingsFile = Path.Combine(Root, "settings.json");
         ConfigFile = Path.Combine(Root, "rclone.conf");
         OwnershipFile = Path.Combine(Root, "ownership.json");

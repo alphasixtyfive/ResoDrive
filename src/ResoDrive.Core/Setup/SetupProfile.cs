@@ -39,11 +39,6 @@ public sealed record SetupProfile
 
 public static class SetupProfileValidator
 {
-    private static readonly HashSet<string> KnownHostAlgorithms = new(StringComparer.Ordinal)
-    {
-        "ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521"
-    };
-
     public static ValidationResult Validate(SetupProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
@@ -130,13 +125,8 @@ public static class SetupProfileValidator
             issues.Add(new("profile.sftp.port", "The SFTP port must be between 1 and 65535.", "connection.port"));
         if (!Enum.IsDefined(connection.Authentication))
             issues.Add(new("profile.sftp.authentication", "The SFTP authentication method is not supported.", "connection.authentication"));
-        if (!string.IsNullOrEmpty(connection.KnownHost))
-        {
-            var parts = connection.KnownHost.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length != 2 || connection.KnownHost != $"{parts[0]} {parts[1]}" ||
-                !KnownHostAlgorithms.Contains(parts[0]) || !IsValidPublicKey(parts[0], parts[1]))
-                issues.Add(new("profile.sftp.knownHost", "The SFTP server host key must contain a supported OpenSSH public key.", "connection.knownHost"));
-        }
+        if (!string.IsNullOrEmpty(connection.KnownHost) && !SftpHostKeyValidator.IsValid(connection.KnownHost))
+            issues.Add(new("profile.sftp.knownHost", "The SFTP server host key must contain a supported OpenSSH public key.", "connection.knownHost"));
     }
 
     public static bool IsValidSftpHost(string? host)
@@ -147,20 +137,6 @@ public static class SetupProfileValidator
             host.IndexOfAny(['/', '\\', '@', '[', ']']) < 0 &&
             (!host.Contains(':', StringComparison.Ordinal) || hostType == UriHostNameType.IPv6) &&
             hostType != UriHostNameType.Unknown;
-    }
-
-    private static bool IsValidPublicKey(string algorithm, string value)
-    {
-        if (value.Length is < 40 or > 24_000) return false;
-        try
-        {
-            var bytes = Convert.FromBase64String(value);
-            if (bytes.Length is < 32 or > 16_384 || bytes.Length < 4) return false;
-            var nameLength = (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];
-            return nameLength == algorithm.Length && bytes.Length >= 4 + nameLength &&
-                System.Text.Encoding.ASCII.GetString(bytes, 4, nameLength).Equals(algorithm, StringComparison.Ordinal);
-        }
-        catch (FormatException) { return false; }
     }
 
     private static void ValidateDisplayText(string? value, int maximumLength, string field, List<ValidationIssue> issues)

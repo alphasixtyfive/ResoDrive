@@ -23,27 +23,27 @@ internal static partial class InstallerProcessInspection
     private const string AccountUnknownMessage = "Setup could not verify which Windows account owns a running ResoDrive process. Exit ResoDrive from its tray menu, let uploads finish, and retry. If it is running in another account, sign in there to exit it. Your settings and cache have been preserved.";
     private sealed class OtherAccountException() : IOException(OtherAccountMessage);
 
-    internal static Task WaitForOtherAccountProcessesExitAsync(string directory, CancellationToken token) =>
-        Task.Run(() => WaitForOtherAccountProcessesExit(directory, token), token);
+    internal static Task WaitForOtherAccountProcessesExitAsync(string directory, CancellationToken token, bool currentUserOnly = false) =>
+        Task.Run(() => WaitForOtherAccountProcessesExit(directory, currentUserOnly, token), token);
 
-    internal static Task StopOrphanedUiAsync(string directory, CancellationToken token) =>
+    internal static Task StopOrphanedUiAsync(string directory, CancellationToken token, bool currentUserOnly = false) =>
         Task.Run(() => WithNoHostMutex(() =>
         {
-            EnsureInstalledProcessAccounts(directory, token);
-            EnsureNoRcloneWork(directory, includeOtherManagedRuntimes: true, token);
-            StopVerifiedUi(directory, hostProcessId: null, token);
-            EnsureNoRcloneWork(directory, includeOtherManagedRuntimes: true, token);
-            EnsureNoInstalledProcesses(directory, token);
+            EnsureInstalledProcessAccounts(directory, currentUserOnly, token);
+            EnsureNoRcloneWork(directory, includeOtherManagedRuntimes: true, currentUserOnly, token);
+            StopVerifiedUi(directory, hostProcessId: null, currentUserOnly, token);
+            EnsureNoRcloneWork(directory, includeOtherManagedRuntimes: true, currentUserOnly, token);
+            EnsureNoInstalledProcesses(directory, currentUserOnly, token);
         }), token);
 
-    internal static Task StopVerifiedUiAsync(string directory, int? hostProcessId, CancellationToken token) =>
-        Task.Run(() => StopVerifiedUi(directory, hostProcessId, token), token);
+    internal static Task StopVerifiedUiAsync(string directory, int? hostProcessId, CancellationToken token, bool currentUserOnly = false) =>
+        Task.Run(() => StopVerifiedUi(directory, hostProcessId, currentUserOnly, token), token);
 
-    internal static Task VerifyStoppedAsync(string directory, CancellationToken token) =>
+    internal static Task VerifyStoppedAsync(string directory, CancellationToken token, bool currentUserOnly = false) =>
         Task.Run(() => WithNoHostMutex(() =>
         {
-            EnsureNoRcloneWork(directory, includeOtherManagedRuntimes: false, token);
-            EnsureNoInstalledProcesses(directory, token);
+            EnsureNoRcloneWork(directory, includeOtherManagedRuntimes: false, currentUserOnly, token);
+            EnsureNoInstalledProcesses(directory, currentUserOnly, token);
         }), token);
 
     private static void WithNoHostMutex(Action action)
@@ -79,9 +79,9 @@ internal static partial class InstallerProcessInspection
         }
     }
 
-    private static void WaitForOtherAccountProcessesExit(string directory, CancellationToken token)
+    private static void WaitForOtherAccountProcessesExit(string directory, bool currentUserOnly, CancellationToken token)
     {
-        var candidates = GetInstalledProcesses(directory, token, requireTermination: false);
+        var candidates = GetInstalledProcesses(directory, token, currentUserOnly: currentUserOnly);
         try
         {
             var deadline = Stopwatch.GetTimestamp() + TimeSpan.FromSeconds(42).Ticks *
@@ -89,13 +89,13 @@ internal static partial class InstallerProcessInspection
             foreach (var candidate in candidates)
             {
                 token.ThrowIfCancellationRequested();
-                if (HasConfirmedExit(candidate.Process))
+                if (HasConfirmedExit(candidate.Handle))
                     continue;
                 try
                 {
-                    VerifySameAccount(candidate);
+                    if (!VerifyAccountOrExited(candidate.Process, candidate.Handle, token)) continue;
                 }
-                catch (IOException) when (HasConfirmedExit(candidate.Process))
+                catch (IOException) when (HasConfirmedExit(candidate.Handle))
                 {
                     // The process closed between enumeration and token inspection.
                     continue;
@@ -107,13 +107,12 @@ internal static partial class InstallerProcessInspection
                     while (true)
                     {
                         token.ThrowIfCancellationRequested();
-                        var wait = WaitForSingleObject(candidate.Handle, 200);
-                        if (wait == 0) break; // This exact process exited.
-                        if (wait != 0x00000102)
-                            throw new IOException(AccountUnknownMessage,
-                                new Win32Exception(Marshal.GetLastPInvokeError()));
+                        if (HasConfirmedExit(candidate.Handle)) break;
                         if (Stopwatch.GetTimestamp() >= deadline)
                             throw new OtherAccountException();
+                        // Read-only account inspection requires no SYNCHRONIZE.
+                        // Poll the pinned process, retaining the existing deadline.
+                        if (token.WaitHandle.WaitOne(200)) token.ThrowIfCancellationRequested();
                     }
                 }
             }
@@ -124,17 +123,15 @@ internal static partial class InstallerProcessInspection
         }
     }
 
-    private static void EnsureInstalledProcessAccounts(string directory, CancellationToken token)
+    private static void EnsureInstalledProcessAccounts(string directory, bool currentUserOnly, CancellationToken token)
     {
-        var candidates = GetInstalledProcesses(directory, token, requireTermination: false);
+        var candidates = GetInstalledProcesses(directory, token, currentUserOnly: currentUserOnly);
         try
         {
             foreach (var candidate in candidates)
             {
                 token.ThrowIfCancellationRequested();
-                if (HasConfirmedExit(candidate.Process)) continue;
-                try { VerifySameAccount(candidate); }
-                catch (IOException) when (HasConfirmedExit(candidate.Process)) { }
+                _ = VerifyAccountOrExited(candidate.Process, candidate.Handle, token);
             }
         }
         finally
@@ -143,9 +140,9 @@ internal static partial class InstallerProcessInspection
         }
     }
 
-    private static void StopVerifiedUi(string directory, int? hostProcessId, CancellationToken token)
+    private static void StopVerifiedUi(string directory, int? hostProcessId, bool currentUserOnly, CancellationToken token)
     {
-        var candidates = GetInstalledProcesses(directory, token);
+        var candidates = GetInstalledProcesses(directory, token, requireTermination: true, currentUserOnly: currentUserOnly);
         try
         {
             // Verify the entire set before closing any window. A newly started host,
@@ -154,32 +151,33 @@ internal static partial class InstallerProcessInspection
             {
                 var process = candidate.Process;
                 token.ThrowIfCancellationRequested();
-                if (process.Id == hostProcessId || HasConfirmedExit(process))
+                if (process.Id == hostProcessId || HasConfirmedExit(candidate.Handle))
                     continue;
-                VerifyUiCandidate(candidate, directory);
+                VerifyUiCandidate(candidate, directory, token);
             }
 
             foreach (var candidate in candidates)
             {
                 var process = candidate.Process;
                 token.ThrowIfCancellationRequested();
-                if (process.Id == hostProcessId || HasConfirmedExit(process))
+                if (process.Id == hostProcessId || HasConfirmedExit(candidate.Handle))
                     continue;
-                VerifyUiCandidate(candidate, directory);
+                VerifyUiCandidate(candidate, directory, token);
                 try
                 {
-                    if (process.HasExited) continue;
+                    if (HasConfirmedExit(candidate.Handle)) continue;
                     // Terminate the handle opened during inspection. Process.Kill would
                     // reopen by PID and could target a different process after PID reuse.
                     if (!TerminateProcess(candidate.Handle, -1))
                     {
-                        if (HasConfirmedExit(process)) continue;
-                        throw new Win32Exception(Marshal.GetLastPInvokeError());
+                        var error = Marshal.GetLastPInvokeError();
+                        if (HasConfirmedExit(candidate.Handle)) continue;
+                        throw InspectionFailure(process, "TerminateProcess", error, BusyMessage);
                     }
                     while (!process.WaitForExit(200))
                         token.ThrowIfCancellationRequested();
                 }
-                catch (InvalidOperationException) when (HasConfirmedExit(process))
+                catch (InvalidOperationException) when (HasConfirmedExit(candidate.Handle))
                 {
                     // The UI exited after inspection.
                 }
@@ -191,35 +189,42 @@ internal static partial class InstallerProcessInspection
         }
     }
 
-    private static void VerifyUiCandidate(Candidate candidate, string directory)
+    private static void VerifyUiCandidate(Candidate candidate, string directory, CancellationToken token)
     {
         var process = candidate.Process;
-        if (HasConfirmedExit(process)) return;
-        try { VerifySameAccount(candidate); }
-        catch (IOException) when (HasConfirmedExit(process)) { return; }
-        if (!IsVerifiedUi(process) || HasConfirmedExit(process))
-            throw new IOException(BusyMessage);
+        if (!VerifyAccountOrExited(process, candidate.Handle, token)) return;
         try
         {
+            if (!IsVerifiedUi(candidate))
+            {
+                if (HasConfirmedExit(candidate.Handle)) return;
+                throw new IOException(BusyMessage);
+            }
+            if (HasConfirmedExit(candidate.Handle)) return;
             if (process.StartTime.ToUniversalTime() != candidate.StartTimeUtc ||
-                !Path.GetFullPath(process.MainModule?.FileName ?? string.Empty).Equals(
+                !Path.GetFullPath(ReadExecutablePath(candidate.Handle)).Equals(
                     Path.GetFullPath(Path.Combine(directory, "resodrive.exe")), StringComparison.OrdinalIgnoreCase))
                 throw new IOException(BusyMessage);
         }
+        catch (IOException) when (HasConfirmedExit(candidate.Handle))
+        {
+            // A WMI/command-line read can finish after this exact UI exited.
+        }
         catch (Exception exception) when (exception is Win32Exception or InvalidOperationException)
         {
+            if (HasConfirmedExit(candidate.Handle)) return;
             throw new IOException(BusyMessage, exception);
         }
     }
 
-    private static void EnsureNoInstalledProcesses(string directory, CancellationToken token)
+    private static void EnsureNoInstalledProcesses(string directory, bool currentUserOnly, CancellationToken token)
     {
-        var candidates = GetInstalledProcesses(directory, token);
+        var candidates = GetInstalledProcesses(directory, token, currentUserOnly: currentUserOnly);
         try
         {
             foreach (var candidate in candidates)
             {
-                if (!HasConfirmedExit(candidate.Process))
+                if (!HasConfirmedExit(candidate.Handle))
                     throw new IOException(BusyMessage);
             }
         }
@@ -230,8 +235,37 @@ internal static partial class InstallerProcessInspection
     }
 
     private static List<Candidate> GetInstalledProcesses(string directory, CancellationToken token,
-        bool requireTermination = true)
+        bool requireTermination = false, bool currentUserOnly = false)
     {
+        // Match the existing other-account exit allowance, within preparation's
+        // 60-second overall deadline. Five seconds was insufficient on legacy upgrades.
+        var deadline = Stopwatch.GetTimestamp() + 42 * Stopwatch.Frequency;
+        while (true)
+        {
+            token.ThrowIfCancellationRequested();
+            var identityQueryDenied = false;
+            try
+            {
+                return GetInstalledProcessesOnce(directory, requireTermination, currentUserOnly,
+                    out identityQueryDenied, token);
+            }
+            catch (IOException) when (currentUserOnly && identityQueryDenied &&
+                Stopwatch.GetTimestamp() < deadline)
+            {
+                // An elevated process can deny both query and SYNCHRONIZE access.
+                // Discard the failed snapshot and verify the complete fresh set.
+                // Never skip an opaque PID, infer its role, or close it: migration
+                // can proceed only after a full inspection succeeds. Fresh scans
+                // also inspect replacements and processes started during the wait.
+                if (token.WaitHandle.WaitOne(100)) token.ThrowIfCancellationRequested();
+            }
+        }
+    }
+
+    private static List<Candidate> GetInstalledProcessesOnce(string directory, bool requireTermination,
+        bool currentUserOnly, out bool identityQueryDenied, CancellationToken token)
+    {
+        identityQueryDenied = false;
         var executable = Path.GetFullPath(Path.Combine(directory, "resodrive.exe"));
         var processes = Process.GetProcessesByName("resodrive");
         var matches = new List<Candidate>();
@@ -242,33 +276,51 @@ internal static partial class InstallerProcessInspection
                 token.ThrowIfCancellationRequested();
                 if (process.Id == Environment.ProcessId || HasConfirmedExit(process))
                     continue;
-                string? path;
-                try { path = process.MainModule?.FileName; }
-                catch (InvalidOperationException) when (HasConfirmedExit(process)) { continue; }
-                catch (Win32Exception exception)
+                // Pin the PID and use only the rights needed to read account/image
+                // identity. Synchronization and termination belong to matched UIs,
+                // not to the preliminary filter over every same-name process.
+                SafeProcessHandle? handle = OpenProcess(0x1000, false, process.Id);
+                try
                 {
-                    // An opaque same-name process may be a different-account installed host.
-                    throw new IOException(BusyMessage, exception);
+                    if (handle.IsInvalid)
+                    {
+                        var error = Marshal.GetLastPInvokeError();
+                        if (HasConfirmedExit(process)) continue;
+                        identityQueryDenied = error == 5;
+                        throw InspectionFailure(process, "OpenProcess(query)", error, AccountUnknownMessage);
+                    }
+                    if (currentUserOnly && BelongsToOtherAccount(process, handle, token)) continue;
+                    string path;
+                    try { path = ReadExecutablePath(handle); }
+                    catch (Win32Exception exception)
+                    {
+                        if (HasConfirmedExit(handle)) continue;
+                        // An opaque same-name process may be a different-account installed host.
+                        throw InspectionFailure(process, "QueryFullProcessImageName", exception.NativeErrorCode, BusyMessage);
+                    }
+                    if (!Path.GetFullPath(path).Equals(executable, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (process.SessionId != Process.GetCurrentProcess().SessionId)
+                        throw new IOException("ResoDrive is running in another Windows session. Sign out of that session and retry the installation.");
+                    if (requireTermination)
+                    {
+                        // Keep the query handle until the operational handle is acquired,
+                        // so Windows cannot recycle the PID between the two opens.
+                        var operational = OpenProcess(0x00101001, false, process.Id); // QUERY_LIMITED | TERMINATE | SYNCHRONIZE
+                        if (operational.IsInvalid)
+                        {
+                            var error = Marshal.GetLastPInvokeError();
+                            operational.Dispose();
+                            if (HasConfirmedExit(handle)) continue;
+                            throw InspectionFailure(process, "OpenProcess(matched installation)", error, BusyMessage);
+                        }
+                        handle.Dispose();
+                        handle = operational;
+                    }
+                    matches.Add(new Candidate(process, handle, process.StartTime.ToUniversalTime()));
+                    handle = null; // The candidate owns the pinned handle.
                 }
-                if (path is null)
-                    throw new IOException(BusyMessage);
-                if (!Path.GetFullPath(path).Equals(executable, StringComparison.OrdinalIgnoreCase))
-                    continue;
-                if (process.SessionId != Process.GetCurrentProcess().SessionId)
-                    throw new IOException("ResoDrive is running in another Windows session. Sign out of that session and retry the installation.");
-                // Keep this process object alive until the decision and termination.
-                // Windows cannot recycle its PID while this kernel handle remains open.
-                var access = requireTermination ? 0x00101001u : 0x00101000u;
-                var handle = OpenProcess(access, false, process.Id); // QUERY_LIMITED | [TERMINATE] | SYNCHRONIZE
-                if (handle.IsInvalid)
-                {
-                    var error = Marshal.GetLastPInvokeError();
-                    handle.Dispose();
-                    throw new IOException(requireTermination ? BusyMessage : AccountUnknownMessage,
-                        new Win32Exception(error));
-                }
-                try { matches.Add(new Candidate(process, handle, process.StartTime.ToUniversalTime())); }
-                catch { handle.Dispose(); throw; }
+                finally { handle?.Dispose(); }
             }
             return matches;
         }
@@ -284,14 +336,17 @@ internal static partial class InstallerProcessInspection
         }
     }
 
-    private static void VerifySameAccount(Candidate candidate)
+    private static void VerifySameAccount(SafeProcessHandle processHandle)
     {
-        using var current = WindowsIdentity.GetCurrent();
+        using var current = WindowsIdentity.GetCurrent(TokenAccessLevels.Query);
         if (current.User is not { } currentSid)
             throw new IOException(AccountUnknownMessage);
-        if (!OpenProcessToken(candidate.Handle, 0x0008, out var token)) // TOKEN_QUERY
+        if (!OpenProcessToken(processHandle, 0x0008, out var token)) // TOKEN_QUERY
+        {
+            var error = Marshal.GetLastPInvokeError();
             throw new IOException(AccountUnknownMessage,
-                new Win32Exception(Marshal.GetLastPInvokeError()));
+                new Win32Exception(error, $"OpenProcessToken failed with Windows error {error}."));
+        }
         using (token)
         {
             try
@@ -310,8 +365,9 @@ internal static partial class InstallerProcessInspection
         }
     }
 
-    private static bool IsVerifiedUi(Process process)
+    private static bool IsVerifiedUi(Candidate candidate)
     {
+        var process = candidate.Process;
         string? commandLine = null;
         try
         {
@@ -334,14 +390,14 @@ internal static partial class InstallerProcessInspection
         }
         if (string.IsNullOrWhiteSpace(commandLine))
         {
-            if (HasConfirmedExit(process)) return false;
+            if (HasConfirmedExit(candidate.Handle)) return false;
             throw new IOException(BusyMessage);
         }
 
         var arguments = ParseCommandLine(commandLine);
         if (arguments.Length is < 1 or > 2 ||
             !Path.IsPathFullyQualified(arguments[0]) ||
-            !Path.GetFullPath(arguments[0]).Equals(Path.GetFullPath(process.MainModule?.FileName ?? string.Empty),
+            !Path.GetFullPath(arguments[0]).Equals(Path.GetFullPath(ReadExecutablePath(candidate.Handle)),
                 StringComparison.OrdinalIgnoreCase))
             throw new IOException(BusyMessage);
         return arguments.Length == 1 || arguments[1].Equals("--background", StringComparison.OrdinalIgnoreCase) ||
@@ -367,7 +423,7 @@ internal static partial class InstallerProcessInspection
     }
 
     private static void EnsureNoRcloneWork(string installationDirectory, bool includeOtherManagedRuntimes,
-        CancellationToken token)
+        bool currentUserOnly, CancellationToken token)
     {
         var paths = new ApplicationPaths();
         using (var ownership = new MountOwnershipStore(paths))
@@ -402,9 +458,17 @@ internal static partial class InstallerProcessInspection
             {
                 token.ThrowIfCancellationRequested();
                 if (HasConfirmedExit(process)) continue;
+                using var inspection = OpenProcess(0x1000, false, process.Id);
+                if (inspection.IsInvalid)
+                {
+                    var error = Marshal.GetLastPInvokeError();
+                    if (HasConfirmedExit(process)) continue;
+                    throw InspectionFailure(process, "OpenProcess(rclone query)", error, AccountUnknownMessage);
+                }
+                if (currentUserOnly && BelongsToOtherAccount(process, inspection, token)) continue;
                 try
                 {
-                    var path = process.MainModule?.FileName ?? throw new IOException(BusyMessage);
+                    var path = ReadExecutablePath(inspection);
                     var canonical = RemoteWipeWorkStopper.CanonicalExecutablePath(path);
                     var configured = RemoteWipeWorkStopper.CanonicalExecutablePath(paths.RcloneExecutable);
                     var runtimeDirectory = Path.GetDirectoryName(canonical);
@@ -420,7 +484,7 @@ internal static partial class InstallerProcessInspection
                 }
                 catch (Exception exception) when (exception is Win32Exception or InvalidOperationException)
                 {
-                    if (!HasConfirmedExit(process)) throw new IOException(BusyMessage, exception);
+                    if (!HasConfirmedExit(inspection)) throw new IOException(BusyMessage, exception);
                 }
             }
         }

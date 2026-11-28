@@ -36,8 +36,7 @@ public sealed class MainWindowMarkupTests
 
         var syncRowTemplate = Assert.Single(
             document.Descendants(presentation + "DataTemplate"),
-            template => template.Descendants().Attributes("Text")
-                .Any(attribute => attribute.Value == "{Binding StatusLine}"));
+            template => (string?)template.Attribute("DataType") == "{x:Type local:SyncRow}");
         Assert.Empty(syncRowTemplate.Descendants(presentation + "ProgressBar"));
         Assert.Contains("{Binding StatusLine}", bindings);
         Assert.DoesNotContain("{Binding StatusPrimary}", bindings);
@@ -67,21 +66,31 @@ public sealed class MainWindowMarkupTests
     }
 
     [Fact]
-    public void StatusRailRadiusFitsItsThreePixelWidth()
+    public void DriveAndSyncStatusRailsBelongToTheirSharedRoundedCard()
     {
-        var document = Load("Controls.xaml");
+        var document = Load("MainWindow.xaml");
         XNamespace presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        XNamespace controls = "clr-namespace:ResoDrive.App.Controls";
         XNamespace xaml = "http://schemas.microsoft.com/winfx/2006/xaml";
+        var cards = document.Descendants(controls + "StatusCard").ToArray();
+        Assert.Equal(2, cards.Length);
+        Assert.Equal("{Binding StatusBrush}", (string?)cards[0].Attribute("StatusBrush"));
+        Assert.Equal("{Binding ResultBrush}", (string?)cards[1].Attribute("StatusBrush"));
+        Assert.All(cards, card => Assert.Equal("{StaticResource RowCard}", (string?)card.Attribute("Style")));
+        Assert.DoesNotContain(document.Descendants(presentation + "Border"),
+            border => (string?)border.Attribute("Style") == "{StaticResource RowStatusRail}");
+        var theme = Load("Controls.xaml");
         var style = Assert.Single(
-            document.Descendants(presentation + "Style"),
+            theme.Descendants(presentation + "Style"),
+            element => (string?)element.Attribute(xaml + "Key") == "RowCard");
+        Assert.Equal("controls:StatusCard", (string?)style.Attribute("TargetType"));
+        var rail = Assert.Single(theme.Descendants(presentation + "Style"),
             element => (string?)element.Attribute(xaml + "Key") == "RowStatusRail");
-        var radius = Assert.Single(
-            style.Elements(presentation + "Setter"),
-            element => (string?)element.Attribute("Property") == "CornerRadius")
+        var width = Assert.Single(
+            rail.Elements(presentation + "Setter"),
+            element => (string?)element.Attribute("Property") == "StatusRailWidth")
             .Attribute("Value")?.Value;
-
-        Assert.NotNull(radius);
-        Assert.True(double.Parse(radius.Split(',')[0], System.Globalization.CultureInfo.InvariantCulture) <= 1.5);
+        Assert.Equal("3", width);
     }
 
     [Fact]
@@ -246,9 +255,8 @@ public sealed class MainWindowMarkupTests
             (string?)element.Attribute(xaml + "Key") == "ConnectionBadgeText");
         Assert.Equal("Center", SetterValue(badgeTextStyle, presentation, "VerticalAlignment"));
 
-          var host = Assert.Single(document.Descendants(presentation + "TextBlock"), element =>
-              element.Elements(presentation + "Run").Any(run =>
-                  (string?)run.Attribute("Text") == "{Binding ConnectionHostDisplay, Mode=OneWay}"));
+        var host = Assert.Single(document.Descendants(presentation + "TextBlock"), element =>
+            (string?)element.Attribute("Text") == "{Binding ConnectionHostDisplay}");
         Assert.Equal("CharacterEllipsis", (string?)host.Attribute("TextTrimming"));
         Assert.Null(host.Attribute("MaxWidth"));
     }
@@ -384,12 +392,14 @@ public sealed class MainWindowMarkupTests
         var document = Load("MainWindow.xaml");
         XNamespace presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
 
-        var listItemStyle = Assert.Single(document.Descendants(presentation + "Style"), style =>
-            (string?)style.Attribute("TargetType") == "ListBoxItem");
-        Assert.Equal("True", SetterValue(listItemStyle, presentation, "Focusable"));
-        Assert.Equal("{StaticResource FocusStyle}", SetterValue(listItemStyle, presentation, "FocusVisualStyle"));
-        Assert.DoesNotContain(listItemStyle.Descendants(presentation + "Trigger"), trigger =>
-            (string?)trigger.Attribute("Property") == "IsKeyboardFocusWithin");
+        foreach (var listItemStyle in document.Descendants(presentation + "Style").Where(style =>
+                     (string?)style.Attribute("TargetType") == "ListBoxItem"))
+        {
+            Assert.Equal("True", SetterValue(listItemStyle, presentation, "Focusable"));
+            Assert.Equal("{StaticResource FocusStyle}", SetterValue(listItemStyle, presentation, "FocusVisualStyle"));
+            Assert.DoesNotContain(listItemStyle.Descendants(presentation + "Trigger"), trigger =>
+                (string?)trigger.Attribute("Property") == "IsKeyboardFocusWithin");
+        }
 
         Assert.Equal("640", (string?)document.Root?.Attribute("MinWidth"));
     }

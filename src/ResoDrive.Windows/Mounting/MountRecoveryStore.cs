@@ -15,10 +15,11 @@ internal sealed class MountRecoveryStore : IDisposable
     private readonly string _path;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<Guid, MountRecoveryEntry> _entries;
+    private bool _recoveredFromBackup;
     public MountRecoveryStore(ApplicationPaths paths)
     {
         _path = Path.Combine(paths.Root, "mount-upload-recovery.json");
-        _entries = Load(_path).ToDictionary(x => x.MountId);
+        _entries = Load(_path, out _recoveredFromBackup).ToDictionary(x => x.MountId);
     }
     public IReadOnlyList<MountRecoveryEntry> GetEntries()
     {
@@ -31,13 +32,15 @@ internal sealed class MountRecoveryStore : IDisposable
     public async Task RecordAsync(MountDefinition definition, string? metadataPath, CancellationToken token, string? configFingerprint = null)
     {
         var previousEntry = Find(definition.Id);
-        if (metadataPath is null && Find(definition.Id) is { } existing && Matches(existing, definition))
-            metadataPath = existing.MetadataPath;
         configFingerprint ??= previousEntry?.ConfigFingerprint;
+        if (previousEntry is not null && Matches(previousEntry, definition))
+        {
+            metadataPath ??= previousEntry.MetadataPath;
+            if (previousEntry.MetadataPath == metadataPath && previousEntry.DisplayName == definition.DisplayName &&
+                previousEntry.ConfigFingerprint == configFingerprint)
+                return;
+        }
         var entry = new MountRecoveryEntry(definition.Id.Value, Source(definition), definition.Arguments.ToArray(), definition.DisplayName, metadataPath, configFingerprint);
-        if (Find(definition.Id) is { } previous && Matches(previous, definition) &&
-            previous.MetadataPath == metadataPath && previous.DisplayName == definition.DisplayName && previous.ConfigFingerprint == configFingerprint)
-            return;
         await UpdateAsync(entry, definition.Id.Value, token).ConfigureAwait(false);
     }
     public Task RemoveAsync(MountId id, CancellationToken token) => UpdateAsync(null, id.Value, token);
@@ -63,8 +66,10 @@ internal sealed class MountRecoveryStore : IDisposable
                 await stream.FlushAsync(token).ConfigureAwait(false);
                 stream.Flush(true);
             }
-            if (File.Exists(_path)) File.Replace(temporary, _path, _path + ".bak", true);
+            // A corrupt primary must never replace the backup that recovered us.
+            if (File.Exists(_path)) File.Replace(temporary, _path, _recoveredFromBackup ? null : _path + ".bak", true);
             else File.Move(temporary, _path);
+            _recoveredFromBackup = false;
             lock (_entries)
             {
                 _entries.Clear();
@@ -73,12 +78,13 @@ internal sealed class MountRecoveryStore : IDisposable
         }
         finally
         {
-            if (File.Exists(temporary)) File.Delete(temporary);
-            _gate.Release();
+            try { if (File.Exists(temporary)) File.Delete(temporary); }
+            finally { _gate.Release(); }
         }
     }
-    private static MountRecoveryEntry[] Load(string path)
+    private static MountRecoveryEntry[] Load(string path, out bool recoveredFromBackup)
     {
+        recoveredFromBackup = false;
         foreach (var candidate in new[] { path, path + ".bak" })
         {
             if (!File.Exists(candidate)) continue;
@@ -90,6 +96,7 @@ internal sealed class MountRecoveryStore : IDisposable
                 if (entries.Any(x => x is null || x.MountId == Guid.Empty || string.IsNullOrWhiteSpace(x.Source) ||
                     x.Arguments is null || x.DisplayName is null) || entries.Select(x => x.MountId).Distinct().Count() != entries.Length)
                     throw new JsonException("Invalid upload recovery records.");
+                recoveredFromBackup = candidate != path;
                 return entries;
             }
             catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException) { }

@@ -118,41 +118,42 @@ public static class RcloneArgumentPolicy
 
             var separator = token.IndexOf('=');
             var optionName = separator < 0 ? token : token[..separator];
+            var optionLabel = DescribeOption(optionName);
             var inlineValue = separator < 0 ? null : token[(separator + 1)..];
 
             if (IsRemoteControlOption(optionName))
             {
-                issues.Add(new("arguments.remoteControl", $"{optionName} is not allowed.", $"{field}[{index}]"));
+                issues.Add(new("arguments.remoteControl", $"{optionLabel} is not allowed.", $"{field}[{index}]"));
                 continue;
             }
 
             if (IsDumpOption(optionName))
             {
-                issues.Add(new("arguments.dump", $"{optionName} is not allowed because it can expose sensitive data.", $"{field}[{index}]"));
+                issues.Add(new("arguments.dump", $"{optionLabel} is not allowed because it can expose sensitive data.", $"{field}[{index}]"));
                 continue;
             }
 
             if (ExternalCommandOptions.Contains(optionName))
             {
-                issues.Add(new("arguments.externalCommand", $"{optionName} is not allowed to execute external commands.", $"{field}[{index}]"));
+                issues.Add(new("arguments.externalCommand", $"{optionLabel} is not allowed to execute external commands.", $"{field}[{index}]"));
                 continue;
             }
 
             if (ManagerOwnedOptions.Contains(optionName))
             {
-                issues.Add(new("arguments.managerOwned", $"{optionName} is managed by the application.", $"{field}[{index}]"));
+                issues.Add(new("arguments.managerOwned", $"{optionLabel} is managed by the application.", $"{field}[{index}]"));
                 continue;
             }
 
             if (!allowedOptions.TryGetValue(optionName, out var definition))
             {
-                issues.Add(new("arguments.unsupported", $"{optionName} is not an approved option.", $"{field}[{index}]"));
+                issues.Add(new("arguments.unsupported", $"{optionLabel} is not an approved option.", $"{field}[{index}]"));
                 continue;
             }
 
             if (!seenOptions.Add(optionName))
             {
-                issues.Add(new("arguments.duplicate", $"{optionName} cannot be specified more than once.", $"{field}[{index}]"));
+                issues.Add(new("arguments.duplicate", $"{optionLabel} cannot be specified more than once.", $"{field}[{index}]"));
             }
 
             if (definition.RequiresValue)
@@ -161,7 +162,7 @@ public static class RcloneArgumentPolicy
                 {
                     if (inlineValue.Length == 0)
                     {
-                        issues.Add(new("arguments.missingValue", $"{optionName} requires a value.", $"{field}[{index}]"));
+                        issues.Add(new("arguments.missingValue", $"{optionLabel} requires a value.", $"{field}[{index}]"));
                     }
                     else
                     {
@@ -170,7 +171,7 @@ public static class RcloneArgumentPolicy
                 }
                 else if (index + 1 >= arguments.Count || LooksLikeOption(arguments[index + 1]))
                 {
-                    issues.Add(new("arguments.missingValue", $"{optionName} requires a value.", $"{field}[{index}]"));
+                    issues.Add(new("arguments.missingValue", $"{optionLabel} requires a value.", $"{field}[{index}]"));
                 }
                 else
                 {
@@ -183,7 +184,7 @@ public static class RcloneArgumentPolicy
             {
                 issues.Add(new(
                     "arguments.unexpectedValue",
-                    $"{optionName} is a switch and does not accept a value.",
+                    $"{optionLabel} is a switch and does not accept a value.",
                     $"{field}[{index}]"));
             }
         }
@@ -235,6 +236,8 @@ public static class RcloneArgumentPolicy
 
     private static bool LooksLikeOption(string? value) =>
         value is null || (value.Length > 0 && value[0] == '-');
+
+    private static string DescribeOption(string name) => name.Length <= 32 ? name : name[..29] + "…";
 
     private static bool IsUnsafeCharacter(char value) => value == '\0' || value == '\r' || value == '\n' || char.IsControl(value);
 

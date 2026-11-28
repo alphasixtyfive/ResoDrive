@@ -3,6 +3,16 @@ namespace ResoDrive.App.Tests;
 public sealed class UiDiagnosticLogTests
 {
     [Fact]
+    public void StartupReportingStillReturnsAReferenceWhenLoggerResolutionFails()
+    {
+        var original = new InvalidOperationException("Original startup failure");
+        var id = UiDiagnosticLog.ReportException("startup.fatal", original,
+            () => throw new FileNotFoundException("Simulated unavailable runtime component"));
+        Assert.Matches("^[A-F0-9]{8}$", id);
+        Assert.Equal("Original startup failure", original.Message);
+    }
+
+    [Fact]
     public void Exception_WritesStableErrorIdAndSanitizesSecrets()
     {
         var directory = Path.Combine(

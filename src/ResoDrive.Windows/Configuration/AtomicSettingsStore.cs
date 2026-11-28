@@ -35,7 +35,7 @@ public sealed class AtomicSettingsStore : IDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            return await LoadCoreAsync(cancellationToken).ConfigureAwait(false);
+            return (await LoadCoreAsync(cancellationToken).ConfigureAwait(false)).Result;
         }
         catch (UnauthorizedAccessException exception)
         {
@@ -69,7 +69,8 @@ public sealed class AtomicSettingsStore : IDisposable
                     candidate.Error.Message);
             }
 
-            var existing = await LoadCoreAsync(cancellationToken).ConfigureAwait(false);
+            var loaded = await LoadCoreAsync(cancellationToken).ConfigureAwait(false);
+            var existing = loaded.Result;
             if (!existing.Succeeded || existing.Value is null)
             {
                 return Result.Failure<ManagerSettings>(
@@ -89,7 +90,7 @@ public sealed class AtomicSettingsStore : IDisposable
                 SchemaVersion = ManagerSettings.CurrentSchemaVersion,
                 Revision = checked(expectedRevision + 1)
             };
-            await WriteAtomicallyAsync(updated, cancellationToken).ConfigureAwait(false);
+            await WriteAtomicallyAsync(updated, loaded.RecoveredFromBackup, cancellationToken).ConfigureAwait(false);
             return Result.Success(updated);
         }
         catch (IOException exception)
@@ -157,7 +158,7 @@ public sealed class AtomicSettingsStore : IDisposable
                         "settings.import_invalid",
                         validated.Error?.Message ?? "The selected settings file is invalid.");
                 }
-                var existing = await LoadCoreAsync(cancellationToken).ConfigureAwait(false);
+                var existing = (await LoadCoreAsync(cancellationToken).ConfigureAwait(false)).Result;
                 if (!existing.Succeeded || existing.Value is null)
                 {
                     return Result.Failure<ManagerSettings>(
@@ -217,24 +218,28 @@ public sealed class AtomicSettingsStore : IDisposable
 
     public void Dispose() => _gate.Dispose();
 
-    private async Task<OperationResult<ManagerSettings>> LoadCoreAsync(CancellationToken cancellationToken)
+    private async Task<(OperationResult<ManagerSettings> Result, bool RecoveredFromBackup)> LoadCoreAsync(
+        CancellationToken cancellationToken)
     {
-        if (!File.Exists(_path))
+        var primaryExists = File.Exists(_path);
+        var backupPath = _path + ".bak";
+        if (!primaryExists && !File.Exists(backupPath))
         {
-            return Result.Success(new ManagerSettings());
+            return (Result.Success(new ManagerSettings()), false);
         }
 
-        var primary = await TryReadAsync(_path, cancellationToken).ConfigureAwait(false);
+        var primary = primaryExists
+            ? await TryReadAsync(_path, cancellationToken).ConfigureAwait(false)
+            : null;
         if (primary is not null)
         {
             var validated = ValidateSettings(primary);
             if (validated.Succeeded || validated.Error?.Code == "settings.unsupported_schema")
             {
-                return validated;
+                return (validated, false);
             }
         }
 
-        var backupPath = _path + ".bak";
         var backup = File.Exists(backupPath)
             ? await TryReadAsync(backupPath, cancellationToken).ConfigureAwait(false)
             : null;
@@ -243,12 +248,12 @@ public sealed class AtomicSettingsStore : IDisposable
             var validatedBackup = ValidateSettings(backup);
             if (validatedBackup.Succeeded || validatedBackup.Error?.Code == "settings.unsupported_schema")
             {
-                return validatedBackup;
+                return (validatedBackup, true);
             }
         }
-        return Result.Failure<ManagerSettings>(
+        return (Result.Failure<ManagerSettings>(
             "settings.corrupt",
-            "Both settings.json and its backup are unreadable or invalid. Automatic mount and sync are disabled.");
+            "Both settings.json and its backup are unreadable or invalid. Automatic mount and sync are disabled."), false);
     }
 
     private static OperationResult<ManagerSettings> ValidateSettings(ManagerSettings settings)
@@ -319,7 +324,8 @@ public sealed class AtomicSettingsStore : IDisposable
         }
     }
 
-    private async Task WriteAtomicallyAsync(ManagerSettings settings, CancellationToken cancellationToken)
+    private async Task WriteAtomicallyAsync(ManagerSettings settings, bool preserveExistingBackup,
+        CancellationToken cancellationToken)
     {
         var directory = Path.GetDirectoryName(_path)
             ?? throw new InvalidOperationException("The settings path has no parent directory.");
@@ -348,7 +354,9 @@ public sealed class AtomicSettingsStore : IDisposable
 
             if (File.Exists(_path))
             {
-                File.Replace(temporaryPath, _path, backupPath, ignoreMetadataErrors: true);
+                // A recovered backup is the last known good document. Repairing
+                // the primary must not replace it with the corrupt original.
+                File.Replace(temporaryPath, _path, preserveExistingBackup ? null : backupPath, ignoreMetadataErrors: true);
             }
             else
             {

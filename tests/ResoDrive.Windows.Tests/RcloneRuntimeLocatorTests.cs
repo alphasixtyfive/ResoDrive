@@ -4,6 +4,59 @@ namespace ResoDrive.Windows.Tests;
 
 public sealed class RcloneRuntimeLocatorTests : IDisposable
 {
+    [Theory]
+    [InlineData(32)]
+    [InlineData(33)]
+    public async Task RetriesExecutableSharingViolations(int error)
+    {
+        _paths.EnsureCreated();
+        File.WriteAllText(_paths.RcloneExecutable, "fixture");
+        var runner = new LockedRunner(error, failures: 1);
+        var result = await new RcloneRuntimeLocator(_paths, runner).InspectAsync();
+        Assert.True(result.Succeeded);
+        Assert.Equal(2, runner.Calls);
+    }
+
+    [Fact]
+    public async Task PersistentExecutableLockReturnsClearErrorWithoutChangingRuntime()
+    {
+        _paths.EnsureCreated();
+        File.WriteAllText(_paths.RcloneExecutable, "fixture");
+        var runner = new LockedRunner(32, failures: int.MaxValue);
+        var result = await new RcloneRuntimeLocator(_paths, runner).InspectAsync();
+        Assert.False(result.Succeeded);
+        Assert.Equal("rclone.file_locked", result.Error!.Code);
+        Assert.Contains("rclone executable", result.Error.Message, StringComparison.Ordinal);
+        Assert.Equal(6, runner.Calls);
+        Assert.Equal("fixture", File.ReadAllText(_paths.RcloneExecutable));
+    }
+
+    [Theory]
+    [InlineData(5)]
+    [InlineData(577)]
+    [InlineData(1260)]
+    public async Task DoesNotRetryPermissionOrPolicyFailures(int error)
+    {
+        _paths.EnsureCreated();
+        File.WriteAllText(_paths.RcloneExecutable, "fixture");
+        var runner = new LockedRunner(error, failures: int.MaxValue);
+        var result = await new RcloneRuntimeLocator(_paths, runner).InspectAsync();
+        Assert.False(result.Succeeded);
+        Assert.Equal("rclone.invalid", result.Error!.Code);
+        Assert.Equal(1, runner.Calls);
+    }
+
+    private sealed class LockedRunner(int error, int failures) : IRcloneProcessRunner
+    {
+        internal int Calls { get; private set; }
+        public Task<ProcessRunResult> RunAsync(string executablePath, IReadOnlyList<string> arguments,
+            TimeSpan timeout, CancellationToken cancellationToken, Action<string>? standardErrorLineReceived = null)
+        {
+            if (++Calls <= failures) throw new System.ComponentModel.Win32Exception(error);
+            return Task.FromResult(new ProcessRunResult(0, "rclone v1.75.0", "", false));
+        }
+    }
+
     private readonly ApplicationPaths _paths = new(Path.Combine(
         Path.GetTempPath(), "resodrive-runtime-locator-tests", Guid.NewGuid().ToString("N")));
 

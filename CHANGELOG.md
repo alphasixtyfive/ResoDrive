@@ -1,15 +1,164 @@
 # Changelog
 
+## [0.3.53] - 2026-11-27
+
+- Refresh WinFsp status automatically in Settings and drive setup after an external installation, without restarting or resetting edited fields.
+- Separate prerequisite refresh from rclone operations, coalesce overlapping checks and stop checks when a window closes.
+- Apply temporary file-lock retries to rclone upgrades and interrupted-update inspection, without treating a locked executable as invalid or rolling it back prematurely.
+- Keep setup inputs unavailable until initial loading finishes, with Cancel still usable, so late profile initialization cannot overwrite early edits.
+- Honor a profile's available drive-letter preference while preserving an existing valid choice; reject premature saves and stale profile or reserved-letter selections.
+- Add guarded deployment-profile import through the app, using the active data root and normal migration, validation and write protection. Preserve valid catalogs and back up invalid ones before replacement.
+
+## [0.3.51] - 2026-11-27
+
+- Retry temporary file locks while downloading, checking and installing rclone, with a short wait that can be cancelled.
+- Explain when another program keeps an rclone file locked and how to try again.
+- Keep an existing locked runtime intact and retain downloaded bytes after a persistent file lock.
+
+## [0.3.50] - 2026-11-13
+
+- Keep caching and rclone options visible in the form, without an Advanced expander or extra labels on existing values.
+- Simplify settings wording, clarify that removing a drive or sync job keeps its files, and focus the field that needs fixing when cache settings are invalid.
+- Make all dropdowns selection-only, validate required selections on save and preserve valid previously saved custom cache values as choices.
+- Preserve verified recovery backups when repairing corrupt drive records and safely handle malformed cache metadata.
+- Recognize rclone's cache-off upload queue responses and use its authenticated local control endpoint for graceful shutdown.
+- Wait for updater-helper readiness before closing the app, and finalize failures when the helper cannot start.
+- Report Windows signature and application-control blocks with useful error codes, including a blocked restart after successful installation.
+- Apply for SignPath Foundation's free open-source signing program; this release remains unsigned pending approval and integration.
+
+## [0.3.49] - 2026-11-13 (unpublished verification build)
+
+- Superseded before publication to include selection-only dropdowns in 0.3.50. The existing tag is retained.
+
+## [0.3.48] - 2026-10-30
+
+- Retry drives automatically when their server becomes reachable, including after a VPN connects, and fix starts that could stay queued.
+- Keep upload progress visible during brief status checks and reduce repeated connection warnings.
+- Allow normal rclone updates while drives and sync jobs keep running.
+- Reduce background allocations and repeated startup checks, and avoid rebuilding the transfer popup while it is hidden.
+- Open the main window a little taller so the normal Settings page fits without scrolling.
+- Include transfer and recovery details, recent runtime history and useful error references in diagnostic reports.
+- Fix error reporting that could hide the original crash, and apply the same SFTP host-key checks throughout setup.
+
+## [0.3.47] - 2026-10-30 (unpublished verification build)
+
+- Held for a correction to the updater cleanup test before release.
+
+## [0.3.46] - 2026-10-09
+
+- Recover automatic startup after legacy upgrades when another process remains inaccessible longer than five seconds or Windows denies wait access.
+- Recheck the complete process set before moving user data; preserve upload checks, account verification, cancellation, settings, and cached files.
+
+## [0.3.45] - 2026-10-09
+
+- Fix automatic startup after a legacy upgrade when a briefly inaccessible ResoDrive process is still exiting.
+- Wait for confirmed process exit before migrating user data, preserving account checks, upload protection, settings, and cached files.
+
+## [0.3.44] - 2026-10-09
+
+- Keep update progress visible while background work stops, avoiding an unnecessary 15-second pause before Setup opens.
+- Preserve upload checks, settings, cached files, and the saved CET compatibility choice during the handoff.
+
+## [0.3.43] - 2026-10-09
+
+- Fixed updates that could stop at "Setup could not verify which Windows account owns a running ResoDrive process" even when the app was running under the same account.
+- Keep settings and cached files protected during updates. If migration fails, the message now includes a reference for its diagnostic log.
+- Added an optional startup compatibility mode for affected older Windows machines. Install with `ResoDrive-Setup.exe ResoDriveDisableCet=1` to disable CET for ResoDrive; repairs and future in-app updates remember the choice. Fresh installations without the option keep CET enabled.
+
+## [0.3.42] - 2026-10-09
+
+- Check each installation directory once, including paths supplied by Windows Installer with a trailing dot.
+- Skip waiting for an absent background host while retaining process, account and cached-upload safety checks.
+- Finish migration when the previous updater exits during process inspection, while continuing to reject live helpers whose identity cannot be verified.
+
+## [0.3.41] - 2026-10-08 (unpublished verification build)
+
+- Verify isolated recovery tests and retain the diagnosed legacy-helper exit-race correction for the final candidate.
+
+## [0.3.40] - 2026-10-08 (unpublished verification build)
+
+- Diagnose a deadline-sensitive cache recovery test under hosted load. Keep unknown-cache protection and the production inspection deadline unchanged; isolate the real filesystem fixtures and improve their failure diagnostics in the next candidate.
+
+## [0.3.39] - 2026-10-08 (withdrawn download)
+
+- Complete interrupted upgrades while preserving accounts, settings, cached files and local copies. Wait for migration before opening drives or starting sync jobs.
+- Use one branded Setup window for future in-app updates. Keep update refresh available and resume interrupted downloads.
+- Keep repeated offline warnings and failed scheduled retries quiet until recovery is confirmed.
+- Apply reconnect policy changes to waiting retries and preserve pending cached uploads.
+- Preserve an explicit disconnect when a manual start is cancelled before launch.
+- Preserve newer settings when saving an open drive or sync editor. Explain failed startup or background settings recovery.
+- Finish setup recovery before showing its result, and report an automatic mount that could not be confirmed without removing the saved connection.
+- Retain the working settings backup during repair and preserve remaining setup files if rollback cannot finish.
+- Bound command output draining by the execution timeout and finish owned exit observers before releasing background resources.
+- Organize window behavior and presentation into smaller files, reuse immutable status brushes and document ownership and recovery rules.
+
+## [0.3.34] - 2026-10-08
+
+- Move existing installations to the current ResoDrive folders while preserving accounts, settings, cached files and local copies.
+- Keep repeated connection failures and failed scheduled retries within one warning episode until recovery is confirmed.
+- Refresh transfer rows more efficiently and show when sync status is unavailable.
+- Include app version and useful background failure details in protected local diagnostics.
+
+## [0.3.30] - 2026-10-05
+
+- Combine the reviewed drive settings, quieter status and compact log changes with the input-validation and single-progress-window fixes.
+- Make the MSI the sole removable Windows app entry. Setup installs prerequisites and the app without retaining a second entry; migrate older Setup installations through one native Setup upgrade.
+- Direct older Setup-owned installations to Setup before an MSI-only update can create duplicate entries. Keep repair, removal and upload protection intact.
+- Update the test coverage collector to 10.1.0 and refresh all affected lock files.
+- Align sidebar icons consistently with their labels, including Settings.
+
+## [0.3.29] - 2026-10-05 (unpublished acceptance build)
+
+- Pass the full native installer gate and desktop upgrade checks. Native Setup removes the older duplicate entry while preserving the accepted MSI and account files.
+
+## [0.3.28] - 2026-10-05 (unpublished acceptance build)
+
+- Validate native installer ownership and older Setup migration. The custom-root repair check exposed that Windows ignores property arguments with `/f`; correct the gate to use reinstall maintenance before publication.
+
+## [0.3.27] - 2026-10-05 (unpublished acceptance build)
+
+- Bring together the drive settings, status and log improvements from withdrawn 0.3.25 and the input-validation and installer fixes reviewed in local 0.3.26.
+- Publish with a newer version so both earlier public installations and the local test build can upgrade normally.
+
+## [0.3.26] - 2026-10-05 (local review build)
+
+- Replace text-based Unlimited attempts with an explicit checkbox and a validated numeric limit; keep drafts when toggling and show inline errors.
+- Validate setup before connecting and all editor candidates before closing; reject missing modes, duplicate names, malformed paths, ports and control characters.
+- Preserve disabled sync intervals and custom cache values; validate sizes, durations and bandwidth options without silently clamping input.
+- Bound inline errors, retain them when Advanced changes, and keep controls and buttons visible at small window sizes and larger display scales.
+- Let the installer own routine update/install progress, removing the duplicate preparation window while retaining upload blocking and its specific failure message.
+- Add input regression tests and an engineering guide requiring validation and compiled UI review before publication. Correct the withdrawn 0.3.25 release.
+
+## [0.3.25] - 2026-10-05 (withdrawn)
+
+- Keep routine upload checks quiet while showing detected transfers, pending files and errors.
+- Show the configured server address and port in a clearly disabled drive setting.
+- Simplify caching labels and hints, add space around form fields, and align Advanced headings.
+- Avoid conflicting drive-letter choices and folder edits during setup; improve focus and truncated-text tooltips.
+- Open drive settings immediately with a compact loading message; keep field positions stable and Cancel available.
+- Use Fluent-style expanders and consistent disabled controls; preserve custom cache values while typing.
+- Give drives a separate activity row that stays hidden during idle checks and retains meaningful warnings; keep drag insertion markers aligned when rows change height.
+- Show informative log entries directly, with timestamps, severity and wrapped event text; record observed drive outcomes and component updates, suppress repeated polling failures and sort sync results by their actual time.
+- Remove the duplicate performance summary, oversized log tooltips and event popups; keep the interface compact and straightforward.
+
+## [0.3.20] - 2026-10-03
+
+- Show active sync jobs alongside uploads in the compact tray popup, with direction, file counts, progress, speed and remaining time. Keep queued jobs visible and remove completed jobs.
+- Animate the tray icon for sync jobs as well as uploads. Rename the tray menu entry to Transfers and keep the same small footer.
+- Hide old sync counters when the host disconnects, and keep status accurate after a sync starts, stops or settings reload. Handle incomplete host responses without reporting unfinished work as complete.
+- Use transfer wording in the Windows shutdown warning so it covers both uploads and downloads.
+
 ## [0.3.19] - 2026-10-03
 
-- Click the tray icon to see a compact upload progress flyout. It sizes to the queue, keeps scrolling out of the way, and shows when a file is waiting to close or retry.
+- Click the tray icon to see a compact upload progress popup with Open ResoDrive and Settings in its footer. It sizes to the queue, keeps scrolling out of the way, and shows when a file is waiting to close or retry.
 - Keep pending uploads visible after Explorer finishes copying. Preserve cached files when a drive disconnects or ResoDrive exits, and recover interrupted uploads with their original connection.
 - Warn before exit, disconnect, sleep or shutdown interrupts pending work. Exit and disconnect offer an explicit choice to pause uploads; updates still require a verified clear queue.
-- Reorder drives with a subtle drag handle, keyboard shortcuts or a small context menu, and keep the chosen order after restarting.
+- Reorder drives with a subtle drag handle, a faint moving row, keyboard shortcuts or a small context menu, and keep the chosen order after restarting. Keep status strips inside their rounded drive and sync cards at different display scales.
 - Prevent background recovery from restarting the host during exit or update installation; finish accepted shutdown even if its client disconnects.
 - Let the updater finish recording its result while the reopened app reads it, and recover a finalized receipt left by an earlier helper.
 - Improve large-queue handling, cancelled process launches, atomic settings saves and temporary-file cleanup. Show unavailable sync status when the host disconnects.
 - Reject nested junctions in download destinations before starting a sync, and make destination validation cancellable.
+- Allow the revised .19 Setup to replace the earlier .19 installation while preserving user data. Existing .19 users need to run Setup manually because the version number is unchanged.
 
 ## [0.3.18] - 2026-09-28
 

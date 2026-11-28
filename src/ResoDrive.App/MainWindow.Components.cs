@@ -3,6 +3,8 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using ResoDrive.Windows;
+using ResoDrive.Core.Contracts;
+using ResoDrive.Core.Results;
 using WpfMessageBox = ResoDrive.App.ModernMessageBox;
 
 namespace ResoDrive.App;
@@ -11,22 +13,27 @@ namespace ResoDrive.App;
 public partial class MainWindow
 #pragma warning restore CA1001
 {
-    private void UpdateConnectionStatus()
+    private void UpdateConnectionStatus(OperationResult<InstallationStatus>? runtimeInspection = null,
+        int? inspectionGeneration = null)
     {
-        if (!IsInitialized || _rcloneMutationBusy)
+        if (!IsInitialized || _settingsClosing || _rcloneMutationBusy)
             return;
         StatusVisuals.ApplyPending(RcloneStatusIcon);
         SetLiveText(RcloneStatusText, "Checking…");
         _rcloneRuntimeReady = false;
         AddMountButton.IsEnabled = false;
+        // Reuse only this startup's successful observation. A completed runtime
+        // mutation changes the generation even after its busy flag has cleared.
+        var reusableInspection = inspectionGeneration == _componentStatusGeneration && runtimeInspection?.Succeeded == true
+            ? runtimeInspection : null;
         var generation = ++_componentStatusGeneration;
-        _ = ObserveComponentStatusAsync(UpdateLocalRcloneStatusAsync(generation), generation, rclone: true);
+        _ = ObserveComponentStatusAsync(UpdateLocalRcloneStatusAsync(generation, reusableInspection), generation);
         SetLiveText(WinFspStatusText, "Checking WinFsp…");
         StatusVisuals.ApplyPending(WinFspStatusIcon);
-        _ = ObserveComponentStatusAsync(UpdateWinFspStatusAsync(generation), generation, rclone: false);
+        _ = UpdateWinFspStatusAsync(force: true);
     }
 
-    private async Task ObserveComponentStatusAsync(Task inspection, int generation, bool rclone)
+    private async Task ObserveComponentStatusAsync(Task inspection, int generation)
     {
         try
         {
@@ -37,46 +44,16 @@ public partial class MainWindow
             if (!IsInitialized || generation != _componentStatusGeneration)
                 return;
 
-            if (rclone)
-            {
-                StatusVisuals.Apply(RcloneStatusIcon, success: false, error: true);
-                SetLiveText(RcloneStatusText, "Could not inspect");
-            }
-            else
-            {
-                StatusVisuals.Apply(WinFspStatusIcon, success: false, error: true);
-                SetLiveText(WinFspStatusText, "WinFsp could not be inspected");
-            }
-            _model.AddLogEntry("\uE783", "Component check failed", exception.Message, true);
+            StatusVisuals.Apply(RcloneStatusIcon, success: false, error: true);
+            SetLiveText(RcloneStatusText, "Could not inspect");
+            _model.AddLogEntry("Component check failed", exception.Message, LogSeverity.Error);
         }
     }
 
-    private async Task UpdateWinFspStatusAsync(int? generation = null)
+    private async Task UpdateLocalRcloneStatusAsync(int? generation = null,
+        OperationResult<InstallationStatus>? runtimeInspection = null)
     {
-        var result = await WinFspPrerequisiteService.InspectAsync();
-        if (!IsInitialized || generation is int value && value != _componentStatusGeneration)
-        {
-            return;
-        }
-
-        if (!result.Succeeded || result.Value?.IsInstalled != true)
-        {
-            StatusVisuals.Apply(WinFspStatusIcon, success: false);
-            SetLiveText(WinFspStatusText, "WinFsp is not detected; sync works, but mount drives need it");
-            WinFspReleasesButton.Visibility = Visibility.Visible;
-            return;
-        }
-
-        StatusVisuals.Apply(WinFspStatusIcon, success: true);
-        WinFspReleasesButton.Visibility = Visibility.Hidden;
-        SetLiveText(WinFspStatusText, string.IsNullOrWhiteSpace(result.Value.Version)
-            ? "WinFsp is installed"
-            : $"WinFsp {result.Value.Version} is installed");
-    }
-
-    private async Task UpdateLocalRcloneStatusAsync(int? generation = null)
-    {
-        var result = await new RcloneRuntimeLocator(_paths).InspectAsync();
+        var result = runtimeInspection ?? await _runtimeLocator.InspectAsync(_lifetimeCancellation.Token);
         if (!IsInitialized || generation is int value && value != _componentStatusGeneration)
         {
             return;
@@ -234,6 +211,9 @@ public partial class MainWindow
             ApplicationUpdateActionAsync);
     }
 
+    private async void ApplicationUpdateCheck_Click(object sender, RoutedEventArgs e) =>
+        await ExecuteUiActionAsync("ResoDrive update check failed", CheckApplicationUpdateAsync);
+
     private async Task ApplicationUpdateActionAsync()
     {
         if (_applicationUpdateBusy)
@@ -293,7 +273,7 @@ public partial class MainWindow
         var activeSyncs = _model.Jobs.Count(job => job.IsBusy);
         var activeItems = new[]
         {
-            activeMounts == 0 ? null : $"{activeMounts} mounted drive{(activeMounts == 1 ? string.Empty : "s")}",
+            activeMounts == 0 ? null : $"{activeMounts} active drive{(activeMounts == 1 ? string.Empty : "s")}",
             activeSyncs == 0 ? null : $"{activeSyncs} running sync job{(activeSyncs == 1 ? string.Empty : "s")}",
         }.Where(value => value is not null);
         var activeWork = activeMounts + activeSyncs == 0
@@ -358,6 +338,7 @@ public partial class MainWindow
                 SetLiveText(ApplicationUpdateStatusText, uploads.ErrorMessage ?? "Could not check uploads. Try again.");
                 return;
             }
+            using var stoppingHost = ApplicationUpdateHandoff.OpenHostForShutdown(uploads);
             SetLiveText(ApplicationUpdateStatusText, "Stopping mounted drives and sync jobs…");
             var shutdown = await HostClient.SendAsync(
                 new HostRequest("shutdown", Confirmed: true),
@@ -371,15 +352,18 @@ public partial class MainWindow
                     shutdown.ErrorMessage ?? "ResoDrive could not safely stop its background work. Close open documents and try again.");
                 return;
             }
+            if (shutdown.Succeeded)
+                await ApplicationUpdateHandoff.WaitForHostShutdownAsync(stoppingHost, shutdown, _lifetimeCancellation.Token);
             SetLiveText(ApplicationUpdateStatusText, "Preparing Windows Installer…");
             if (IsClosing || _exitRequested) return;
-            ApplicationUpdateHandoff.Start(
+            await ApplicationUpdateHandoff.StartAsync(
                 downloaded.Value.Version,
                 downloaded.Value.InstallerPath,
                 _paths.Updates,
                 CurrentExecutablePath,
                 MsiInstalledExecutablePath,
-                downloaded.Value.Sha256);
+                downloaded.Value.Sha256,
+                cancellationToken: _lifetimeCancellation.Token);
 
             _exitRequested = true;
             _timer.Stop();
@@ -394,11 +378,11 @@ public partial class MainWindow
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or InvalidOperationException or
-                System.ComponentModel.Win32Exception)
+                System.ComponentModel.Win32Exception or TimeoutException)
         {
             StatusVisuals.Apply(ApplicationUpdateStatusIcon, success: false, error: true);
             SetLiveText(ApplicationUpdateStatusText, "The update installer was not started.");
-            ShowError("Could not install the ResoDrive update", exception.Message);
+            ShowError("Could not install the ResoDrive update", ApplicationUpdateHandoff.DescribeLaunchFailure(exception));
         }
         finally
         {
@@ -424,6 +408,8 @@ public partial class MainWindow
     {
         var retry = _applicationUpdateCheckFailed && _applicationUpdate is null;
         var update = _applicationUpdate?.UpdateAvailable == true;
+        ApplicationUpdateCheckButton.Visibility = update ? Visibility.Visible : Visibility.Collapsed;
+        ApplicationUpdateCheckButton.IsEnabled = !_applicationUpdateBusy;
         ConfigureComponentAction(
             ApplicationUpdateActionButton,
             ApplicationUpdateActionGlyph,
@@ -448,12 +434,15 @@ public partial class MainWindow
             return;
         }
 
-        if (_model.Mounts.Any(mount => mount.ShouldStop || mount.IsTransient) ||
-            _model.Jobs.Any(job => job.IsBusy))
+        // Normal updates replace a verified staged executable atomically. Windows
+        // keeps existing processes on their loaded image, so no disconnect is needed.
+        // Repair removes the runtime and still requires stopped work.
+        if (_rcloneRepairRequested && (_model.Mounts.Any(mount => mount.ShouldStop || mount.IsTransient) ||
+            _model.Jobs.Any(job => job.IsBusy)))
         {
             ShowError(
                 "Stop active work first",
-                $"Stop all mounted drives and running sync jobs before changing the {ProductInfo.Name} rclone runtime.");
+                "Stop mounted drives and running sync jobs before repairing rclone. Normal updates keep connections running.");
             return;
         }
 
@@ -478,6 +467,8 @@ public partial class MainWindow
             if (!result.Succeeded || result.Value is null)
             {
                 SetRcloneStatusDetail(result.Error?.Message ?? "rclone could not be updated.");
+                _model.AddLogEntry("rclone update failed",
+                    result.Error?.Message ?? "rclone could not be updated.", LogSeverity.Error);
                 return;
             }
 
@@ -486,7 +477,7 @@ public partial class MainWindow
             var status = result.Value.Updated
                 ? repairing
                     ? "Repair complete"
-                    : installing ? "Install complete" : "Update complete"
+                    : installing ? "Install complete" : "Update complete · Existing connections keep running"
                 : "Up to date";
             _rcloneInstalledVersion = result.Value.CurrentVersion;
             await RefreshStatusAsync();
@@ -494,13 +485,17 @@ public partial class MainWindow
             SetRcloneStatusDetail(status);
             if (result.Value.Updated)
             {
+                _model.AddLogEntry($"rclone {status.ToLowerInvariant()}",
+                    $"Installed {result.Value.CurrentVersion}", severity: LogSeverity.Success);
                 var reload = await HostClient.SendAsync(
-                    new HostRequest("activate-runtime"),
+                    new HostRequest("activate-runtime", Confirmed: installing || repairing),
                     _lifetimeCancellation.Token);
                 if (!reload.Succeeded)
                 {
                     SetRcloneStatusDetail(
                         $"{status}. {reload.ErrorMessage ?? $"Restart {ProductInfo.Name} to activate it."}");
+                    _model.AddLogEntry("rclone activation pending",
+                        reload.ErrorMessage ?? $"Restart {ProductInfo.Name} to activate it.", severity: LogSeverity.Warning);
                 }
                 await RefreshStatusAsync();
             }

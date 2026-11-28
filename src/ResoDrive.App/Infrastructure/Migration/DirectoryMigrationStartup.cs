@@ -1,0 +1,212 @@
+using System.Diagnostics;
+using System.IO;
+using System.Text.Json;
+using ResoDrive.Windows;
+
+namespace ResoDrive.App;
+
+internal static partial class DirectoryMigrationStartup
+{
+    internal const string BridgeEnvironmentVariable = "RESODRIVE_LEGACY_HANDOFF";
+    internal const string CompletionArgument = "--finish-user-data-migration";
+    private const string RetryOnNextStartEnvironmentVariable = "RESODRIVE_MIGRATION_RETRY_ON_NEXT_START";
+    private static string StateDirectory => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ResoDriveMigration");
+    internal static bool PendingHandoff { get; private set; }
+
+    internal static void EnsureReady()
+    {
+        var configured = Environment.GetEnvironmentVariable("RDRIVE_DATA_DIR");
+        // Explicit custom roots retain their owner-selected location.
+        if (!string.IsNullOrWhiteSpace(configured) &&
+            !InstallationDirectories.SamePath(configured, ApplicationPaths.LegacyDefaultRoot) &&
+            !InstallationDirectories.SamePath(configured, ApplicationPaths.DefaultRoot)) return;
+        // New installations pay only these existence checks: no migration helper,
+        // journal creation, MSI lookup, credential reads, locks or migration UI.
+        if (!Directory.Exists(ApplicationPaths.LegacyDefaultRoot) &&
+            !File.Exists(Path.Combine(StateDirectory, "user-data-migration.json"))) return;
+        if (Directory.Exists(ApplicationPaths.LegacyDefaultRoot))
+        {
+            var wipe = new RemoteWipeStateStore(new ApplicationPaths(ApplicationPaths.LegacyDefaultRoot)).Read();
+            if (wipe is { Phase: not RemoteWipePhase.Completed })
+            {
+                // The original root must remain available to its recovery host.
+                // Blocking every --host launch would prevent cleanup ever finishing.
+                Environment.SetEnvironmentVariable("RDRIVE_DATA_DIR", ApplicationPaths.LegacyDefaultRoot);
+                Environment.SetEnvironmentVariable(BridgeEnvironmentVariable, "1");
+                return;
+            }
+            using var helpers = FindLegacyHelpers();
+            if (helpers.Processes.Count != 0 || Environment.GetEnvironmentVariable(BridgeEnvironmentVariable) == "1")
+            {
+                Environment.SetEnvironmentVariable("RDRIVE_DATA_DIR", ApplicationPaths.LegacyDefaultRoot);
+                PendingHandoff = true;
+                return;
+            }
+        }
+        MigrateAsync(CancellationToken.None).GetAwaiter().GetResult();
+        if (!string.IsNullOrWhiteSpace(configured))
+            Environment.SetEnvironmentVariable("RDRIVE_DATA_DIR", ApplicationPaths.DefaultRoot);
+        WriteResult(true, "The user-data directory has migrated.");
+    }
+
+    internal static async Task FinishHandoffAsync(CancellationToken token)
+    {
+        // A visible startup window lets the old updater finish its readiness
+        // handshake, without starting a host or mounting any drives beforehand.
+        using var helpers = FindLegacyHelpers();
+        foreach (var helper in helpers.Processes)
+            await helper.WaitForExitAsync(token).ConfigureAwait(false);
+        await MigrateAsync(token).ConfigureAwait(false);
+        Environment.SetEnvironmentVariable(BridgeEnvironmentVariable, null);
+        Environment.SetEnvironmentVariable(RetryOnNextStartEnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("RDRIVE_DATA_DIR", ApplicationPaths.DefaultRoot);
+        PendingHandoff = false;
+        WriteResult(true, "Both application and user-data locations have migrated.");
+    }
+
+    internal static string RecordHandoffFailure(Exception exception, string? diagnosticDirectory = null)
+    {
+        var message = RecoveryToolsService.Sanitize(exception.Message);
+        try
+        {
+            var directory = diagnosticDirectory ?? UserDataDirectoryMigration.PrepareHelperDirectory();
+            // Keep diagnostics outside both roots being moved. The normal UI logger
+            // is intentionally disabled during handoff, and Message alone loses
+            // the failing native call, process ID, Windows error and stack.
+            var log = new ProcessDiagnosticLog(Path.Combine(directory, "resodrive-migration.log"));
+            log.StartSession();
+            var errorId = log.Exception("migration.handoff_failed", exception);
+            message += $" Error ID: {errorId}";
+            WriteResult(false, message, directory);
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException) { }
+        return message;
+    }
+
+    private static async Task MigrateAsync(CancellationToken token)
+    {
+        var previous = Environment.GetEnvironmentVariable("RDRIVE_DATA_DIR");
+        Environment.SetEnvironmentVariable("RDRIVE_DATA_DIR", ApplicationPaths.LegacyDefaultRoot);
+        try
+        {
+            await new UserDataDirectoryMigration(ApplicationPaths.LegacyDefaultRoot, ApplicationPaths.DefaultRoot)
+                .MigrateAsync(async cancellation =>
+                {
+                    // New app code is always used, including after a legacy MSI.
+                    // Both the old and new locations are checked; portable hosts fail closed.
+                    var installed = InstalledApplicationLocator.GetInstallationDirectories();
+                    var directories = InstallationDirectories.DistinctPaths(installed.Append(AppContext.BaseDirectory));
+                    foreach (var directory in directories)
+                        await InstallationPreparationService.ForUserDataMigration().PrepareAsync(directory, cancellationToken: cancellation).ConfigureAwait(false);
+                }, token).ConfigureAwait(false);
+        }
+        finally { Environment.SetEnvironmentVariable("RDRIVE_DATA_DIR", previous); }
+    }
+
+    internal static async Task<int> MigrateWithoutLaunchingAsync()
+    {
+        try
+        {
+            using var helpers = FindLegacyHelpers();
+            if (helpers.Processes.Count != 0) return 1; // Let the active in-app handoff finish first.
+            await MigrateAsync(CancellationToken.None).ConfigureAwait(false);
+            _ = UserDataDirectoryMigration.PrepareHelperDirectory();
+            WriteResult(true, "The user-data directory has migrated without changing application startup preferences.");
+            return 0;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or
+            System.ComponentModel.Win32Exception or TimeoutException or JsonException)
+        {
+            RecordHandoffFailure(exception);
+            return 1;
+        }
+    }
+
+    // Compatibility entry point for an already copied older migration helper.
+    internal static Task<int> CompleteAsync() => MigrateWithoutLaunchingAsync();
+
+    private static void WriteResult(bool succeeded, string message, string? directory = null) => File.WriteAllText(
+        Path.Combine(directory ?? StateDirectory, "completion.json"), JsonSerializer.Serialize(new { Succeeded = succeeded, Message = message, RecordedAtUtc = DateTimeOffset.UtcNow }));
+
+    internal static ProcessLease FindLegacyHelpers()
+    {
+        var result = new List<Process>();
+        var expected = Path.Combine(ApplicationPaths.LegacyDefaultRoot, "updates", "resodrive-update-helper.exe");
+        try
+        {
+            using var current = Process.GetCurrentProcess();
+            foreach (var process in Process.GetProcessesByName("resodrive-update-helper"))
+            {
+                var retained = false;
+                try
+                {
+                    if (!IsLegacyHelper(process, expected, current.SessionId)) continue;
+                    result.Add(process);
+                    retained = true;
+                }
+                finally { if (!retained) process.Dispose(); }
+            }
+            return new(result);
+        }
+        catch
+        {
+            foreach (var process in result) process.Dispose();
+            throw;
+        }
+    }
+
+    internal static bool IsLegacyHelper(Process process, string expectedPath, int sessionId,
+        Func<Process, string?>? readExecutablePath = null, Func<Process, int, bool>? waitForExit = null)
+    {
+        try
+        {
+            if (process.HasExited || process.SessionId != sessionId) return false;
+            // Process retains this handle until disposal, preventing PID reuse from
+            // changing the identity checked below or the process waited on at exit.
+            _ = process.SafeHandle;
+            if (process.HasExited) return false;
+            var path = readExecutablePath is null ? process.MainModule?.FileName : readExecutablePath(process);
+            if (path is null)
+            {
+                if (process.HasExited) return false;
+                throw new IOException("An update helper's executable identity could not be verified.");
+            }
+            if (!InstallationDirectories.SamePath(path, expectedPath)) return false;
+            CurrentUserPipe.ValidateProcessIdentity(process.Id);
+            return true;
+        }
+        catch (Exception exception) when (
+            (exception is System.ComponentModel.Win32Exception or InvalidOperationException or UnauthorizedAccessException) &&
+            HelperHasConfirmedExit(process, exception is System.ComponentModel.Win32Exception { NativeErrorCode: 299 }, waitForExit))
+        {
+            // The same process exited during image/account inspection. An unreadable
+            // live helper still blocks migration; no process is guessed or terminated.
+            return false;
+        }
+    }
+
+    private static bool HelperHasConfirmedExit(Process process, bool allowPartialCopyExitWait,
+        Func<Process, int, bool>? waitForExit)
+    {
+        try
+        {
+            // ERROR_PARTIAL_COPY can occur while a helper unloads its modules just
+            // before kernel exit. Wait once on the retained handle; never retry the
+            // image read or treat a still-live unreadable process as safe to ignore.
+            if (process.HasExited) return true;
+            if (!allowPartialCopyExitWait) return false;
+            return waitForExit is null ? process.WaitForExit(1000) : waitForExit(process, 1000);
+        }
+        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            return false; // Preserve the original inspection failure if exit is unverifiable.
+        }
+    }
+
+    internal sealed class ProcessLease(IReadOnlyList<Process> processes) : IDisposable
+    {
+        internal IReadOnlyList<Process> Processes { get; } = processes;
+        public void Dispose() { foreach (var process in Processes) process.Dispose(); }
+    }
+}

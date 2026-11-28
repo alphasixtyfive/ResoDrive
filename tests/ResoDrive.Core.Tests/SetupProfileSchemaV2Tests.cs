@@ -4,7 +4,7 @@ namespace ResoDrive.Core.Tests;
 
 public sealed class SetupProfileSchemaV2Tests
 {
-    private static readonly string PublicKey = CreatePublicKey("ssh-ed25519");
+    private const string PublicKey = "AAAAC3NzaC1lZDI1NTE5AAAAINdamAGCsQq31Uv+08lkBzoO4XLz2qYjJa8CGmj3B1Ea";
 
     [Fact]
     public void ParseV2_CreatesTypedWebDavProfileWithoutUiMetadata()
@@ -127,6 +127,15 @@ public sealed class SetupProfileSchemaV2Tests
     }
 
     [Fact]
+    public void ParseV2_RejectsAnAlgorithmThatDoesNotMatchTheEncodedKey()
+    {
+        var result = SetupProfileCatalogJson.Parse(SftpJson(knownHost: $"ssh-rsa {PublicKey}"));
+        Assert.False(result.Succeeded);
+        Assert.Equal("profile.sftp.knownHost", result.Error?.Code);
+        Assert.Null(result.Value);
+    }
+
+    [Fact]
     public void ParseV2_RejectsDeprecatedInputMetadata()
     {
         var result = SetupProfileCatalogJson.Parse(WithDeprecatedInputs(WebDavJson));
@@ -194,15 +203,6 @@ public sealed class SetupProfileSchemaV2Tests
           }]
         }
         """;
-    }
-
-    private static string CreatePublicKey(string algorithm)
-    {
-        var name = System.Text.Encoding.ASCII.GetBytes(algorithm);
-        var bytes = new byte[4 + name.Length + 32];
-        bytes[3] = checked((byte)name.Length);
-        name.CopyTo(bytes, 4);
-        return Convert.ToBase64String(bytes);
     }
 
     private static string WithDeprecatedInputs(string json) => json.Replace(

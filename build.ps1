@@ -129,11 +129,20 @@ Get-ChildItem -LiteralPath $packageOutput -File |
     Set-Content -LiteralPath (Join-Path $packageOutput 'SHA256SUMS.txt') -Encoding ascii
 
 if ($BuildMsi) {
+    $nativeOutput = Join-Path $stageRoot 'installer-actions'
+    & (Join-Path $projectRoot 'native\ResoDrive.InstallerActions\build.ps1') `
+        -ApplicationPath (Join-Path $packageOutput "$executableBaseName.exe") `
+        -OutputDirectory $nativeOutput
+    $installationActions = Join-Path $nativeOutput 'ResoDrive.InstallerActions.dll'
+    if (-not (Test-Path -LiteralPath $installationActions -PathType Leaf)) {
+        throw 'The native installer actions DLL was not produced.'
+    }
     dotnet build (Join-Path $projectRoot 'installer\ResoDrive.Installer.wixproj') `
         --configuration $Configuration `
         --no-restore `
         --output $installerOutput `
         -p:PackageSource=$packageOutput `
+        -p:InstallationActionsSource=$installationActions `
         -p:ResoDriveVersion=$releaseVersion `
         -p:ResoDriveRuntime=$Runtime `
         -p:ResoDriveUpgradeCode=$msiUpgradeCode `

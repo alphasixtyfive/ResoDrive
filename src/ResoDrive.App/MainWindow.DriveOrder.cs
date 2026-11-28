@@ -5,6 +5,7 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using ResoDrive.App.Controls;
 using WpfButton = System.Windows.Controls.Button;
 using WpfDragEventArgs = System.Windows.DragEventArgs;
 using WpfDragDropEffects = System.Windows.DragDropEffects;
@@ -20,14 +21,18 @@ public partial class MainWindow
     private const string DriveOrderDataFormat = "ResoDrive.DriveOrder";
     private readonly Guid _driveOrderWindowId = Guid.NewGuid();
     private WpfButton? _driveOrderPressedHandle;
+    private Guid? _driveOrderPressedMountId;
     private WpfPoint _driveOrderPressPoint;
     private WpfPoint _driveOrderLastPoint;
     private bool _driveOrderDragging;
     private Guid? _driveOrderDraggingMountId;
     private bool _driveOrderSaveBusy;
     private DriveInsertionAdorner? _driveOrderIndicator;
+    private AdornerLayer? _driveOrderIndicatorLayer;
+    private DriveDragPreviewAdorner? _driveOrderPreview;
     private ScrollViewer? _driveOrderScrollViewer;
     private int _driveOrderScrollDirection;
+    private bool _driveOrderPointerInside;
 
     private bool CanChangeDriveOrder => _store is not null && _model.Mounts.Count > 1 &&
         !_settingsClosing && !IsClosing && !_exitChecking && !_settingsSaveBusy &&
@@ -38,18 +43,21 @@ public partial class MainWindow
         if (!CanChangeDriveOrder || sender is not WpfButton { DataContext: MountRow row } handle)
             return;
         _driveOrderPressedHandle = handle;
+        _driveOrderPressedMountId = row.Id;
         _driveOrderPressPoint = e.GetPosition(MountRows);
         MountRows.SelectedItem = row;
         handle.Focus();
-        handle.CaptureMouse();
+        if (!handle.CaptureMouse())
+            ClearDriveOrderPress();
         e.Handled = true;
     }
 
     private void DriveOrder_MouseMove(object sender, WpfMouseEventArgs e)
     {
-        if (_driveOrderDragging || _driveOrderPressedHandle is not { DataContext: MountRow row } handle)
+        if (_driveOrderDragging || _driveOrderPressedHandle is not { } handle)
             return;
-        if (e.LeftButton != MouseButtonState.Pressed || !CanChangeDriveOrder)
+        if (handle.DataContext is not MountRow row || e.LeftButton != MouseButtonState.Pressed || !CanChangeDriveOrder ||
+            _driveOrderPressedMountId != row.Id || !_model.Mounts.Any(mount => mount.Id == row.Id))
         {
             ClearDriveOrderPress();
             return;
@@ -68,6 +76,9 @@ public partial class MainWindow
         scrolling.Start();
         try
         {
+            if (ItemsControl.ContainerFromElement(MountRows, handle) is ListBoxItem source)
+                _driveOrderPreview = DriveDragPreviewAdorner.TryCreate(MountRows, source,
+                    _driveOrderPressPoint, SystemParameters.HighContrast);
             var data = new System.Windows.DataObject();
             data.SetData(DriveOrderDataFormat, new DriveDrag(_driveOrderWindowId, row.Id));
             System.Windows.DragDrop.DoDragDrop(handle, data, WpfDragDropEffects.Move);
@@ -77,43 +88,49 @@ public partial class MainWindow
             scrolling.Stop();
             scrolling.Tick -= DriveOrder_AutoScroll;
             _driveOrderScrollDirection = 0;
+            _driveOrderPointerInside = false;
             _driveOrderScrollViewer = null;
             _driveOrderDragging = false;
             _driveOrderDraggingMountId = null;
+            ClearDriveOrderPreview();
             ClearDriveOrderIndicator();
             ClearDriveOrderPress();
-            System.Windows.Input.Mouse.SetCursor(null);
         }
         e.Handled = true;
     }
 
-    private void DriveOrder_GiveFeedback(object sender, System.Windows.GiveFeedbackEventArgs e)
+    private void DriveOrder_QueryContinueDrag(object sender, System.Windows.QueryContinueDragEventArgs e)
     {
-        if (!_driveOrderDragging || e.Effects != WpfDragDropEffects.Move) return;
-        System.Windows.Input.Mouse.SetCursor(System.Windows.Input.Cursors.Hand);
-        e.UseDefaultCursors = false;
-        e.Handled = true;
+        if (e.EscapePressed || !CanChangeDriveOrder || !IsVisible || !MountRows.IsVisible ||
+            _driveOrderDraggingMountId is not Guid sourceId || !_model.Mounts.Any(row => row.Id == sourceId))
+        {
+            e.Action = System.Windows.DragAction.Cancel;
+            e.Handled = true;
+        }
     }
 
     private void DriveOrder_MouseUp(object sender, WpfMouseButtonEventArgs e)
     {
         if (_driveOrderDragging || _driveOrderPressedHandle is not { } handle)
             return;
+        var validPress = handle.DataContext is MountRow row && _driveOrderPressedMountId == row.Id;
         ClearDriveOrderPress();
-        OpenDriveOrderMenu(handle);
+        if (validPress)
+            OpenDriveOrderMenu(handle);
         e.Handled = true;
     }
 
     private void DriveOrder_LostMouseCapture(object sender, WpfMouseEventArgs e)
     {
         if (!_driveOrderDragging)
-            _driveOrderPressedHandle = null;
+            ClearDriveOrderPress();
     }
 
     private void ClearDriveOrderPress()
     {
         var handle = _driveOrderPressedHandle;
         _driveOrderPressedHandle = null;
+        _driveOrderPressedMountId = null;
         handle?.ReleaseMouseCapture();
     }
 
@@ -177,17 +194,25 @@ public partial class MainWindow
         if (!TryReadDriveDrag(e, out var dragging))
         {
             e.Effects = WpfDragDropEffects.None;
+            e.Handled = true;
+            _driveOrderScrollDirection = 0;
+            _driveOrderPointerInside = false;
+            _driveOrderPreview?.Hide();
             ClearDriveOrderIndicator();
             return;
         }
         var point = e.GetPosition(MountRows);
         _driveOrderLastPoint = point;
-        _driveOrderScrollDirection = point.Y < 24 ? -1 : point.Y > MountRows.ActualHeight - 24 ? 1 : 0;
+        _driveOrderPointerInside = DriveOrderViewport.Contains(DriveOrderViewport.Bounds(MountRows), point);
+        _driveOrderScrollDirection = DriveOrderViewport.ScrollDirection(MountRows, point);
         var target = FindDriveDropTarget(point);
-        var valid = target is not null && target.Value.Row.Id != dragging.MountId;
-        e.Effects = valid ? WpfDragDropEffects.Move : WpfDragDropEffects.None;
-        if (valid)
-            ShowDriveOrderIndicator(target!.Value.Container, target.Value.After);
+        e.Effects = target is not null ? WpfDragDropEffects.Move : WpfDragDropEffects.None;
+        if (target is not null)
+            _driveOrderPreview?.SetPosition(point);
+        else
+            _driveOrderPreview?.Hide();
+        if (target is not null && target.Value.Row.Id != dragging.MountId)
+            ShowDriveOrderIndicator(target.Value.Container, target.Value.After);
         else
             ClearDriveOrderIndicator();
         e.Handled = true;
@@ -196,9 +221,11 @@ public partial class MainWindow
     private void DriveOrder_DragLeave(object sender, WpfDragEventArgs e)
     {
         var point = e.GetPosition(MountRows);
-        if (point.X < 0 || point.Y < 0 || point.X >= MountRows.ActualWidth || point.Y >= MountRows.ActualHeight)
+        if (!DriveOrderViewport.Contains(DriveOrderViewport.Bounds(MountRows), point))
         {
             _driveOrderScrollDirection = 0;
+            _driveOrderPointerInside = false;
+            _driveOrderPreview?.Hide();
             ClearDriveOrderIndicator();
         }
     }
@@ -207,6 +234,8 @@ public partial class MainWindow
     {
         e.Handled = true;
         _driveOrderScrollDirection = 0;
+        _driveOrderPointerInside = false;
+        ClearDriveOrderPreview();
         ClearDriveOrderIndicator();
         if (!TryReadDriveDrag(e, out var dragging) || FindDriveDropTarget(e.GetPosition(MountRows)) is not { } target)
         {
@@ -214,6 +243,8 @@ public partial class MainWindow
             return;
         }
         e.Effects = WpfDragDropEffects.Move;
+        if (dragging.MountId == target.Row.Id)
+            return;
         await SaveDriveOrderAsync(dragging.MountId, target.Row.Id, target.After, bringIntoView: false);
     }
 
@@ -231,37 +262,38 @@ public partial class MainWindow
 
     private (MountRow Row, ListBoxItem Container, bool After)? FindDriveDropTarget(WpfPoint point)
     {
-        if (point.X < 0 || point.Y < 0 || point.X >= MountRows.ActualWidth || point.Y >= MountRows.ActualHeight)
-            return null;
-        var hit = MountRows.InputHitTest(point) as DependencyObject;
-        if (hit is not null && ItemsControl.ContainerFromElement(MountRows, hit) is ListBoxItem container &&
-            container.DataContext is MountRow row)
-        {
-            var position = MountRows.TranslatePoint(point, container);
-            return (row, container, position.Y >= container.ActualHeight / 2);
-        }
-        // Empty space below the final card is a natural way to move a drive to the end.
-        if (_model.Mounts.Count > 0 &&
-            MountRows.ItemContainerGenerator.ContainerFromIndex(_model.Mounts.Count - 1) is ListBoxItem last &&
-            last.TranslatePoint(new WpfPoint(0, last.ActualHeight), MountRows).Y <= point.Y)
-            return (_model.Mounts[^1], last, true);
-        return null;
+        return DriveOrderViewport.FindDropTarget(MountRows, point) is { } target &&
+            target.Container.DataContext is MountRow row ? (row, target.Container, target.After) : null;
     }
 
     private void DriveOrder_AutoScroll(object? sender, EventArgs e)
     {
+        if (!CanChangeDriveOrder || !IsVisible || !MountRows.IsVisible || !_driveOrderPointerInside)
+        {
+            _driveOrderScrollDirection = 0;
+            _driveOrderPreview?.Hide();
+            ClearDriveOrderIndicator();
+            return;
+        }
         if (_driveOrderScrollDirection < 0)
             _driveOrderScrollViewer?.LineUp();
         else if (_driveOrderScrollDirection > 0)
             _driveOrderScrollViewer?.LineDown();
-        if (_driveOrderScrollDirection != 0)
+        // Status footers can change row heights while the pointer is stationary.
+        // Re-hit the current layout on every active drag tick, not only scrolling.
+        MountRows.UpdateLayout();
+        if (FindDriveDropTarget(_driveOrderLastPoint) is { } target)
         {
-            MountRows.UpdateLayout();
-            if (FindDriveDropTarget(_driveOrderLastPoint) is { } target &&
-                _driveOrderDraggingMountId is Guid sourceId && target.Row.Id != sourceId)
+            _driveOrderPreview?.SetPosition(_driveOrderLastPoint);
+            if (_driveOrderDraggingMountId is Guid sourceId && target.Row.Id != sourceId)
                 ShowDriveOrderIndicator(target.Container, target.After);
             else
                 ClearDriveOrderIndicator();
+        }
+        else
+        {
+            _driveOrderPreview?.Hide();
+            ClearDriveOrderIndicator();
         }
     }
 
@@ -324,6 +356,7 @@ public partial class MainWindow
             _driveOrderIndicator = new DriveInsertionAdorner(MountRows,
                 (System.Windows.Media.Brush)FindResource("AccentBrush"));
             layer.Add(_driveOrderIndicator);
+            _driveOrderIndicatorLayer = layer;
         }
         var edge = target.TranslatePoint(new WpfPoint(0, after ? target.ActualHeight : 0), MountRows);
         _driveOrderIndicator.SetPosition(edge.X + 3, edge.Y, Math.Max(0, target.ActualWidth - 6));
@@ -333,8 +366,16 @@ public partial class MainWindow
     {
         if (_driveOrderIndicator is null)
             return;
-        AdornerLayer.GetAdornerLayer(MountRows)?.Remove(_driveOrderIndicator);
+        _driveOrderIndicator.Dispose();
+        _driveOrderIndicatorLayer?.Remove(_driveOrderIndicator);
         _driveOrderIndicator = null;
+        _driveOrderIndicatorLayer = null;
+    }
+
+    private void ClearDriveOrderPreview()
+    {
+        _driveOrderPreview?.Dispose();
+        _driveOrderPreview = null;
     }
 
     private static T? FindDriveOrderVisual<T>(DependencyObject parent, string? name = null) where T : DependencyObject
@@ -351,29 +392,55 @@ public partial class MainWindow
 
     private sealed record DriveDrag(Guid WindowId, Guid MountId);
 
-    private sealed class DriveInsertionAdorner : Adorner
+    private sealed class DriveInsertionAdorner : Adorner, IDisposable
     {
         private readonly System.Windows.Media.Pen _pen;
+        private Rect _viewport;
         private WpfPoint _start;
         private WpfPoint _end;
 
         public DriveInsertionAdorner(UIElement element, System.Windows.Media.Brush brush) : base(element)
         {
             IsHitTestVisible = false;
-            _pen = new System.Windows.Media.Pen(brush, 2);
+            _viewport = DriveOrderViewport.Bounds(element);
+            Opacity = SystemParameters.HighContrast ? 1 : 0.75;
+            _pen = new System.Windows.Media.Pen(brush, SystemParameters.HighContrast ? 2 : 1.5)
+            {
+                StartLineCap = PenLineCap.Round,
+                EndLineCap = PenLineCap.Round,
+            };
+            element.LayoutUpdated += Element_LayoutUpdated;
         }
 
         public void SetPosition(double x, double y, double width)
         {
-            _start = new WpfPoint(x, y);
-            _end = new WpfPoint(x + width, y);
+            var start = new WpfPoint(x, y);
+            var end = new WpfPoint(x + width, y);
+            if (_start == start && _end == end) return;
+            _start = start;
+            _end = end;
             InvalidateVisual();
         }
 
         protected override void OnRender(DrawingContext drawingContext)
         {
+            var viewport = DriveOrderViewport.Bounds(AdornedElement);
+            if (viewport.IsEmpty)
+                return;
+            drawingContext.PushClip(new RectangleGeometry(viewport));
             drawingContext.DrawLine(_pen, _start, _end);
-            drawingContext.DrawEllipse(_pen.Brush, null, _start, 3, 3);
+            drawingContext.Pop();
+        }
+
+        public void Dispose() => AdornedElement.LayoutUpdated -= Element_LayoutUpdated;
+
+        private void Element_LayoutUpdated(object? sender, EventArgs e)
+        {
+            var viewport = DriveOrderViewport.Bounds(AdornedElement);
+            if (_viewport == viewport)
+                return;
+            _viewport = viewport;
+            InvalidateVisual();
         }
     }
 }

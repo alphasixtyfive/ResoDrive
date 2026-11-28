@@ -63,6 +63,32 @@ public sealed class ScheduledTaskAutostartService
         }
     }
 
+    public OperationResult MigrateFrom(string previousApplicationPath)
+    {
+        StartupTaskRecord? previous = null;
+        var changed = false;
+        try
+        {
+            previous = _tasks.Read(_taskName);
+            if (previous is null || ScheduledTaskDefinition.IsOwned(previous.Xml, _applicationPath, _userId)) return Result.Success();
+            if (!ScheduledTaskDefinition.IsOwned(previous.Xml, previousApplicationPath, _userId))
+                return Result.Failure("autostart.foreign_task", "The startup task belongs to another installation and was left unchanged.");
+            var xml = ScheduledTaskDefinition.Retarget(previous.Xml, _applicationPath);
+            changed = true;
+            _tasks.Register(_taskName, xml);
+            _tasks.SetEnabled(_taskName, previous.Enabled);
+            var updated = _tasks.Read(_taskName);
+            if (updated is null || updated.Enabled != previous.Enabled || !ScheduledTaskDefinition.IsOwned(updated.Xml, _applicationPath, _userId))
+                throw new IOException("The migrated startup task could not be verified.");
+            return Result.Success();
+        }
+        catch (Exception exception) when (Expected(exception))
+        {
+            if (changed) RestoreTask(previous);
+            return Result.Failure("autostart.migration_failed", exception.Message);
+        }
+    }
+
     public Task<OperationResult> SetEnabledAsync(
         bool enabled,
         CancellationToken cancellationToken = default)
@@ -172,6 +198,28 @@ internal sealed class ComStartupTaskStore : IStartupTaskStore
     private const int TaskNotFound = unchecked((int)0x80070002);
     private const int SchedulerTaskNotFound = unchecked((int)0x8004130F);
 
+    internal static IReadOnlyList<(string Name, StartupTaskRecord Record)> Enumerate()
+    {
+        object? service = null;
+        object? folder = null;
+        object? tasks = null;
+        var result = new List<(string, StartupTaskRecord)>();
+        try
+        {
+            service = Connect();
+            folder = ((dynamic)service).GetFolder("\\");
+            tasks = ((dynamic)folder).GetTasks(1);
+            for (var index = 1; index <= (int)((dynamic)tasks).Count; index++)
+            {
+                object task = ((dynamic)tasks)[index];
+                try { result.Add(((string)((dynamic)task).Name, new((string)((dynamic)task).Xml, (bool)((dynamic)task).Enabled))); }
+                finally { Release(task); }
+            }
+        }
+        finally { Release(tasks); Release(folder); Release(service); }
+        return result;
+    }
+
     public StartupTaskRecord? Read(string taskName)
     {
         object? service = null;
@@ -200,6 +248,9 @@ internal sealed class ComStartupTaskStore : IStartupTaskStore
     }
 
     public void Register(string taskName, string xml)
+        => RegisterForUser(taskName, xml, null);
+
+    internal static void RegisterForUser(string taskName, string xml, string? userId)
     {
         object? service = null;
         object? folder = null;
@@ -212,7 +263,7 @@ internal sealed class ComStartupTaskStore : IStartupTaskStore
                 taskName,
                 xml,
                 CreateOrUpdate,
-                null,
+                userId,
                 null,
                 InteractiveToken,
                 null);
@@ -294,6 +345,28 @@ internal sealed class ComStartupTaskStore : IStartupTaskStore
 internal static class ScheduledTaskDefinition
 {
     private static readonly XNamespace Namespace = "http://schemas.microsoft.com/windows/2004/02/mit/task";
+
+    internal static string Retarget(string xml, string applicationPath)
+    {
+        var document = XDocument.Parse(xml);
+        var root = document.Root ?? throw new IOException("The startup task is invalid.");
+        var action = root.Element(root.Name.Namespace + "Actions")?.Element(root.Name.Namespace + "Exec")
+            ?? throw new IOException("The startup task action is invalid.");
+        action.Element(root.Name.Namespace + "Command")!.Value = Path.GetFullPath(applicationPath);
+        action.Element(root.Name.Namespace + "WorkingDirectory")?.Remove();
+        action.Add(new XElement(root.Name.Namespace + "WorkingDirectory", Path.GetDirectoryName(Path.GetFullPath(applicationPath))));
+        return document.ToString();
+    }
+
+    internal static string? UserId(string xml)
+    {
+        var root = XDocument.Parse(xml).Root;
+        var value = root?.Element(root.Name.Namespace + "Principals")?.Element(root.Name.Namespace + "Principal")?
+            .Element(root.Name.Namespace + "UserId")?.Value;
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        return value.StartsWith("S-1-", StringComparison.Ordinal) ? new SecurityIdentifier(value).Value
+            : ((SecurityIdentifier)new NTAccount(value).Translate(typeof(SecurityIdentifier))).Value;
+    }
 
     internal static string CreateXml(string applicationPath, string userId)
     {

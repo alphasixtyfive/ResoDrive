@@ -1,9 +1,15 @@
 using System.IO.Pipes;
 using System.Net;
+using System.Collections.Concurrent;
+using System.Reflection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using ResoDrive.Host;
 using ResoDrive.Windows;
+using ResoDrive.Core.Domain;
+using ResoDrive.Core.Settings;
+using ResoDrive.Core.Contracts;
+using ResoDrive.Core.Results;
 
 namespace ResoDrive.App.Tests;
 
@@ -11,6 +17,53 @@ public sealed class RuntimeIdentityHostTests : IDisposable
 {
     private readonly ApplicationPaths _paths = new(Path.Combine(
         Path.GetTempPath(), "resodrive-runtime-identity-tests", Guid.NewGuid().ToString("N")));
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NormalEngineRefreshPreservesDisconnectedDriveWhileBootstrapCanActivateStartupPolicy(bool bootstrap)
+    {
+        _paths.EnsureCreated();
+        await File.WriteAllTextAsync(_paths.RcloneExecutable, "Disposable engine placeholder");
+        await File.WriteAllTextAsync(_paths.ConfigFile, "[fixture]\ntype = webdav\nurl = https://files.example/\n");
+        var definition = new MountDefinition
+        {
+            Id = MountId.New(), DisplayName = "Disconnected drive", RemoteName = "fixture",
+            Target = new MountTarget.Drive('R'), AutoMount = AutoMountPolicy.OnApplicationStart,
+        };
+        var settings = new ManagerSettings { Mounts = [MountDefinitionMapper.ToSettings(definition)] };
+        using var store = new AtomicSettingsStore(_paths);
+        Assert.True((await store.SaveAsync(settings, 0)).Succeeded);
+        await using var mounts = new RcloneMountCoordinator(_paths.RcloneExecutable, _paths.ConfigFile, _paths, new EmptyInventory())
+        { DirectConnectionProbeAllowed = _ => false };
+        Assert.True((await mounts.ReconcileAsync([definition])).Succeeded);
+        Assert.True((await mounts.StopAsync(definition.Id)).Succeeded);
+        var locator = new RcloneRuntimeLocator(_paths, new InstalledVersionRunner());
+        using var worker = new Worker(_paths, NullLogger<Worker>.Instance, new TestLifetime(), new RemoteWipeClient(), runtimeLocator: locator);
+        Set("_store", store);
+        Set("_settings", settings);
+        Set("_definitions", new List<MountDefinition> { definition });
+        Set("_mounts", mounts);
+        try
+        {
+            var response = await (Task<HostResponse>)typeof(Worker).GetMethod("HandleAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(worker, [new HostRequest("activate-runtime", Confirmed: bootstrap,
+                    ExpectedHostBaseDirectory: AppContext.BaseDirectory), CancellationToken.None])!;
+            Assert.True(response.Succeeded, response.ErrorMessage);
+            var status = Assert.Single(response.Mounts!);
+            Assert.Equal(!bootstrap, status.Lifecycle == nameof(MountLifecycle.Stopped));
+            Assert.Equal("v1.76.0", response.ReportedRcloneVersion);
+        }
+        finally
+        {
+            var operations = (ConcurrentDictionary<string, CancellationTokenSource>)typeof(Worker)
+                .GetField("_operations", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(worker)!;
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (!operations.IsEmpty) await Task.Delay(10, deadline.Token);
+            ((IDisposable?)typeof(Worker).GetField("_syncs", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(worker))?.Dispose();
+        }
+        void Set(string field, object value) => typeof(Worker).GetField(field, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(worker, value);
+    }
 
     [Fact]
     public async Task HostRecoversIdentityAfterInitialVersionTimeoutWithoutRestarting()
@@ -89,6 +142,21 @@ public sealed class RuntimeIdentityHostTests : IDisposable
             await _release.Task.WaitAsync(cancellationToken);
             return new ProcessRunResult(0, "rclone v1.75.1\n- os/version: Microsoft Windows 11", string.Empty, false);
         }
+    }
+
+    private sealed class InstalledVersionRunner : IRcloneProcessRunner
+    {
+        public Task<ProcessRunResult> RunAsync(string executablePath, IReadOnlyList<string> arguments, TimeSpan timeout,
+            CancellationToken cancellationToken, Action<string>? standardErrorLineReceived = null) =>
+            Task.FromResult(new ProcessRunResult(0, "rclone v1.76.0", "", false));
+    }
+
+    private sealed class EmptyInventory : IMountTargetInventory
+    {
+        public Task<OperationResult<IReadOnlySet<char>>> GetOccupiedDriveLettersAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(Result.Success<IReadOnlySet<char>>(new HashSet<char>()));
+        public Task<OperationResult<bool>> IsMountedAsync(MountTarget target, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Result.Success(false));
     }
 
     private sealed class CaptureHandler : HttpMessageHandler

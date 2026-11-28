@@ -18,7 +18,31 @@ public sealed class RcloneUpdateServiceTests
         Assert.Equal("v1.75.0", result.Value!.CurrentVersion);
         Assert.Equal("v1.76.0", result.Value.AvailableVersion);
         Assert.True(result.Value.UpdateAvailable);
-        Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(["version", "--check"]));
+        Assert.Single(runner.Calls, call => call.ExecutablePath == package.ExecutablePath &&
+            call.Arguments.SequenceEqual(["version"]));
+        Assert.Single(runner.Calls, call => call.Arguments.SequenceEqual(["version", "--check"]));
+    }
+
+    [Fact]
+    public async Task CheckAsync_ReverifiesCanonicalVersionOnEveryCall()
+    {
+        using var package = new TestPackage("v1.75.0");
+        var runner = new FakeRunner { LatestVersion = "v1.76.0" };
+        var service = CreateService(package, runner);
+
+        var first = await service.CheckAsync();
+        Assert.True(first.Succeeded, first.Error?.Message);
+        Assert.Equal("v1.75.0", first.Value!.CurrentVersion);
+        File.WriteAllText(package.ExecutablePath, "v1.76.0");
+
+        var second = await service.CheckAsync();
+
+        Assert.True(second.Succeeded, second.Error?.Message);
+        Assert.Equal("v1.76.0", second.Value!.CurrentVersion);
+        Assert.False(second.Value.UpdateAvailable);
+        Assert.Equal(2, runner.Calls.Count(call => call.ExecutablePath == package.ExecutablePath &&
+            call.Arguments.SequenceEqual(["version"])));
+        Assert.Equal(2, runner.Calls.Count(call => call.Arguments.SequenceEqual(["version", "--check"])));
     }
 
     [Theory]
@@ -179,9 +203,163 @@ public sealed class RcloneUpdateServiceTests
         var result = await CreateService(package, runner).UpdateAsync();
 
         Assert.False(result.Succeeded);
-        Assert.Equal("rclone.update_locked", result.Error!.Code);
+        Assert.Equal("rclone.file_locked", result.Error!.Code);
         Assert.True(result.Error.IsTransient);
+        Assert.Contains("still locked", result.Error.Message, StringComparison.Ordinal);
         Assert.Equal("v1.75.0", File.ReadAllText(package.ExecutablePath));
+        Assert.Equal("v1.76.0", File.ReadAllText(Assert.Single(
+            Directory.GetFiles(package.ComponentDirectory, ".rclone-update-*.exe"))));
+        Assert.Empty(Directory.GetFiles(package.ComponentDirectory, ".rclone-old-*.exe"));
+    }
+
+    [Fact]
+    public async Task UpdateAsync_RetriesRealReplacementLockAndCompletesAfterRelease()
+    {
+        using var package = new TestPackage("v1.75.0");
+        FileStream? held = null;
+        var runner = new FakeRunner
+        {
+            AfterStagedInspection = () => held = new FileStream(package.ExecutablePath,
+                FileMode.Open, FileAccess.Read, FileShare.Read)
+        };
+        var waiting = false;
+        try
+        {
+            var result = await CreateService(package, runner).UpdateAsync(new InlineProgress(_ =>
+            {
+                waiting = true;
+                Assert.Equal("v1.75.0", File.ReadAllText(package.ExecutablePath));
+                held!.Dispose();
+            }));
+            Assert.True(waiting);
+            Assert.True(result.Succeeded, result.Error?.Message);
+            Assert.Equal("v1.76.0", File.ReadAllText(package.ExecutablePath));
+            Assert.Empty(Directory.GetFiles(package.ComponentDirectory, ".rclone-*.exe"));
+            Assert.Single(runner.Calls, call => call.Arguments.Contains("--output"));
+        }
+        finally { held?.Dispose(); }
+    }
+
+    [Fact]
+    public async Task UpdateAsync_CancellationWhileWaitingForCommitLeavesCurrentRuntimeAndReleasesLock()
+    {
+        using var package = new TestPackage("v1.75.0");
+        using var cancellation = new CancellationTokenSource();
+        FileStream? held = null;
+        var runner = new FakeRunner
+        {
+            AfterStagedInspection = () => held = new FileStream(package.ExecutablePath,
+                FileMode.Open, FileAccess.Read, FileShare.Read)
+        };
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => CreateService(package, runner).UpdateAsync(
+                new InlineProgress(_ => cancellation.Cancel()), cancellation.Token));
+            Assert.NotNull(held);
+            Assert.Equal("v1.75.0", File.ReadAllText(package.ExecutablePath));
+            Assert.Empty(Directory.GetFiles(package.ComponentDirectory, ".rclone-*.exe"));
+            held.Dispose();
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            var retry = await CreateService(package, new FakeRunner()).UpdateAsync(cancellationToken: deadline.Token);
+            Assert.True(retry.Succeeded, retry.Error?.Message);
+        }
+        finally { held?.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UpdateAsync_RealStagedReadLockIsRetriedAndPersistentFailureKeepsPayload(bool release)
+    {
+        using var package = new TestPackage("v1.75.0");
+        FileStream? held = null;
+        string? staged = null;
+        var runner = new FakeRunner
+        {
+            AfterDownload = path =>
+            {
+                staged = path;
+                held = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
+            }
+        };
+        var waiting = false;
+        try
+        {
+            var result = await CreateService(package, runner).UpdateAsync(new InlineProgress(_ =>
+            {
+                waiting = true;
+                if (release) held!.Dispose();
+            }));
+            Assert.True(waiting);
+            Assert.Equal(release, result.Succeeded);
+            if (!release) Assert.Equal("rclone.file_locked", result.Error!.Code);
+            Assert.Single(runner.Calls, call => call.Arguments.Contains("--output"));
+            held!.Dispose();
+            Assert.Equal(release ? "v1.76.0" : "v1.75.0", File.ReadAllText(package.ExecutablePath));
+            Assert.Equal(!release, File.Exists(staged));
+            if (!release) Assert.Equal("v1.76.0", File.ReadAllText(staged!));
+        }
+        finally { held?.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CanonicalReadLockCannotRestoreOlderBackupOrDiscardRecoveryArtifacts(bool update)
+    {
+        using var package = new TestPackage("v1.75.0");
+        var backup = package.WriteArtifact($".rclone-old-{Guid.NewGuid():N}.exe", "v1.74.0");
+        var staged = package.WriteArtifact($".rclone-update-{Guid.NewGuid():N}.exe", "pending payload");
+        var runner = new FakeRunner();
+        var service = CreateService(package, runner);
+        using (var held = new FileStream(package.ExecutablePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            var result = update ? (ResoDrive.Core.Results.OperationResult)await service.UpdateAsync()
+                : await service.CheckAsync();
+            Assert.False(result.Succeeded);
+            Assert.Equal("rclone.file_locked", result.Error!.Code);
+            Assert.Equal(6, runner.Calls.Count);
+            Assert.All(runner.Calls, call => Assert.Equal(package.ExecutablePath, call.ExecutablePath));
+            Assert.Equal("v1.74.0", File.ReadAllText(backup));
+            Assert.Equal("pending payload", File.ReadAllText(staged));
+        }
+        Assert.Equal("v1.75.0", File.ReadAllText(package.ExecutablePath));
+    }
+
+    [Fact]
+    public async Task UpdateAsync_PostCommitLaunchLockKeepsNewImageAndBackupUntilUnlockedVerification()
+    {
+        using var package = new TestPackage("v1.75.0");
+        var runner = new FakeRunner { LockUpdatedCanonicalRuntime = true };
+        var service = CreateService(package, runner);
+        var result = await service.UpdateAsync();
+        Assert.False(result.Succeeded);
+        Assert.Equal("rclone.file_locked", result.Error!.Code);
+        Assert.Equal("v1.76.0", File.ReadAllText(package.ExecutablePath));
+        Assert.Equal("v1.75.0", File.ReadAllText(Assert.Single(
+            Directory.GetFiles(package.ComponentDirectory, ".rclone-old-*.exe"))));
+        runner.LockUpdatedCanonicalRuntime = false;
+        var verified = await service.CheckAsync();
+        Assert.True(verified.Succeeded, verified.Error?.Message);
+        Assert.Equal("v1.76.0", verified.Value!.CurrentVersion);
+        Assert.Empty(Directory.GetFiles(package.ComponentDirectory, ".rclone-*.exe"));
+        Assert.Single(runner.Calls, call => call.Arguments.Contains("--output"));
+    }
+
+    [Theory]
+    [InlineData(5)]
+    [InlineData(577)]
+    [InlineData(1260)]
+    public async Task UpdateAsync_DoesNotRetryStagedPermissionOrPolicyFailures(int nativeError)
+    {
+        using var package = new TestPackage("v1.75.0");
+        var runner = new FakeRunner { StagedLaunchError = nativeError };
+        var result = await CreateService(package, runner).UpdateAsync();
+        Assert.False(result.Succeeded);
+        Assert.Equal("rclone.update_staged_invalid", result.Error!.Code);
+        Assert.Single(runner.Calls, call => Path.GetFileName(call.ExecutablePath).StartsWith(".rclone-update-", StringComparison.Ordinal));
+        Assert.Equal("v1.75.0", File.ReadAllText(package.ExecutablePath));
+        Assert.Empty(Directory.GetFiles(package.ComponentDirectory, ".rclone-*.exe"));
     }
 
     [Fact]
@@ -213,6 +391,31 @@ public sealed class RcloneUpdateServiceTests
         Assert.True(File.Exists(bootstrapDownload));
         Assert.True(File.Exists(bootstrapStage));
         Assert.True(File.Exists(bootstrapBackup));
+    }
+
+    [ElevatedSymlinkFact]
+    public async Task CanonicalFileLinkIsRejectedBeforeAnyExecutionOrRecoveryCleanup()
+    {
+        using var package = new TestPackage("v1.75.0");
+        var target = package.WriteArtifact("linked-target.exe", "v1.75.0");
+        var backup = package.WriteArtifact($".rclone-old-{Guid.NewGuid():N}.exe", "v1.74.0");
+        var staged = package.WriteArtifact($".rclone-update-{Guid.NewGuid():N}.exe", "pending");
+        File.Delete(package.ExecutablePath);
+        File.CreateSymbolicLink(package.ExecutablePath, target);
+        try
+        {
+            var runner = new FakeRunner();
+            var service = CreateService(package, runner);
+            var check = await service.CheckAsync();
+            var update = await service.UpdateAsync();
+            Assert.Equal("rclone.update_unsafe_path", check.Error?.Code);
+            Assert.Equal("rclone.update_unsafe_path", update.Error?.Code);
+            Assert.Empty(runner.Calls);
+            Assert.Equal("v1.75.0", File.ReadAllText(target));
+            Assert.Equal("v1.74.0", File.ReadAllText(backup));
+            Assert.Equal("pending", File.ReadAllText(staged));
+        }
+        finally { File.Delete(package.ExecutablePath); }
     }
 
     [Fact]
@@ -257,14 +460,16 @@ public sealed class RcloneUpdateServiceTests
             "v1.74.0",
             DateTime.UtcNow.AddMinutes(-1));
 
-        var result = await CreateService(
-            package,
-            new FakeRunner { LatestVersion = "v1.74.0" }).CheckAsync();
+        var runner = new FakeRunner { LatestVersion = "v1.74.0" };
+        var result = await CreateService(package, runner).CheckAsync();
 
         Assert.True(result.Succeeded, result.Error?.Message);
         Assert.Equal("v1.74.0", result.Value!.CurrentVersion);
         Assert.Equal("v1.74.0", File.ReadAllText(package.ExecutablePath));
         Assert.Empty(Directory.EnumerateFiles(package.ComponentDirectory, ".rclone-old-*.exe"));
+        // Invalid entry, copied-backup verification, and the fresh post-recovery inspection.
+        Assert.Equal(3, runner.Calls.Count(call => call.ExecutablePath == package.ExecutablePath &&
+            call.Arguments.SequenceEqual(["version"])));
     }
 
     [Fact]
@@ -324,6 +529,10 @@ public sealed class RcloneUpdateServiceTests
         public string LatestVersion { get; init; } = "v1.76.0";
         public string? StagedVersion { get; init; }
         public bool BlockUpdatedCanonicalRuntime { get; init; }
+        public bool LockUpdatedCanonicalRuntime { get; set; }
+        public int? StagedLaunchError { get; init; }
+        public Action? AfterStagedInspection { get; init; }
+        public Action<string>? AfterDownload { get; init; }
         public bool CheckTimesOut { get; init; }
         public int CheckExitCode { get; init; }
         public bool WriteCheckToStandardError { get; init; }
@@ -350,9 +559,14 @@ public sealed class RcloneUpdateServiceTests
 
                 if (arguments.SequenceEqual(["version"]))
                 {
+                    var isStaged = Path.GetFileName(executablePath).StartsWith(".rclone-update-", StringComparison.Ordinal);
+                    if (isStaged && StagedLaunchError is { } error) throw new System.ComponentModel.Win32Exception(error);
                     var version = File.ReadAllText(executablePath);
                     if (BlockUpdatedCanonicalRuntime && version == LatestVersion && Path.GetFileName(executablePath) == "rclone.exe")
                         throw new System.ComponentModel.Win32Exception(5);
+                    if (LockUpdatedCanonicalRuntime && version == LatestVersion && Path.GetFileName(executablePath) == "rclone.exe")
+                        throw new System.ComponentModel.Win32Exception(32);
+                    if (isStaged) AfterStagedInspection?.Invoke();
                     return new ProcessRunResult(0, $"rclone {version}\n- os/version: Microsoft Windows 11", "", false);
                 }
 
@@ -371,6 +585,7 @@ public sealed class RcloneUpdateServiceTests
                 var outputIndex = Array.IndexOf([.. arguments], "--output");
                 Assert.True(outputIndex >= 0);
                 File.WriteAllText(arguments[outputIndex + 1], StagedVersion ?? LatestVersion);
+                AfterDownload?.Invoke(arguments[outputIndex + 1]);
                 return new ProcessRunResult(0, "", "", false);
             }
             finally
@@ -396,6 +611,22 @@ public sealed class RcloneUpdateServiceTests
     }
 
     private sealed record Call(string ExecutablePath, IReadOnlyList<string> Arguments);
+
+    private sealed class InlineProgress(Action<RcloneBootstrapProgress> report) : IProgress<RcloneBootstrapProgress>
+    {
+        public void Report(RcloneBootstrapProgress value) => report(value);
+    }
+
+    private sealed class ElevatedSymlinkFactAttribute : FactAttribute
+    {
+        public ElevatedSymlinkFactAttribute()
+        {
+            using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+            if (!new System.Security.Principal.WindowsPrincipal(identity)
+                .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator))
+                Skip = "File symlink creation requires an elevated disposable Windows runner; no UAC is requested locally.";
+        }
+    }
 
     private sealed class TestPackage : IDisposable
     {

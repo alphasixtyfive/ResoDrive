@@ -7,6 +7,118 @@ namespace ResoDrive.App.Tests;
 
 public sealed class ApplicationUpdateHandoffTests
 {
+    [Theory]
+    [InlineData(577)]
+    [InlineData(1260)]
+    [InlineData(4551)]
+    [InlineData(4556)]
+    [InlineData(4559)]
+    [InlineData(4581)]
+    public async Task SecurityBlockedInstallerRecordsTheCodeAndReopensTheSource(int code)
+    {
+        using var directory = new TemporaryDirectory();
+        var request = Request(directory.Path);
+        var runtime = new FakeRuntime { InstallerException = new Win32Exception(code), ReadyAcknowledged = true };
+        Assert.Equal(1, await ApplicationUpdateHandoff.CompleteAsync(request, runtime));
+        var outcome = ReadOutcome(request.OutcomePath);
+        Assert.Equal("failed", outcome.Status);
+        Assert.Null(outcome.InstallerExitCode);
+        Assert.Contains($"error {code}", outcome.Message, StringComparison.Ordinal);
+        Assert.Contains("publisher", outcome.Message, StringComparison.Ordinal);
+        Assert.True(outcome.Finalized);
+        Assert.True(outcome.RelaunchAcknowledged);
+        Assert.Equal(request.SourceExecutablePath, runtime.StartedPath);
+    }
+
+    [Theory]
+    [InlineData(577)]
+    [InlineData(1260)]
+    [InlineData(4551)]
+    [InlineData(4559)]
+    [InlineData(4581)]
+    public void SecurityBlockExitCodesAlsoHandleBurnHresults(int code)
+    {
+        var plain = ApplicationUpdateHandoff.ClassifyInstallerExitCode(code);
+        var wrapped = ApplicationUpdateHandoff.ClassifyInstallerExitCode(unchecked((int)(0x80070000u | (uint)code)));
+        Assert.Equal(plain, wrapped);
+        Assert.Equal("failed", plain.Status);
+        Assert.Contains($"error {code}", plain.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OrdinaryAccessDenialIsNotMisdiagnosedAsApplicationControl()
+    {
+        var message = ApplicationUpdateHandoff.DescribeLaunchFailure(new Win32Exception(5));
+        Assert.Contains("error 5", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("application control", message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task BlockedHelperFinalizesItsReceiptAndPreservesDownloadedInstaller()
+    {
+        using var directory = new TemporaryDirectory();
+        var updates = Path.Combine(directory.Path, "updates");
+        var source = Path.Combine(directory.Path, "resodrive.exe");
+        var installer = Path.Combine(updates, "resodrive-win-x64-0.3.0-setup.exe");
+        Directory.CreateDirectory(updates);
+        File.WriteAllText(source, "disposable source fixture");
+        File.WriteAllText(installer, "disposable verified package fixture");
+        var installerHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(installer)));
+        var failure = new Win32Exception(4551);
+        var observed = await Assert.ThrowsAsync<Win32Exception>(() => ApplicationUpdateHandoff.StartAsync(
+            "0.3.0", installer, updates, source, source, installerHash,
+            (_, _) => throw failure));
+        Assert.Same(failure, observed);
+        var outcome = ApplicationUpdateHandoff.ReadOutcome(updates);
+        Assert.NotNull(outcome);
+        Assert.Equal("failed", outcome.Status);
+        Assert.True(outcome.Finalized);
+        Assert.False(outcome.RelaunchAcknowledged);
+        Assert.Contains("helper", outcome.Message, StringComparison.Ordinal);
+        Assert.Contains("error 4551", outcome.Message, StringComparison.Ordinal);
+        Assert.Equal(installerHash, Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(installer))));
+        Assert.Equal("disposable source fixture", File.ReadAllText(source));
+    }
+
+    [Fact]
+    public async Task SuccessfulInstallWithBlockedRelaunchRetainsSuccessfulInstallAndBlockDetails()
+    {
+        using var directory = new TemporaryDirectory();
+        var request = Request(directory.Path);
+        var runtime = new FakeRuntime
+        {
+            ResolvedExecutable = request.InstalledExecutablePath,
+            FirstStartException = new Win32Exception(4551),
+        };
+        Assert.Equal(1, await ApplicationUpdateHandoff.CompleteAsync(request, runtime));
+        var outcome = ReadOutcome(request.OutcomePath);
+        Assert.Equal("succeeded", outcome.Status);
+        Assert.Equal(0, outcome.InstallerExitCode);
+        Assert.False(outcome.RelaunchAcknowledged);
+        Assert.Contains("error 4551", outcome.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("was not updated", outcome.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(1601, "IT administrator")]
+    [InlineData(1618, "Let it finish")]
+    [InlineData(1625, "policy")]
+    [InlineData(1632, "disk space")]
+    public async Task InstallerEnvironmentFailureExplainsRecoveryAndReopensTheOldApplication(int code, string recovery)
+    {
+        using var directory = new TemporaryDirectory();
+        var request = Request(directory.Path);
+        var runtime = new FakeRuntime { InstallerExitCode = code, ReadyAcknowledged = true };
+        Assert.Equal(1, await ApplicationUpdateHandoff.CompleteAsync(request, runtime));
+        var outcome = ReadOutcome(request.OutcomePath);
+        Assert.Equal("failed", outcome.Status);
+        Assert.Equal(code, outcome.InstallerExitCode);
+        Assert.Contains(recovery, outcome.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(outcome.Finalized);
+        Assert.True(outcome.RelaunchAcknowledged);
+        Assert.Equal(request.SourceExecutablePath, runtime.StartedPath);
+    }
+
     [Fact]
     public void FinalReceiptLeftByLegacyHelperIsRecoveredAndRemovedWithTheFirstReceipt()
     {
@@ -145,11 +257,16 @@ public sealed class ApplicationUpdateHandoffTests
         Assert.Equal(request.SourceExecutablePath, runtime.StartedPath);
     }
 
-    [Fact]
-    public async Task CompleteAsync_RecordsInstallerFailureAndRelaunchesApplication()
+    [Theory]
+    [InlineData(".msi", ".msi.log")]
+    [InlineData("-setup.exe", ".setup.log")]
+    public async Task CompleteAsync_RecordsInstallerFailureAndRelaunchesApplication(string installerSuffix, string logSuffix)
     {
         using var directory = new TemporaryDirectory();
-        var request = Request(directory.Path);
+        var request = Request(directory.Path) with
+        {
+            InstallerPath = Path.Combine(directory.Path, "update" + installerSuffix),
+        };
         var runtime = new FakeRuntime { InstallerExitCode = 1603, ReadyAcknowledged = true };
 
         var exitCode = await ApplicationUpdateHandoff.CompleteAsync(request, runtime);
@@ -161,6 +278,10 @@ public sealed class ApplicationUpdateHandoffTests
         Assert.True(outcome.RelaunchAcknowledged);
         Assert.True(outcome.Finalized);
         Assert.Contains("1603", outcome.Message, StringComparison.Ordinal);
+        var actualLog = Path.ChangeExtension(request.InstallerPath, logSuffix);
+        Assert.Contains(actualLog, outcome.Message, StringComparison.Ordinal);
+        Assert.Contains('"' + actualLog + '"', ApplicationUpdateHandoff.CreateInstallerStartInfo(request.InstallerPath).Arguments,
+            StringComparison.Ordinal);
         Assert.Equal(request.SourceExecutablePath, runtime.StartedPath);
     }
 
@@ -219,6 +340,23 @@ public sealed class ApplicationUpdateHandoffTests
             [request.InstalledExecutablePath, request.SourceExecutablePath],
             runtime.StartedPaths);
         Assert.True(ReadOutcome(request.OutcomePath).RelaunchAcknowledged);
+    }
+
+    [Fact]
+    public async Task CompleteAsync_ReopensVerifiedMovedInstallationAndDoesNotUsePortableFallback()
+    {
+        using var directory = new TemporaryDirectory();
+        var request = Request(directory.Path);
+        var moved = Path.Combine(directory.Path, "ResoDrive", "resodrive.exe");
+        var runtime = new FakeRuntime { InstallerExitCode = 0, ResolvedExecutable = moved, ReadyAcknowledged = true };
+        Assert.Equal(0, await ApplicationUpdateHandoff.CompleteAsync(request, runtime));
+        Assert.Equal([moved], runtime.StartedPaths);
+
+        var failedStart = new FakeRuntime { InstallerExitCode = 0, ResolvedExecutable = moved,
+            FirstStartException = new Win32Exception(2), ReadyAcknowledged = true };
+        Assert.Equal(1, await ApplicationUpdateHandoff.CompleteAsync(request, failedStart));
+        Assert.Equal([moved], failedStart.StartedPaths);
+        Assert.False(ReadOutcome(request.OutcomePath).RelaunchAcknowledged);
     }
 
     [Fact]
@@ -302,6 +440,11 @@ public sealed class ApplicationUpdateHandoffTests
 
         Assert.True(ApplicationUpdateHandoff.TryParseCompletionRequest(
             valid, helper, updates, out _));
+        var setup = Replace(valid, 2, Path.Combine(updates, "resodrive-win-x64-0.3.0-setup.exe"));
+        Assert.True(ApplicationUpdateHandoff.TryParseCompletionRequest(
+            setup, helper, updates, out _));
+        Assert.False(ApplicationUpdateHandoff.TryParseCompletionRequest(
+            Replace(setup, 2, Path.Combine(updates, "resodrive-win-x64-0.3.18-setup.exe")), helper, updates, out _));
         Assert.False(ApplicationUpdateHandoff.TryParseCompletionRequest(
             valid, Path.Combine(directory.Path, "installed", "resodrive.exe"), updates, out _));
         Assert.False(ApplicationUpdateHandoff.TryParseCompletionRequest(
@@ -330,7 +473,29 @@ public sealed class ApplicationUpdateHandoffTests
     }
 
     [Fact]
-    public void Start_RejectsInstallerOutsideTrustedUpdatesDirectory()
+    public void SetupHandoffUsesTheBrandedBundleWithExplicitDataRoot()
+    {
+        var path = @"C:\updates\resodrive-win-x64-0.3.36-setup.exe";
+        var start = ApplicationUpdateHandoff.CreateInstallerStartInfo(path);
+        Assert.Equal(path, start.FileName);
+        Assert.Equal("runas", start.Verb);
+        Assert.Contains("/passive /norestart /log", start.Arguments, StringComparison.Ordinal);
+        Assert.Contains("ResoDriveDataRoot=", start.Arguments, StringComparison.Ordinal);
+        Assert.DoesNotContain("/i ", start.Arguments, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(1618)]
+    [InlineData(unchecked((int)0x80070652))]
+    public void BusyInstallerResultIsActionableForMsiAndSetup(int code)
+    {
+        var result = ApplicationUpdateHandoff.ClassifyInstallerExitCode(code);
+        Assert.Equal("failed", result.Status);
+        Assert.Contains("Let it finish", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Start_RejectsInstallerOutsideTrustedUpdatesDirectory()
     {
         using var directory = new TemporaryDirectory();
         var updates = Path.Combine(directory.Path, "updates");
@@ -338,7 +503,7 @@ public sealed class ApplicationUpdateHandoffTests
             directory.Path,
             typeof(Program).Assembly.GetName().Name + ".exe");
 
-        Assert.Throws<InvalidOperationException>(() => ApplicationUpdateHandoff.Start(
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ApplicationUpdateHandoff.StartAsync(
             "0.3.0",
             Path.Combine(directory.Path, "attacker.msi"),
             updates,
@@ -393,6 +558,7 @@ public sealed class ApplicationUpdateHandoffTests
         public Exception? PreparationException { get; init; }
         public bool ReadyAcknowledged { get; init; }
         public Exception? FirstStartException { get; init; }
+        public string? ResolvedExecutable { get; init; }
         public bool ApplicationStarted { get; private set; }
         public string? StartedPath { get; private set; }
         public List<string> PreparedDirectories { get; } = [];
@@ -437,6 +603,7 @@ public sealed class ApplicationUpdateHandoffTests
         }
 
         public bool RequestReady(string activationScope, TimeSpan timeout) => ReadyAcknowledged;
+        public string? ResolveInstalledApplication(string version) => ResolvedExecutable;
     }
 
     private sealed class TemporaryDirectory : IDisposable

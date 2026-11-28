@@ -62,7 +62,12 @@ internal static class RcloneJsonLogParser
         }
     }
 
-    private static RcloneSyncStats ParseStats(JsonElement stats) => new(
+    private static RcloneSyncStats? ParseStats(JsonElement stats) =>
+        // A diagnostic event with an empty/invalid stats object is not a new
+        // zero-byte measurement. Preserve the last genuine transfer observation.
+        !stats.TryGetProperty("bytes", out var bytes) || bytes.ValueKind != JsonValueKind.Number ||
+            !bytes.TryGetInt64(out var count) || count < 0
+            ? null : new(
         ReadNonNegativeInt64(stats, "bytes"),
         ReadNonNegativeInt64(stats, "totalBytes"),
         ReadNonNegativeInt64(stats, "checks"),

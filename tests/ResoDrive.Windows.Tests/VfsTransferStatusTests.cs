@@ -39,6 +39,25 @@ public sealed class VfsTransferStatusTests
         await Assert.ThrowsAsync<ArgumentException>(() =>
             VfsStatusReader.ReadAsync("example.com:1234", "user", "secret", Path.GetTempPath(), CancellationToken.None));
 
+    [Theory]
+    [InlineData("example.com:1234")]
+    [InlineData("127.0.0.1:1234/path")]
+    [InlineData("127.0.0.1:1234?query")]
+    [InlineData("127.0.0.1:1234#fragment")]
+    [InlineData("user@127.0.0.1:1234")]
+    public async Task QuitUsesTheSameStrictLoopbackBoundary(string address) =>
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            VfsStatusReader.RequestQuitAsync(address, "user", "secret", CancellationToken.None));
+
+    [Fact]
+    public async Task CancelledQuitDoesNotSendARequest()
+    {
+        using var source = new CancellationTokenSource();
+        source.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            VfsStatusReader.RequestQuitAsync("127.0.0.1:1", "user", "secret", source.Token));
+    }
+
     [Fact]
     public void LostControlConnectionCannotEraseKnownPendingWork()
     {

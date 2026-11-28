@@ -2,6 +2,7 @@ using System.Windows;
 
 namespace ResoDrive.App.Tests;
 
+[Collection(WpfUiTestsGroup.Name)]
 public sealed class WindowRestorationTests
 {
     [Fact]

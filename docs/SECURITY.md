@@ -6,8 +6,10 @@ credentials, private service addresses, configuration files, or unredacted logs.
 
 - The manager runs as the interactive user. WinFsp is a separate machine-level
   prerequisite; ResoDrive links only to its official release page.
-- Managed processes are identified by mount ID, PID, process creation time,
-  canonical executable path, source, and target before any stop operation.
+- Recovered mount processes are verified by mount ID, PID, process creation time,
+  canonical executable path, source and target before stopping them. Directly
+  started commands remain owned through their process lifetime. Installer shutdown
+  verifies the installation path, Windows session and account.
 - External rclone processes are visible but never terminated by default.
 - Manager-owned rclone arguments are constructed internally. User tuning options
   pass through a strict token policy at import, save, load, and launch time.
@@ -29,18 +31,23 @@ credentials, private service addresses, configuration files, or unredacted logs.
   release link without using the REST API, accept only stable semantic versions,
   and download only HTTPS assets under the configured repository path. Installation
   requires confirmation, SHA-256 verification, strict helper/path validation, and
-  Windows elevation. A durable helper records the MSI result and reopens the app.
-  Partial application downloads are reusable only if the completed MSI passes the
+  Windows elevation. A durable helper records the installer result and reopens the app.
+  Partial application downloads are reusable only if the completed package passes the
   published SHA-256 check.
 - The public setup bundle contains the MSI and downloads a pinned .NET Desktop
   Runtime package only when the required runtime is missing. Direct MSI deployment
   is intended for managed machines where that prerequisite is already present.
-- UI logs automatically redact common secrets, credential-bearing URLs, host
-  names, and absolute paths. Free-form error text cannot be classified perfectly,
-  so review log contents before sharing them.
-- Diagnostic exports use an allowlist of component versions, numeric performance
-  options, enumerated states and UI error IDs. They do not include raw configuration,
-  raw exception messages, process arguments, server addresses, paths or account names.
+- Rolling diagnostic logs redact common secrets, credential-bearing URLs, host
+  names and absolute paths. In-app activity includes operational context and
+  cleaned backend errors, so it may still contain names, addresses or paths.
+  Free-form error text cannot be classified perfectly; review logs before sharing.
+- Diagnostic exports use an allowlist of component versions, numeric resource and
+  transfer measurements, freshness/recovery flags, enumerated states, known event
+  categories and error references. Recent UI and host startup events can show
+  different runtime versions across sessions. Only bounded excerpts from the
+  current and one rotated log per role are examined, with missing or truncated
+  history identified in the report. Raw configuration, exception messages, process
+  arguments, server addresses, file paths, filenames and account names are omitted.
 - Mount upload statistics are fetched from authenticated IPv4 loopback control
   endpoints with proxies and redirects disabled, a three-second deadline, and a
   bounded response size. An unavailable result is never presented as zero uploads.

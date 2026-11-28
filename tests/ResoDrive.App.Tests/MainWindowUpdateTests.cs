@@ -1,0 +1,147 @@
+using System.Reflection;
+using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
+using ResoDrive.Core;
+using ResoDrive.Windows;
+
+namespace ResoDrive.App.Tests;
+
+internal static class MainWindowUpdateTests
+{
+    // Run in the existing STA/Application fixture, without app startup, host or settings IO.
+    internal static void VerifyWithApplicationResources()
+    {
+        var window = new MainWindow();
+        var loaded = Method("MainWindow_Loaded").CreateDelegate<RoutedEventHandler>(window);
+        window.Loaded -= loaded;
+        var check = Assert.IsType<Button>(window.FindName("ApplicationUpdateCheckButton"));
+        var install = Assert.IsType<Button>(window.FindName("ApplicationUpdateActionButton"));
+        try
+        {
+            Assert.Equal(Visibility.Collapsed, check.Visibility);
+            Assert.Equal("Check for updates", AutomationProperties.GetName(check));
+            Set(window, "_applicationUpdate", new ApplicationUpdateCheck("0.3.35", "0.3.36", true, ProductLinks.LatestRelease));
+            Method("RefreshApplicationUpdateAction").Invoke(window, null);
+            Assert.Equal(Visibility.Visible, check.Visibility);
+            Assert.True(check.IsEnabled);
+            Assert.True(install.IsEnabled);
+
+            Method("SetApplicationUpdateBusy").Invoke(window, [true]);
+            Assert.False(check.IsEnabled);
+            Assert.False(install.IsEnabled);
+            // The compiled click handler must honor the busy guard, even for a routed/programmatic click.
+            check.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.Null(Field("_applicationDownloadCancellation").GetValue(window));
+            Assert.Equal("0.3.36", ((ApplicationUpdateCheck)Field("_applicationUpdate").GetValue(window)!).AvailableVersion);
+            Method("SetApplicationUpdateBusy").Invoke(window, [false]);
+
+            Method("SelectPage").Invoke(window, ["Settings"]);
+            Assert.IsType<TextBlock>(window.FindName("ApplicationUpdateStatusText")).Text = "Version 0.3.36 is available";
+            var defaultSize = new Size(window.Width, window.Height);
+            window.Show();
+            foreach (var scale in new[] { 1d, 1.5d, 2d })
+            {
+                VisualTreeHelper.SetRootDpi(window, new DpiScale(scale, scale));
+                foreach (var size in new[] { defaultSize, new Size(640, 440) })
+                {
+                    window.Width = size.Width;
+                    window.Height = size.Height;
+                    window.UpdateLayout();
+                    var scroll = Assert.IsType<ScrollViewer>(window.FindName("SettingsScrollViewer"));
+                    if (size == defaultSize)
+                        Assert.True(scroll.ScrollableHeight < 1,
+                            $"Normal Settings should fit without scrolling (overflow: {scroll.ScrollableHeight:0.0}).");
+                    scroll.ScrollToBottom();
+                    check.BringIntoView();
+                    window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
+                    window.UpdateLayout();
+                    var root = Assert.IsAssignableFrom<FrameworkElement>(window.Content);
+                    var checkBounds = check.TransformToAncestor(root).TransformBounds(new Rect(check.RenderSize));
+                    var installBounds = install.TransformToAncestor(root).TransformBounds(new Rect(install.RenderSize));
+                    var viewportBounds = scroll.TransformToAncestor(root).TransformBounds(new Rect(scroll.RenderSize));
+                    Assert.True(checkBounds.Width >= 33 && checkBounds.Height >= 30);
+                    Assert.True(checkBounds.Right < installBounds.Left);
+                    Assert.True(installBounds.Right <= root.ActualWidth);
+                    Assert.True(checkBounds.Top >= viewportBounds.Top && installBounds.Bottom <= viewportBounds.Bottom);
+                    Capture(root, scale, size);
+                }
+            }
+
+            Set(window, "_applicationUpdate", null);
+            Set(window, "_applicationUpdateCheckFailed", true);
+            Method("RefreshApplicationUpdateAction").Invoke(window, null);
+            Assert.Equal(Visibility.Collapsed, check.Visibility);
+            Assert.True(install.IsEnabled);
+            Assert.Equal("Retry", Assert.IsType<TextBlock>(window.FindName("ApplicationUpdateActionText")).Text);
+        }
+        finally
+        {
+            Set(window, "_exitRequested", true);
+            window.Close();
+        }
+    }
+
+    internal static void VerifyEditorLayout(Window window, string scrollName, string actionName, string prefix)
+    {
+        window.Show();
+        var originalSize = new Size(window.Width, window.Height);
+        var scroll = Assert.IsType<ScrollViewer>(window.FindName(scrollName));
+        var action = Assert.IsType<Button>(window.FindName(actionName));
+        var root = Assert.IsAssignableFrom<FrameworkElement>(window.Content);
+        foreach (var scale in new[] { 1d, 1.5d, 2d })
+        {
+            VisualTreeHelper.SetRootDpi(window, new DpiScale(scale, scale));
+            foreach (var size in new[] { originalSize, new Size(window.MinWidth, window.MinHeight) })
+            {
+                window.Width = size.Width;
+                window.Height = size.Height;
+                window.Measure(size);
+                window.Arrange(new Rect(size));
+                window.UpdateLayout();
+                scroll.ScrollToBottom();
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
+                window.UpdateLayout();
+                var button = action.TransformToAncestor(root).TransformBounds(new Rect(action.RenderSize));
+                var viewport = scroll.TransformToAncestor(root).TransformBounds(new Rect(scroll.RenderSize));
+                Assert.True(button.Top >= viewport.Bottom && button.Bottom <= root.ActualHeight);
+                Assert.True(button.Right <= root.ActualWidth && button.Width >= 50);
+                Capture(root, scale, size, prefix);
+            }
+        }
+        window.Width = originalSize.Width;
+        window.Height = originalSize.Height;
+    }
+
+    internal static void Capture(FrameworkElement root, double scale, Size size, string prefix = "update")
+    {
+        var directory = Environment.GetEnvironmentVariable("RESODRIVE_UI_CAPTURE_DIR");
+        if (string.IsNullOrWhiteSpace(directory)) return;
+        Directory.CreateDirectory(directory);
+        var margin = root.Margin;
+        var bitmap = new RenderTargetBitmap((int)Math.Ceiling((root.ActualWidth + margin.Left + margin.Right) * scale),
+            (int)Math.Ceiling((root.ActualHeight + margin.Top + margin.Bottom) * scale), 96 * scale, 96 * scale, PixelFormats.Pbgra32);
+        // Render in the control's local coordinates; a window-content margin
+        // must not offset/crop the screenshot's right and bottom edges.
+        var drawing = new DrawingVisual();
+        using (var context = drawing.RenderOpen())
+        {
+            context.DrawRectangle(Window.GetWindow(root)?.Background, null,
+                new Rect(0, 0, bitmap.Width, bitmap.Height));
+            var bounds = new Rect(margin.Left, margin.Top, root.ActualWidth, root.ActualHeight);
+            context.DrawRectangle(new VisualBrush(root), null, bounds);
+        }
+        bitmap.Render(drawing);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var file = File.Create(Path.Combine(directory, $"{prefix}-{size.Width:0}-{scale * 100:0}.png"));
+        encoder.Save(file);
+    }
+
+    private static FieldInfo Field(string name) => typeof(MainWindow).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!;
+    private static MethodInfo Method(string name) => typeof(MainWindow).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!;
+    private static void Set(MainWindow window, string name, object? value) => Field(name).SetValue(window, value);
+}

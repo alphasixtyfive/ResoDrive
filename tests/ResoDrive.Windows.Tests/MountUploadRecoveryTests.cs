@@ -7,6 +7,15 @@ using ResoDrive.Windows;
 
 namespace ResoDrive.Windows.Tests;
 
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class MountRecoveryInspectionGroup
+{
+    // Real metadata inspection has a bounded wall-clock deadline. Keep its
+    // integration fixtures apart from tests that saturate this process's pool.
+    public const string Name = "Bounded mount recovery inspection";
+}
+
+[Collection(MountRecoveryInspectionGroup.Name)]
 public sealed class MountUploadRecoveryTests : IDisposable
 {
     private readonly ApplicationPaths _paths = new(Path.Combine(Path.GetTempPath(), "rdrive-recovery-tests", Guid.NewGuid().ToString("N")));
@@ -62,6 +71,27 @@ public sealed class MountUploadRecoveryTests : IDisposable
     }
 
     [Fact]
+    public async Task UnchangedObservationsDoNotCopyArgumentsOrRewriteTheJournal()
+    {
+        var arguments = new CountingArguments(["--vfs-cache-mode=full"]);
+        var definition = Definition() with { Arguments = arguments };
+        using var store = new MountRecoveryStore(_paths);
+        await store.RecordAsync(definition, Metadata, CancellationToken.None, "fingerprint");
+        var original = store.Find(definition.Id);
+        arguments.Enumerations = 0;
+        // A rewrite would fail while this record is exclusively held. Ordinary
+        // observations must only compare their identity, without copying arguments.
+        await using var held = new FileStream(Path.Combine(_paths.Root, "mount-upload-recovery.json"),
+            FileMode.Open, FileAccess.Read, FileShare.None);
+        for (var index = 0; index < 20; index++)
+            await store.RecordAsync(definition, null, CancellationToken.None);
+
+        Assert.Same(original, store.Find(definition.Id));
+        Assert.InRange(arguments.Enumerations, 0, 20);
+        Assert.False(File.Exists(Path.Combine(_paths.Root, "mount-upload-recovery.json.bak")));
+    }
+
+    [Fact]
     public async Task NeverMountWithDirtyCacheAttemptsRecoveryRatherThanDiscardingItsWork()
     {
         var definition = Definition();
@@ -96,7 +126,9 @@ public sealed class MountUploadRecoveryTests : IDisposable
         await SeedAsync(definition, dirty: false);
         await using var coordinator = Coordinator();
         Assert.True((await coordinator.ReconcileAsync([definition])).Succeeded);
-        Assert.Equal(MountLifecycle.Stopped, Assert.Single(coordinator.GetSnapshots()).Lifecycle);
+        var snapshot = Assert.Single(coordinator.GetSnapshots());
+        Assert.True(snapshot.Lifecycle == MountLifecycle.Stopped,
+            $"Expected a stopped clean drive, got {snapshot.Lifecycle}: {snapshot.StatusText}; recovery required={snapshot.UploadRecoveryRequired}.");
         Assert.True((await coordinator.CheckPendingUploadsAsync()).Succeeded);
         using var reloaded = new MountRecoveryStore(_paths);
         Assert.Empty(reloaded.GetEntries());
@@ -228,6 +260,47 @@ public sealed class MountUploadRecoveryTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task RepairWritePreservesVerifiedRecoveryBackup(bool missingPrimary)
+    {
+        var definition = Definition();
+        var path = Path.Combine(_paths.Root, "mount-upload-recovery.json");
+        using (var store = new MountRecoveryStore(_paths))
+        {
+            await store.RecordAsync(definition, Metadata, CancellationToken.None);
+            await store.RecordAsync(definition with { DisplayName = "Before corruption" }, Metadata, CancellationToken.None);
+        }
+        var backup = await File.ReadAllTextAsync(path + ".bak");
+        if (missingPrimary) File.Delete(path);
+        else await File.WriteAllTextAsync(path, "not json");
+        using (var repaired = new MountRecoveryStore(_paths))
+            await repaired.RecordAsync(definition with { DisplayName = "Repaired" }, Metadata, CancellationToken.None);
+
+        Assert.Equal(backup, await File.ReadAllTextAsync(path + ".bak"));
+        // A second interrupted primary must still leave a readable recovery record.
+        await File.WriteAllTextAsync(path, "interrupted again");
+        using var recovered = new MountRecoveryStore(_paths);
+        Assert.Equal(definition.Id.Value, Assert.Single(recovered.GetEntries()).MountId);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("[]")]
+    [InlineData("true")]
+    public async Task WrongShapeMetadataPreservesRecoveryAndReturnsUnknown(string json)
+    {
+        var definition = Definition(enabled: false);
+        await SeedAsync(definition, dirty: true);
+        await File.WriteAllTextAsync(Path.Combine(Metadata, "file.txt"), json);
+        Assert.False((await RcloneMountCoordinator.CheckOfflineRecoveryAsync(_paths)).Succeeded);
+        await using var coordinator = Coordinator();
+        Assert.True((await coordinator.ReconcileAsync([definition])).Succeeded);
+        Assert.False((await coordinator.CheckPendingUploadsAsync()).Succeeded);
+        Assert.True(Assert.Single(coordinator.GetSnapshots()).UploadRecoveryRequired);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task CleanRecoveryClearsTheWarningOrRemovesADeletedDrive(bool deleted)
     {
         var definition = Definition(enabled: false);
@@ -302,6 +375,19 @@ public sealed class MountUploadRecoveryTests : IDisposable
     {
         if (Directory.Exists(_paths.Root)) Directory.Delete(_paths.Root, true);
     }
+    private sealed class CountingArguments(string[] values) : IReadOnlyList<string>
+    {
+        internal int Enumerations { get; set; }
+        public int Count => values.Length;
+        public string this[int index] => values[index];
+        public IEnumerator<string> GetEnumerator()
+        {
+            Enumerations++;
+            return ((IEnumerable<string>)values).GetEnumerator();
+        }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
     private sealed class EmptyInventory : IMountTargetInventory
     {
         public Task<OperationResult<IReadOnlySet<char>>> GetOccupiedDriveLettersAsync(CancellationToken cancellationToken = default) =>

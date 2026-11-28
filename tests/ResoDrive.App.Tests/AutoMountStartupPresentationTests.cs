@@ -18,7 +18,7 @@ public sealed class AutoMountStartupPresentationTests
         var autoRow = Assert.Single(model.Mounts, row => row.Id == automatic.Id);
         Assert.Equal("Starting…", autoRow.ActionText);
         Assert.Equal("Preparing automatic mount", autoRow.StatusText);
-        Assert.Equal(Visibility.Visible, autoRow.StatusVisibility);
+        Assert.Equal(Visibility.Collapsed, autoRow.StatusVisibility);
         Assert.False(autoRow.CanAct);
         Assert.Contains("1 in progress", model.MountSummary, StringComparison.Ordinal);
 

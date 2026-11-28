@@ -2,6 +2,7 @@ using System.Diagnostics;
 
 namespace ResoDrive.Windows.Tests;
 
+[Collection(InstallerProcessIsolationGroup.Name)]
 public sealed class RemoteWipeBoundaryTests : IDisposable
 {
     private readonly ApplicationPaths _paths = new(Path.Combine(Path.GetTempPath(), "resodrive-wipe-boundary", Guid.NewGuid().ToString("N")));

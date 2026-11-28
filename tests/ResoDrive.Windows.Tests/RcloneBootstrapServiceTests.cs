@@ -8,6 +8,125 @@ namespace ResoDrive.Windows.Tests;
 public sealed class RcloneBootstrapServiceTests
 {
     [Fact]
+    public async Task InstallAsync_RetriesRealDownloadLockAndCompletesAfterRelease()
+    {
+        using var harness = new Harness(CreateArchive(("rclone/rclone.exe", "new")));
+        harness.Paths.EnsureCreated();
+        using var held = new FileStream(Path.Combine(harness.Paths.Rclone, ".rclone-download.zip"),
+            FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+        var waiting = false;
+        var result = await harness.Service.InstallAsync(new InlineProgress(value =>
+        {
+            if (!value.Message.StartsWith("Waiting for", StringComparison.Ordinal)) return;
+            waiting = true;
+            held.Dispose();
+        }));
+        Assert.True(waiting);
+        Assert.True(result.Succeeded, result.Error?.Message);
+        Assert.Equal("new", File.ReadAllText(harness.Paths.RcloneExecutable));
+        AssertNoTransactionFiles(harness.Paths.Rclone);
+    }
+
+    [Fact]
+    public async Task InstallAsync_PersistentDownloadLockHasActionableErrorAndKeepsArchive()
+    {
+        using var harness = new Harness(CreateArchive(("rclone/rclone.exe", "new")));
+        harness.Paths.EnsureCreated();
+        var archive = Path.Combine(harness.Paths.Rclone, ".rclone-download.zip");
+        using (var held = new FileStream(archive, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
+        {
+            held.WriteByte(42);
+            var result = await harness.Service.InstallAsync();
+            Assert.False(result.Succeeded);
+            Assert.Equal("rclone.file_locked", result.Error!.Code);
+            Assert.True(result.Error.IsTransient);
+            Assert.Contains("still locked", result.Error.Message, StringComparison.Ordinal);
+            Assert.Contains("try again", result.Error.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(harness.Paths.Root, result.Error.Message, StringComparison.Ordinal);
+            Assert.False(File.Exists(harness.Paths.RcloneExecutable));
+        }
+        Assert.Equal(new byte[] { 42 }, File.ReadAllBytes(archive));
+    }
+
+    [Fact]
+    public async Task InstallAsync_CancelWhileWaitingForFileLockDoesNotInstall()
+    {
+        using var harness = new Harness(CreateArchive(("rclone/rclone.exe", "new")));
+        harness.Paths.EnsureCreated();
+        using var held = new FileStream(Path.Combine(harness.Paths.Rclone, ".rclone-download.zip"),
+            FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+        using var cancellation = new CancellationTokenSource();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => harness.Service.InstallAsync(
+            new InlineProgress(value =>
+            {
+                if (value.Message.StartsWith("Waiting for", StringComparison.Ordinal)) cancellation.Cancel();
+            }), cancellation.Token));
+        Assert.False(File.Exists(harness.Paths.RcloneExecutable));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task InstallAsync_RetriesRealReplacementLockAndPreservesOldRuntimeOnFailure(bool release)
+    {
+        using var harness = new Harness(CreateArchive(("rclone/rclone.exe", "new")));
+        harness.Paths.EnsureCreated();
+        File.WriteAllText(harness.Paths.RcloneExecutable, "old");
+        FileStream? held = null;
+        harness.Runner.AfterStagedInspection = () => held = new FileStream(harness.Paths.RcloneExecutable,
+            FileMode.Open, FileAccess.Read, FileShare.Read);
+        try
+        {
+            var result = await harness.Service.InstallAsync(new InlineProgress(value =>
+            {
+                if (release && value.Message.StartsWith("Waiting for", StringComparison.Ordinal)) held?.Dispose();
+            }));
+            Assert.NotNull(held);
+            Assert.Equal(release, result.Succeeded);
+            if (!release) Assert.Equal("rclone.file_locked", result.Error!.Code);
+            Assert.Equal(1, harness.Handler.RequestCount);
+            Assert.Equal(release ? "new" : "old", File.ReadAllText(harness.Paths.RcloneExecutable));
+            if (release) AssertNoTransactionFiles(harness.Paths.Rclone);
+        }
+        finally { held?.Dispose(); }
+    }
+
+    [Fact]
+    public async Task InstallAsync_DoesNotReplaceAnInstalledRuntimeThatIsStillLocked()
+    {
+        using var harness = new Harness(CreateArchive(("rclone/rclone.exe", "new")));
+        harness.Paths.EnsureCreated();
+        File.WriteAllText(harness.Paths.RcloneExecutable, "new");
+        using (var held = new FileStream(harness.Paths.RcloneExecutable, FileMode.Open,
+            FileAccess.ReadWrite, FileShare.None))
+        {
+            var result = await harness.Service.InstallAsync();
+            Assert.False(result.Succeeded);
+            Assert.Equal("rclone.file_locked", result.Error!.Code);
+            Assert.Equal(0, harness.Handler.RequestCount);
+        }
+        Assert.Equal("new", File.ReadAllText(harness.Paths.RcloneExecutable));
+        AssertNoTransactionFiles(harness.Paths.Rclone);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InstallAsync_LockAfterCommitKeepsDownloadAndReportsLock(bool replacing)
+    {
+        using var harness = new Harness(CreateArchive(("rclone/rclone.exe", "new")));
+        harness.Paths.EnsureCreated();
+        if (replacing) File.WriteAllText(harness.Paths.RcloneExecutable, "old");
+        harness.Runner.LockCommittedRuntime = true;
+        var result = await harness.Service.InstallAsync();
+        Assert.False(result.Succeeded);
+        Assert.Equal("rclone.file_locked", result.Error!.Code);
+        Assert.Equal(replacing ? "old" : "new", File.ReadAllText(harness.Paths.RcloneExecutable));
+        Assert.True(File.Exists(Path.Combine(harness.Paths.Rclone, ".rclone-download.zip")));
+        Assert.Empty(Directory.GetFiles(harness.Paths.Rclone, ".previous-*.exe"));
+    }
+
+    [Fact]
     public async Task InstallAsync_DownloadsVerifiesAndInstallsPinnedRuntime()
     {
         var archive = CreateArchive(("rclone-v1.75.0-windows-amd64/rclone.exe", "new"));
@@ -353,6 +472,8 @@ public sealed class RcloneBootstrapServiceTests
         public List<string> Calls { get; } = [];
         public bool RejectCanonicalRuntime { get; set; }
         public bool BlockCanonicalRuntime { get; set; }
+        public bool LockCommittedRuntime { get; set; }
+        public Action? AfterStagedInspection { get; set; }
 
         public Task<ProcessRunResult> RunAsync(
             string executablePath,
@@ -365,11 +486,16 @@ public sealed class RcloneBootstrapServiceTests
             Calls.Add(executablePath);
             if (BlockCanonicalRuntime && executablePath.Equals(canonicalPath, StringComparison.OrdinalIgnoreCase))
                 throw new System.ComponentModel.Win32Exception(5);
+            if (LockCommittedRuntime && executablePath.Equals(canonicalPath, StringComparison.OrdinalIgnoreCase) &&
+                File.ReadAllText(executablePath) == "new")
+                throw new System.ComponentModel.Win32Exception(32);
             var valid = File.Exists(executablePath) &&
                 File.ReadAllText(executablePath).Equals("new", StringComparison.Ordinal) &&
                 !(RejectCanonicalRuntime && Path.GetFullPath(executablePath).Equals(
                     Path.GetFullPath(canonicalPath),
                     StringComparison.OrdinalIgnoreCase));
+            if (valid && !executablePath.Equals(canonicalPath, StringComparison.OrdinalIgnoreCase))
+                AfterStagedInspection?.Invoke();
             return Task.FromResult(valid
                 ? new ProcessRunResult(
                     0,

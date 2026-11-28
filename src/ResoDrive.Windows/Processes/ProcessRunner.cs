@@ -52,6 +52,9 @@ public static class ProcessRunner
         ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
         ArgumentNullException.ThrowIfNull(arguments);
         using var timeoutSource = new CancellationTokenSource(timeout);
+        using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            timeoutSource.Token);
 
         var startInfo = new ProcessStartInfo
         {
@@ -81,14 +84,18 @@ public static class ProcessRunner
             throw new InvalidOperationException($"Could not start '{Path.GetFileName(executablePath)}'.");
         }
 
-        var outputTask = ReadBoundedAsync(process.StandardOutput, CancellationToken.None);
+        var output = new OutputCapture();
+        var error = new OutputCapture();
+        var outputTask = ReadBoundedAsync(process.StandardOutput, output, linkedSource.Token);
         var errorTask = ReadBoundedAsync(
             process.StandardError,
             standardErrorLineReceived,
-            CancellationToken.None);
-        using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken,
-            timeoutSource.Token);
+            error,
+            linkedSource.Token);
+        ObserveFailure(outputTask);
+        ObserveFailure(errorTask);
+        var drain = Task.WhenAll(outputTask, errorTask);
+        ObserveFailure(drain);
 
         var timedOut = false;
         try
@@ -100,6 +107,10 @@ public static class ProcessRunner
             }
 
             await process.WaitForExitAsync(linkedSource.Token).ConfigureAwait(false);
+            // A child can inherit the pipes and keep them open after its parent
+            // exits. Output draining belongs to the same execution deadline.
+            await drain.WaitAsync(linkedSource.Token).ConfigureAwait(false);
+            linkedSource.Token.ThrowIfCancellationRequested();
         }
         catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
@@ -111,29 +122,43 @@ public static class ProcessRunner
             await StopProcessAsync(process).ConfigureAwait(false);
             throw;
         }
+        finally
+        {
+            // Closing our readers interrupts outstanding pipe reads. Do not wait
+            // indefinitely for a descendant or an observer that ignores cancellation.
+            process.StandardOutput.Dispose();
+            process.StandardError.Dispose();
+        }
 
-        var output = await outputTask.ConfigureAwait(false);
-        var error = await errorTask.ConfigureAwait(false);
-        return new ProcessRunResult(process.ExitCode, output, error, timedOut);
+        return new ProcessRunResult(process.ExitCode, output.ToString(), error.ToString(), timedOut);
     }
+
+    private static void ObserveFailure(Task read) => _ = read.ContinueWith(
+        static completed => { _ = completed.Exception; }, CancellationToken.None,
+        TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+        TaskScheduler.Default);
 
     private static async Task<string> ReadBoundedAsync(
         StreamReader reader,
         Action<string>? lineReceived,
+        OutputCapture capture,
         CancellationToken cancellationToken)
     {
         if (lineReceived is null)
         {
-            return await ReadBoundedAsync(reader, cancellationToken).ConfigureAwait(false);
+            return await ReadBoundedAsync(reader, capture, cancellationToken).ConfigureAwait(false);
         }
 
-        return await ReadBoundedLinesAsync(reader, lineReceived, cancellationToken).ConfigureAwait(false);
+        return await ReadBoundedLinesAsync(reader, lineReceived, capture, cancellationToken).ConfigureAwait(false);
     }
 
     internal static async Task<string> ReadBoundedLinesAsync(StreamReader reader, Action<string> lineReceived,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) =>
+        await ReadBoundedLinesAsync(reader, lineReceived, new OutputCapture(), cancellationToken).ConfigureAwait(false);
+
+    private static async Task<string> ReadBoundedLinesAsync(StreamReader reader, Action<string> lineReceived,
+        OutputCapture result, CancellationToken cancellationToken)
     {
-        var result = new BoundedTextBuffer(MaximumCapturedCharacters);
         var buffer = new char[4096];
         var pending = new StringBuilder(MaximumLogLineCharacters);
         var truncated = false;
@@ -175,10 +200,10 @@ public static class ProcessRunner
         }
     }
 
-    private static async Task<string> ReadBoundedAsync(StreamReader reader, CancellationToken cancellationToken)
+    private static async Task<string> ReadBoundedAsync(StreamReader reader, OutputCapture result,
+        CancellationToken cancellationToken)
     {
         var buffer = new char[4096];
-        var result = new BoundedTextBuffer(MaximumCapturedCharacters);
         while (true)
         {
             var count = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
@@ -188,6 +213,21 @@ public static class ProcessRunner
             }
 
             result.Append(buffer.AsSpan(0, count));
+        }
+    }
+
+    private sealed class OutputCapture
+    {
+        private readonly BoundedTextBuffer _text = new(MaximumCapturedCharacters);
+
+        public void Append(ReadOnlySpan<char> value)
+        {
+            lock (_text) _text.Append(value);
+        }
+
+        public override string ToString()
+        {
+            lock (_text) return _text.ToString();
         }
     }
 

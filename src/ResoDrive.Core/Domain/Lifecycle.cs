@@ -8,7 +8,8 @@ public enum MountLifecycle
     Degraded,
     Stopping,
     WaitingToRestart,
-    Failed
+    Failed,
+    WaitingForConnection
 }
 
 public sealed record MountSnapshot

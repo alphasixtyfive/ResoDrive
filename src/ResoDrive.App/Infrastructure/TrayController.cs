@@ -5,10 +5,11 @@ using Forms = System.Windows.Forms;
 
 namespace ResoDrive.App;
 
-internal sealed record TrayActionResult(bool Succeeded, string Title, string Message, bool Notify = true)
+internal sealed record TrayActionResult(bool Succeeded, string Title, string Message, bool Notify = true, bool IsWarning = false)
 {
     public static TrayActionResult Success(string title, string message) => new(true, title, message);
     public static TrayActionResult Failure(string title, string message) => new(false, title, message);
+    public static TrayActionResult Warning(string title, string message) => new(false, title, message, IsWarning: true);
     public static TrayActionResult SilentSuccess() => new(true, string.Empty, string.Empty, false);
 }
 
@@ -26,14 +27,14 @@ internal sealed partial class TrayController : IDisposable
     private readonly Func<Task<TrayActionResult>> _refresh;
     private readonly Action<Exception>? _reportError;
     private readonly Action _restoreWindow;
-    private readonly Action? _showUploads;
+    private readonly Action? _showTransfers;
     private readonly string _productName;
     private Action? _balloonAction;
     private readonly DispatcherTimer _animation;
     private readonly System.Drawing.Icon[] _uploadIcons;
     private readonly System.Drawing.Icon _warningIcon;
     private int _animationFrame;
-    private bool _uploadWarning;
+    private readonly UploadAttentionNotifications _uploadAttention = new(TimeProvider.System);
     private readonly Func<IReadOnlyList<SyncRow>> _syncProvider;
     private readonly Func<SyncRow, Task<TrayActionResult>> _syncAction;
     private bool _disposed;
@@ -49,7 +50,7 @@ internal sealed partial class TrayController : IDisposable
         Action restoreWindow,
         Action exit,
         Action<Exception>? reportError = null,
-        Action? showUploads = null,
+        Action? showTransfers = null,
         string? productName = null)
     {
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
@@ -62,7 +63,7 @@ internal sealed partial class TrayController : IDisposable
         _restoreWindow = restoreWindow ?? throw new ArgumentNullException(nameof(restoreWindow));
         _exit = exit ?? throw new ArgumentNullException(nameof(exit));
         _reportError = reportError;
-        _showUploads = showUploads;
+        _showTransfers = showTransfers;
         _productName = productName ?? ProductInfo.Name;
 
         _icon = System.Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath!);
@@ -76,22 +77,24 @@ internal sealed partial class TrayController : IDisposable
         _notifyIcon.BalloonTipClicked += NotifyIcon_BalloonTipClicked;
     }
 
-    internal void UpdateStatus(int mountedCount, int runningSyncCount, long pendingUploads = 0, bool uploadWarning = false)
+    internal void UpdateStatus(int mountedCount, int runningSyncCount, long pendingUploads = 0, bool uploadWarning = false,
+        bool attentionStatusConfirmed = true, bool immediateAttention = false)
     {
         if (_disposed) return;
         if (!_dispatcher.CheckAccess())
         {
-            Dispatch(() => UpdateStatus(mountedCount, runningSyncCount, pendingUploads, uploadWarning));
+            Dispatch(() => UpdateStatus(mountedCount, runningSyncCount, pendingUploads, uploadWarning, attentionStatusConfirmed, immediateAttention));
             return;
         }
         var uploading = pendingUploads > 0;
+        var transferring = uploading || runningSyncCount > 0;
         var uploadText = uploadWarning ? "uploads need attention"
             : uploading ? $"{pendingUploads} uploads pending" : "no uploads pending";
         _notifyIcon.Text = Truncate($"{_productName}: {mountedCount} mounted, {runningSyncCount} syncing · {uploadText}", 127);
-        if (uploading || uploadWarning)
+        if (transferring || uploadWarning)
         {
             _notifyIcon.Icon = uploadWarning ? _warningIcon : _uploadIcons[_animationFrame % _uploadIcons.Length];
-            if (uploading && !uploadWarning && SystemParameters.ClientAreaAnimation) _animation.Start();
+            if (transferring && !uploadWarning && SystemParameters.ClientAreaAnimation) _animation.Start();
             else _animation.Stop();
         }
         else
@@ -99,9 +102,9 @@ internal sealed partial class TrayController : IDisposable
             _animation.Stop();
             _notifyIcon.Icon = _icon;
         }
-        if (uploadWarning && !_uploadWarning)
-            ShowResult(TrayActionResult.Failure("Uploads need attention", "Keep ResoDrive running. Open Uploads to check pending files and connection status."), _showUploads);
-        _uploadWarning = uploadWarning;
+        if (_uploadAttention.Observe(uploadWarning, immediateAttention, attentionStatusConfirmed))
+            ShowResult(TrayActionResult.Warning("Transfers need attention",
+                "Open Transfers to review pending files. ResoDrive keeps checking and retries uploads automatically."), _showTransfers);
     }
 
     internal void ShowMountResult(MountRow mount, TrayActionResult result) =>
@@ -123,7 +126,7 @@ internal sealed partial class TrayController : IDisposable
             result.Succeeded ? 3000 : 5000,
             Truncate(result.Title, 63),
             Truncate(result.Message, 255),
-            result.Succeeded ? Forms.ToolTipIcon.Info : Forms.ToolTipIcon.Error);
+            result.Succeeded ? Forms.ToolTipIcon.Info : result.IsWarning ? Forms.ToolTipIcon.Warning : Forms.ToolTipIcon.Error);
     }
 
     public void Dispose()
@@ -146,7 +149,7 @@ internal sealed partial class TrayController : IDisposable
     private void NotifyIcon_MouseUp(object? sender, Forms.MouseEventArgs e)
     {
         if (e.Button == Forms.MouseButtons.Left)
-            Dispatch(_showUploads ?? _restoreWindow);
+            Dispatch(_showTransfers ?? _restoreWindow);
         else if (e.Button == Forms.MouseButtons.Right) Dispatch(ShowMenu);
     }
 
@@ -178,7 +181,7 @@ internal sealed partial class TrayController : IDisposable
     {
         using var menu = new NativePopupMenu();
         menu.Add(ProductInfo.OpenLabel, _restoreWindow);
-        if (_showUploads is not null) menu.Add("Uploads…", _showUploads);
+        if (_showTransfers is not null) menu.Add("Transfers…", _showTransfers);
         menu.AddSeparator();
 
         var mounts = _mountProvider();
@@ -240,9 +243,9 @@ internal sealed partial class TrayController : IDisposable
         }
         catch (Exception reportingException)
         {
-            UiDiagnosticLog.Current.Exception("tray.error_reporting_failed", reportingException);
+            UiDiagnosticLog.ReportException("tray.error_reporting_failed", reportingException);
         }
-        UiDiagnosticLog.Current.Exception("tray.action_failed", exception);
+        UiDiagnosticLog.ReportException("tray.action_failed", exception);
     }
 
     private static string Truncate(string value, int maximumLength) => value.Length <= maximumLength

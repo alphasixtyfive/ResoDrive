@@ -58,7 +58,7 @@ public sealed partial class RcloneMountCoordinator
         }
     }
 
-    private async Task<bool> RefreshRecoveryStatusesAsync(CancellationToken cancellationToken)
+    private async Task<bool> InspectAndRetireCleanRecoveryAsync(CancellationToken cancellationToken)
     {
         if (!_unverifiedOwnedWork.IsEmpty)
         {
@@ -102,7 +102,7 @@ public sealed partial class RcloneMountCoordinator
         return pendingRecovery;
     }
 
-    private async Task RecoverAsync(Dictionary<MountId, MountDefinition> definitions, CancellationToken cancellationToken)
+    private async Task RecoverOwnedProcessesAsync(Dictionary<MountId, MountDefinition> definitions, CancellationToken cancellationToken)
     {
         foreach (var owned in await _ownership.LoadAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -156,13 +156,13 @@ public sealed partial class RcloneMountCoordinator
                 _unverifiedOwnedWork.TryRemove(owned.MountId, out _);
                 Publish(Snapshot(definition, MountLifecycle.Degraded, "Recovered drive · Checking readiness") with
                     { UploadRecoveryRequired = true, UploadStatusStale = true });
-                _ = ObserveExitAsync(session);
+                TrackExitObserver(ObserveExitAsync(session));
             }
             finally { operationGate.Release(); }
         }
     }
 
-    private async Task RecoverPendingCachesAsync(Dictionary<MountId, MountDefinition> definitions, CancellationToken token)
+    private async Task ResumePendingCacheRecoveryAsync(Dictionary<MountId, MountDefinition> definitions, CancellationToken token)
     {
         foreach (var entry in _recovery.GetEntries())
         {
@@ -174,6 +174,10 @@ public sealed partial class RcloneMountCoordinator
             {
                 if (_sessions.ContainsKey(id) || _unverifiedOwnedWork.ContainsKey(entry.MountId) ||
                     _recovery.Find(id) is not { } current) continue;
+                // The exit observer owns this delayed reconnect and its backoff.
+                // Reconciliation must not launch a second recovery attempt early.
+                if (_snapshots.TryGetValue(id, out var pending) && pending.Lifecycle is MountLifecycle.WaitingToRestart or MountLifecycle.WaitingForConnection)
+                    continue;
                 if (await RecoveryCacheIsCleanAsync(current, token).ConfigureAwait(false))
                 {
                     await _recovery.RemoveAsync(id, token).ConfigureAwait(false);
@@ -193,7 +197,7 @@ public sealed partial class RcloneMountCoordinator
             }
             finally { operationGate.Release(); }
             // Starting takes this same operation gate. Release inspection first.
-            if (reconnect) await StartInternalAsync(id, false, token).ConfigureAwait(false);
+            if (reconnect) await StartInternalAsync(id, StartIntent.CacheRecovery, token).ConfigureAwait(false);
         }
     }
 
@@ -216,8 +220,12 @@ public sealed partial class RcloneMountCoordinator
     {
         if (_unverifiedOwnedWork.ContainsKey(id.Value) || _sessions.ContainsKey(id)) return;
         if (_definitions.TryGetValue(id, out var definition))
-            Publish(Snapshot(definition, MountLifecycle.Stopped, "Recovered uploads completed") with
-                { UploadsQueued = 0, UploadsInProgress = 0, UploadsDirty = 0, UploadObservedAt = DateTimeOffset.UtcNow });
+        {
+            var waiting = _waitingConnections.TryGetValue(id, out var wait) && ConnectionRequestIsCurrent(id, wait.Generation);
+            Publish(Snapshot(definition, waiting ? MountLifecycle.WaitingForConnection : MountLifecycle.Stopped,
+                waiting ? "Waiting for connection" : "Recovered uploads completed") with
+                { UploadsQueued = 0, UploadsInProgress = 0, UploadsDirty = 0, UploadErrors = 0, UploadObservedAt = DateTimeOffset.UtcNow });
+        }
         else _snapshots.TryRemove(id, out _);
     }
 

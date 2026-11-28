@@ -6,7 +6,7 @@ namespace ResoDrive.Windows.Tests;
 
 public sealed class RcloneConfigMutationServiceTests : IDisposable
 {
-    private const string SftpPublicKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    private const string SftpPublicKey = "AAAAC3NzaC1lZDI1NTE5AAAAINdamAGCsQq31Uv+08lkBzoO4XLz2qYjJa8CGmj3B1Ea";
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"rdrive-mutation-{Guid.NewGuid():N}");
 
     public RcloneConfigMutationServiceTests() => Directory.CreateDirectory(_root);
@@ -182,6 +182,37 @@ public sealed class RcloneConfigMutationServiceTests : IDisposable
         Assert.False(result.Succeeded);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SftpMutationRejectsAnAlgorithmMismatchBeforeStartingOrStaging(bool privateKey)
+    {
+        var executable = Write("rclone.exe", "x");
+        var config = Write("rclone.conf", "live");
+        var keyFile = Write("id_ed25519", "disposable placeholder");
+        var fake = new FakeSession([]);
+        var factory = new FakeFactory(fake);
+        var service = new RcloneConfigMutationService(factory);
+        var connection = new SftpConnectionDefinition
+        {
+            Host = "files.example.test", KnownHost = $"ssh-rsa {SftpPublicKey}",
+            Authentication = privateKey ? SftpAuthenticationMethod.PrivateKey : SftpAuthenticationMethod.Password,
+        };
+        var result = privateKey
+            ? await service.AppendSftpKeyFileRemoteAsync(executable, config, "secret",
+                new RcloneSftpKeyFileRemoteCreateRequest("Server", connection, "user", keyFile, string.Empty))
+            : await service.AppendSftpPasswordRemoteAsync(executable, config, "secret",
+                new RcloneSftpPasswordRemoteCreateRequest("Server", connection, "user", "password"));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("rclone.sftp_host_key", result.Error?.Code);
+        Assert.Equal(0, factory.Starts);
+        Assert.Null(fake.CreatedSftp);
+        Assert.Null(fake.CreatedSftpKey);
+        Assert.Equal("live", File.ReadAllText(config));
+        Assert.Empty(Directory.GetFiles(_root, "*.mutation-stage"));
+    }
+
     [Fact]
     public async Task SftpPrivateKey_UsesExistingKeyFileWithoutPasswordCredential()
     {
@@ -193,6 +224,7 @@ public sealed class RcloneConfigMutationServiceTests : IDisposable
         var connection = new SftpConnectionDefinition
         {
             Host = "files.example.test",
+            KnownHost = $"ssh-ed25519 {SftpPublicKey}",
             Authentication = SftpAuthenticationMethod.PrivateKey
         };
         var request = new RcloneSftpKeyFileRemoteCreateRequest(
@@ -213,7 +245,12 @@ public sealed class RcloneConfigMutationServiceTests : IDisposable
 
     private sealed class FakeFactory(IRcloneRcSession session) : IRcloneRcSessionFactory
     {
-        public Task<IRcloneRcSession> StartAsync(string executablePath, string stagedConfigPath, string configPassword, CancellationToken token) => Task.FromResult(session);
+        public int Starts { get; private set; }
+        public Task<IRcloneRcSession> StartAsync(string executablePath, string stagedConfigPath, string configPassword, CancellationToken token)
+        {
+            Starts++;
+            return Task.FromResult(session);
+        }
     }
     private sealed class FakeSession(
         IReadOnlyList<string> remotes,

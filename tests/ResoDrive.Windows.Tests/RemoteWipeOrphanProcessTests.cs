@@ -4,6 +4,7 @@ using System.Net;
 namespace ResoDrive.Windows.Tests;
 
 /// <summary>Isolated child processes and real temporary files; Nextcloud HTTP is simulated.</summary>
+[Collection(InstallerProcessIsolationGroup.Name)]
 public sealed class RemoteWipeOrphanProcessTests : IDisposable
 {
     private readonly string _fixtureRoot = Path.Combine(

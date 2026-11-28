@@ -24,6 +24,7 @@
     <SelfContained>false</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <PublishTrimmed>false</PublishTrimmed>
+    <CETCompat>true</CETCompat>
     <StartupObject>ResoDrive.App.Program</StartupObject>
   </PropertyGroup>
 
