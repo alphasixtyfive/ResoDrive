@@ -69,3 +69,27 @@ not cover undisclosed vulnerabilities or replace operating-system/runtime patch
 management. No new public version, installer asset or tag is needed for this
 tooling maintenance. Hosted CI remains the gate for the reconciled main branch
 and the separately refreshed runtime proposals.
+
+## Hosted results and disposition
+
+- Reconciled main source `706472db81bb6249cbd5a3377e7faa925217763c` passed
+  [the full CI pipeline](https://github.com/alphasixtyfive/ResoDrive/actions/runs/46130035649),
+  including native/CET, constrained-CPU, process, installer, migration, actual
+  previous-public-updater and compatibility-choice upgrade checks.
+- System.Management 11 in PR #10 passed
+  [the same full pipeline](https://github.com/alphasixtyfive/ResoDrive/actions/runs/46130092758).
+  Its original lock-file failure is repaired. Keep this optional major runtime
+  change open for a planned application release; main retains 10.0.11.
+- Microsoft.Extensions.Hosting 11 in PR #8 passed locked restore and compilation,
+  then [failed two diagnostic/shutdown cases](https://github.com/alphasixtyfive/ResoDrive/actions/runs/46130089348).
+  `RealGenericHostBackgroundServiceFailureIsReportedAsFatal` fails with both
+  normal and externally disabled logging: the original worker exception now
+  escapes through `Host.StopAsync` / `WaitForShutdownAsync` before the assertions.
+  An isolated local reproduction failed both cases with version 11; the same
+  two cases passed with version 10. This is a changed host exception contract,
+  not a remaining NuGet restore error. The production outer fatal catch already
+  exists; these results alone do not establish lost diagnostics or account data.
+  Keep the proposal unmerged until that contract and its diagnostics are reviewed.
+
+The original shutdown/diagnostic assertions remain intact. The final acceptance
+record is documentation only. No runtime upgrade or new public release was made.
