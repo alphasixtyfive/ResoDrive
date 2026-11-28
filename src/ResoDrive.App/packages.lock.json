@@ -264,14 +264,14 @@
         "type": "Project",
         "dependencies": {
           "Microsoft.Extensions.Hosting": "[10.0.11, )",
-          "ResoDrive.Core": "[0.3.30, )",
-          "ResoDrive.Windows": "[0.3.30, )"
+          "ResoDrive.Core": "[0.3.53, )",
+          "ResoDrive.Windows": "[0.3.53, )"
         }
       },
       "resodrive.windows": {
         "type": "Project",
         "dependencies": {
-          "ResoDrive.Core": "[0.3.30, )",
+          "ResoDrive.Core": "[0.3.53, )",
           "System.Management": "[10.0.11, )"
         }
       },
