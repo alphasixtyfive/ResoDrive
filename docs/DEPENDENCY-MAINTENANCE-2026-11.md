@@ -122,3 +122,11 @@ ordering were not changed. Further full-build, constrained-CPU, process and
 hosted installer/update results are retained with this PR's validation evidence.
 Published 0.3.53 artifacts remain immutable; these source changes are for a future
 planned application release.
+
+The first compatibility CI run passed the new Hosting cases but timed out in
+three existing startup fixtures together. The migration fixture synchronously
+blocked on an asynchronous child-process pipe read. It now awaits readiness,
+leaving workers available to the parallel host/activation fixtures. Its five-second
+readiness deadline, process-identity assertions and fail-closed checks are intact.
+All 448 App tests passed locally with two available CPUs after this fixture change;
+the fresh full hosted pipeline remains the merge gate.

@@ -34,9 +34,9 @@ public sealed class DirectoryMigrationStartupTests
     }
 
     [Fact]
-    public void FreshlyDiscoveredHelperSkipsOtherSessionsAndVerifiesItsRealImageAndAccount()
+    public async Task FreshlyDiscoveredHelperSkipsOtherSessionsAndVerifiesItsRealImageAndAccount()
     {
-        using var child = StartDisposableProcess();
+        using var child = await StartDisposableProcessAsync();
         try
         {
             var expectedPath = child.MainModule!.FileName;
@@ -65,9 +65,9 @@ public sealed class DirectoryMigrationStartupTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void MissingImageIsIgnoredOnlyIfTheSameHelperExitedDuringInspection(bool exitDuringInspection)
+    public async Task MissingImageIsIgnoredOnlyIfTheSameHelperExitedDuringInspection(bool exitDuringInspection)
     {
-        using var process = StartDisposableProcess();
+        using var process = await StartDisposableProcessAsync();
         try
         {
             var path = process.MainModule!.FileName;
@@ -97,9 +97,9 @@ public sealed class DirectoryMigrationStartupTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void ExitDuringImageInspectionSkipsOnlyTheSameExitedProcess(bool win32Failure)
+    public async Task ExitDuringImageInspectionSkipsOnlyTheSameExitedProcess(bool win32Failure)
     {
-        using var process = StartDisposableProcess();
+        using var process = await StartDisposableProcessAsync();
         try
         {
             var path = process.MainModule!.FileName;
@@ -125,9 +125,9 @@ public sealed class DirectoryMigrationStartupTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void UnreadableLiveHelperStillBlocksMigration(bool win32Failure)
+    public async Task UnreadableLiveHelperStillBlocksMigration(bool win32Failure)
     {
-        using var process = StartDisposableProcess();
+        using var process = await StartDisposableProcessAsync();
         try
         {
             var failure = win32Failure
@@ -151,9 +151,9 @@ public sealed class DirectoryMigrationStartupTests
     }
 
     [Fact]
-    public void LiveCandidateStillRequiresItsRealImageAndCurrentAccountSession()
+    public async Task LiveCandidateStillRequiresItsRealImageAndCurrentAccountSession()
     {
-        using var process = StartDisposableProcess();
+        using var process = await StartDisposableProcessAsync();
         try
         {
             var path = process.MainModule!.FileName;
@@ -169,9 +169,9 @@ public sealed class DirectoryMigrationStartupTests
     }
 
     [Fact]
-    public void PartialCopyWhileHelperIsExitingWaitsForItsRetainedKernelHandle()
+    public async Task PartialCopyWhileHelperIsExitingWaitsForItsRetainedKernelHandle()
     {
-        using var process = StartDisposableProcess();
+        using var process = await StartDisposableProcessAsync();
         try
         {
             var inspected = false;
@@ -202,9 +202,9 @@ public sealed class DirectoryMigrationStartupTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void UnauthorizedInspectionIsIgnoredOnlyForAConfirmedExitedHelper(bool exitDuringInspection)
+    public async Task UnauthorizedInspectionIsIgnoredOnlyForAConfirmedExitedHelper(bool exitDuringInspection)
     {
-        using var process = StartDisposableProcess();
+        using var process = await StartDisposableProcessAsync();
         try
         {
             var failure = new UnauthorizedAccessException("The helper account identity could not be read.");
@@ -235,9 +235,9 @@ public sealed class DirectoryMigrationStartupTests
     }
 
     [Fact]
-    public void AccessDeniedForLiveHelperDoesNotWaitForThePartialCopyExitBound()
+    public async Task AccessDeniedForLiveHelperDoesNotWaitForThePartialCopyExitBound()
     {
-        using var process = StartDisposableProcess();
+        using var process = await StartDisposableProcessAsync();
         try
         {
             var failure = new Win32Exception(5, "Access is denied.");
@@ -256,7 +256,7 @@ public sealed class DirectoryMigrationStartupTests
         finally { StopDisposableProcess(process); }
     }
 
-    private static Process StartDisposableProcess()
+    private static async Task<Process> StartDisposableProcessAsync()
     {
         var process = Process.Start(new ProcessStartInfo(
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"),
@@ -268,8 +268,10 @@ public sealed class DirectoryMigrationStartupTests
         try
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            // Yield while the child becomes ready: blocking on this asynchronous
+            // pipe read can starve unrelated host/activation work on a busy runner.
             Assert.Equal("resodrive-boundary-ready",
-                process.StandardOutput.ReadLineAsync(timeout.Token).AsTask().GetAwaiter().GetResult());
+                await process.StandardOutput.ReadLineAsync(timeout.Token));
             Assert.False(process.HasExited);
             return process;
         }
