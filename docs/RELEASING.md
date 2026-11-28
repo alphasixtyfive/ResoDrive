@@ -73,6 +73,19 @@ public repository before publishing.
 GitHub Actions are pinned to immutable commit hashes. Dependabot proposes action
 and NuGet updates for review.
 
+After publishing, reconcile the accepted release branch into `main`, preserving
+both histories and any changes already made on `main`. Verify that the release
+commit is an ancestor of `main` and that CI passes. Do not leave Dependabot testing
+an older application tree, force-push over branch changes, or replace published
+tags/assets as part of repository maintenance.
+
+Build-action and test-only dependency changes do not require an application
+release. Review dependencies shipped with the application separately; adopting
+them requires the normal release acceptance before distributing new packages.
+When central package versions change, regenerate the complete solution's lock
+files and then verify locked-mode restore. A single project's lock update can
+leave referenced projects and test projects inconsistent.
+
 ## Installer regression gate
 
 Activation tests must not synchronously block xUnit worker threads while waiting
