@@ -44,3 +44,28 @@ partial lock updates disagree with downstream application/test lock graphs.
 Those failures do not establish API or runtime incompatibility. The proposals
 need complete lock regeneration and compatibility testing on current source,
 separately from the tooling maintenance.
+
+Both proposals were refreshed in separate checkouts by merging the current
+application source and regenerating all solution locks. Locked restore and the
+application build then passed with zero warnings/errors on the existing .NET 10
+target. Their package metadata includes a net10.0 dependency group; a .NET 11 SDK
+or target-framework change is not required merely to resolve these packages.
+
+Keep these major runtime changes separate from the tooling merge. They change
+the shipped library graph and should be adopted deliberately for a planned
+application release after their full compatibility CI passes. They are not
+needed to repair the test/build dependency maintenance.
+
+## Local validation
+
+The combined tooling build passed 1,457 tests (Core 206, Windows 806, App 445),
+with two optional/elevation-dependent cases skipped locally. MSI and Setup builds
+passed without warnings. All 445 App tests also passed with one available CPU;
+published process, updater-helper and profile-import smokes used disposable data.
+
+A NuGet vulnerability audit of all seven solution projects, including transitive
+packages, reported no known vulnerable packages on 28 November 2026. This does
+not cover undisclosed vulnerabilities or replace operating-system/runtime patch
+management. No new public version, installer asset or tag is needed for this
+tooling maintenance. Hosted CI remains the gate for the reconciled main branch
+and the separately refreshed runtime proposals.
